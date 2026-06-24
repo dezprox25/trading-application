@@ -4,7 +4,7 @@
   "private": true,
   "main": "dist/server.js",
   "engines": {
-    "node": ">=18.0.0",
+    "node": "22.x",
     "npm": ">=9.0.0"
   },
   "scripts": {
@@ -28,6 +28,7 @@
     "nodemailer": "^9.0.0",
     "resend": "^6.12.4",
     "socket.io": "^4.7.5",
+    "socket.io-client": "^4.7.5",
     "ws": "^8.21.0",
     "zod": "^3.23.8",
     "axios": "^1.7.2"

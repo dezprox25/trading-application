@@ -192,70 +192,135 @@ const startZebuMarketDataFeedWithCredentials = (userId, sessionToken, onTick, on
     let tickCount = 0;
     let lastPayload = null;
     let liveConnected = false;
-    // Periodic diagnostics: log tick rate and latest payload every 30s
-    const diagInterval = setInterval(() => {
-        console.log(`[Feed] Tick Count (last 30s): ${tickCount} | Instruments subscribed: ${instruments.length}`);
+    let subscriptionSent = false;
+    // Per-minute message statistics (all message types, not just ticks)
+    let msgCountThisMinute = 0;
+    let totalMsgCount = 0;
+    const statsInterval = setInterval(() => {
+        console.log(`[Feed:STATS] Messages/min: ${msgCountThisMinute} | Total messages: ${totalMsgCount} | Ticks: ${tickCount} | Instruments: ${instruments.length}`);
         if (lastPayload) {
-            console.log(`[Feed] Latest Payload: symbol=${lastPayload.symbol} ltp=${lastPayload.ltp} oi=${lastPayload.oi ?? "—"} ts=${lastPayload.timestamp?.toISOString?.() ?? "—"}`);
+            console.log(`[Feed:STATS] Last tick — symbol=${lastPayload.symbol} ltp=${lastPayload.ltp} oi=${lastPayload.oi ?? "—"} ts=${lastPayload.timestamp?.toISOString?.() ?? "—"}`);
         }
-        tickCount = 0;
-    }, 30000);
+        else {
+            console.warn("[Feed:STATS] No ticks received yet — waiting for Zebu to stream data.");
+        }
+        msgCountThisMinute = 0;
+    }, 60000);
     console.log(`[Feed] Connecting with session for user: ${userId} | URL: ${sanitizeFeedUrl(wsUrl)}`);
+    console.log(`[Feed] Instrument list (${instruments.length}):`);
+    for (const inst of instruments) {
+        console.log(`  [Feed]   ${inst.key} → ${inst.symbol}`);
+    }
+    if (instruments.length === 0) {
+        console.error("[Feed] FATAL: No instruments configured. Set ZEBU_NIFTY_FUT_TOKEN, ZEBU_NIFTY_CE_TOKENS, ZEBU_NIFTY_PE_TOKENS in .env");
+    }
     const ws = new ws_1.default(wsUrl);
     ws.on("open", () => {
         wsConnected = true;
-        ws.send(JSON.stringify({
+        // Send connection handshake. Do NOT send subscription here.
+        // Per Zebu NorenWS protocol, subscription (t:"t") must wait for the
+        // server's connection ack (t:"ck", s:"OK") — see message handler below.
+        const connectMsg = {
             t: "c",
             uid: userId,
             actid: userId,
             susertoken: sessionToken,
             source: process.env.ZEBU_SOURCE || "API",
-        }));
-        if (subscribeKeys) {
-            ws.send(JSON.stringify({ t: "t", k: subscribeKeys }));
-        }
+        };
+        console.log(`[Feed] WS open — sending connect handshake for user: ${userId}`);
+        ws.send(JSON.stringify(connectMsg));
         liveConnected = true;
         onDataSource("LIVE_MARKET_API");
-        console.log(`[Feed] Connected — user: ${userId}`);
-        console.log(`[Feed] Subscribed Instruments (${instruments.length}):`);
-        for (const inst of instruments) {
-            console.log(`  [Feed]   ${inst.key} → ${inst.symbol}`);
-        }
     });
     ws.on("message", async (raw) => {
+        const rawStr = raw.toString();
+        msgCountThisMinute++;
+        totalMsgCount++;
+        // Log every raw message — truncate only if very long
+        const preview = rawStr.length > 300 ? rawStr.substring(0, 300) + `…(+${rawStr.length - 300}b)` : rawStr;
+        console.log(`[Feed:RAW] #${totalMsgCount} (${rawStr.length}b): ${preview}`);
+        let payload;
         try {
-            const payload = JSON.parse(raw.toString());
-            const records = Array.isArray(payload) ? payload : [payload];
-            for (const record of records) {
-                const tick = toTick(record, symbolByKey);
-                if (tick) {
-                    tickCount++;
-                    lastPayload = tick;
-                    await onTick(tick);
-                }
-            }
+            payload = JSON.parse(rawStr);
         }
         catch {
-            console.warn("[Feed] Ignored malformed tick payload.");
+            console.warn(`[Feed:RAW] Non-JSON message received: ${preview}`);
+            return;
+        }
+        const records = Array.isArray(payload) ? payload : [payload];
+        for (const record of records) {
+            const t = record.t;
+            // ── Connection acknowledgement ─────────────────────────────────────────
+            if (t === "ck") {
+                if (record.s === "OK" || record.s === "Ok") {
+                    console.log(`[Feed:ACK] Connection acknowledged by Zebu (s=${record.s}). Sending subscriptions...`);
+                    if (subscribeKeys && !subscriptionSent) {
+                        subscriptionSent = true;
+                        ws.send(JSON.stringify({ t: "t", k: subscribeKeys }));
+                        console.log(`[Feed:SUB] Subscription sent — ${instruments.length} instruments: ${subscribeKeys.substring(0, 120)}${subscribeKeys.length > 120 ? "…" : ""}`);
+                    }
+                    else if (!subscribeKeys) {
+                        console.error("[Feed:SUB] No subscribe keys — no instruments configured in .env");
+                    }
+                }
+                else {
+                    console.error(`[Feed:ACK] Connection REJECTED by Zebu — s="${record.s}" emsg="${record.emsg ?? "(none)"}" | Full: ${JSON.stringify(record)}`);
+                    onFallback(`Zebu rejected connection: ${record.emsg || record.s}`);
+                }
+                continue;
+            }
+            // ── Subscription acknowledgement ───────────────────────────────────────
+            if (t === "tk") {
+                const accepted = record.s === "OK" || record.s === "Ok";
+                if (accepted) {
+                    console.log(`[Feed:ACK] Subscription acknowledged — instruments confirmed by Zebu: ${JSON.stringify(record).substring(0, 300)}`);
+                }
+                else {
+                    console.error(`[Feed:ACK] Subscription REJECTED by Zebu — s="${record.s}" emsg="${record.emsg ?? "(none)"}" | Full: ${JSON.stringify(record)}`);
+                }
+                continue;
+            }
+            // ── Heartbeat / ping ───────────────────────────────────────────────────
+            if (t === "h") {
+                console.log(`[Feed:PING] Heartbeat from Zebu (msg #${totalMsgCount})`);
+                continue;
+            }
+            // ── Broker-level error ─────────────────────────────────────────────────
+            if (record.s === "Not_Ok" || (record.emsg && !t)) {
+                console.error(`[Feed:ERROR] Broker error — emsg="${record.emsg ?? "(none)"}" | Full: ${JSON.stringify(record)}`);
+                continue;
+            }
+            // ── Market tick (tf = tick feed update) ───────────────────────────────
+            const tick = toTick(record, symbolByKey);
+            if (tick) {
+                tickCount++;
+                lastPayload = tick;
+                await onTick(tick);
+            }
+            else {
+                // Log unrecognized frames so we can see what Zebu is actually sending
+                console.log(`[Feed:SKIP] Unrecognized record (t="${t ?? "(none)"}"): ${JSON.stringify(record).substring(0, 200)}`);
+            }
         }
     });
     ws.on("close", () => {
         wsConnected = false;
-        clearInterval(diagInterval);
+        clearInterval(statsInterval);
+        const reason = liveConnected ? "live feed closed" : "connection closed before handshake";
+        console.log(`[Feed] Disconnected — ${reason}. Total messages received: ${totalMsgCount} | Total ticks: ${tickCount}`);
         onDataSource("SIMULATOR");
-        onFallback(liveConnected ? "live feed closed" : "connection closed before handshake");
-        console.log("[Feed] Disconnected.");
+        onFallback(reason);
     });
     ws.on("error", (err) => {
         wsConnected = false;
-        clearInterval(diagInterval);
+        clearInterval(statsInterval);
+        console.error("[Feed] WebSocket error:", err.message);
         onDataSource("SIMULATOR");
         onFallback("WebSocket error");
-        console.error("[Feed] WebSocket error:", err.message);
     });
     return {
         close: () => {
-            clearInterval(diagInterval);
+            clearInterval(statsInterval);
             ws.close();
         }
     };

@@ -340,9 +340,12 @@ exports.isMarketOpenTime = isMarketOpenTime;
 // Get current live market connection status
 const getMarketStatus = async (req, res) => {
     try {
-        const isLive = (0, exports.isMarketOpenTime)() && (0, zebuMarketDataClient_1.isZebuLiveConnected)();
+        // Market open/closed is a time-based check (IST 9:00 AM – 3:45 PM, Mon–Fri).
+        // Broker connection is reported separately via /api/module/status.
+        const isOpen = (0, exports.isMarketOpenTime)();
         return res.status(200).json({
-            status: isLive ? "LIVE" : "CLOSED"
+            status: isOpen ? "LIVE" : "CLOSED",
+            zebuConnected: (0, zebuMarketDataClient_1.isZebuLiveConnected)(),
         });
     }
     catch (error) {

@@ -266,7 +266,7 @@ export const connectToAetramWebSocket = async (): Promise<boolean> => {
     console.log("[AetramMD] Socket.IO feed connected successfully.");
   });
 
-  socket.on("connect_error", (error) => {
+  socket.on("connect_error", (error: Error) => {
     socketConnected = false;
     console.error("[AetramMD] Socket connection error:", error);
   });
@@ -277,7 +277,7 @@ export const connectToAetramWebSocket = async (): Promise<boolean> => {
   socket.on("1510-json-full", handleOiTick);
   socket.on("1510-json-partial", handleOiTick);
 
-  socket.on("disconnect", (reason) => {
+  socket.on("disconnect", (reason: string) => {
     socketConnected = false;
     console.warn(`[AetramMD] Socket disconnected: ${reason}`);
   });

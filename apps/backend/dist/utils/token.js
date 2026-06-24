@@ -7,6 +7,12 @@ exports.verifyRefreshToken = exports.verifyAccessToken = exports.generateRefresh
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const JWT_SECRET = process.env.JWT_SECRET || "supersecretjwtkeyforstockdashboardintraday2026";
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || "anotherrefreshsecretjwtkeyforstockdashboardintraday2026";
+if (process.env.NODE_ENV === "production") {
+    if (!process.env.JWT_SECRET)
+        console.error("[Auth] PRODUCTION WARNING: JWT_SECRET not set — using insecure default. Tokens can be forged.");
+    if (!process.env.JWT_REFRESH_SECRET)
+        console.error("[Auth] PRODUCTION WARNING: JWT_REFRESH_SECRET not set — using insecure default.");
+}
 const generateAccessToken = (userId) => {
     return jsonwebtoken_1.default.sign({ userId }, JWT_SECRET, { expiresIn: "15m" });
 };
