@@ -69,11 +69,7 @@ const computeMT = (tl: number, high: number, low: number): number =>
 
 const fmtN = (v: number | null | undefined): string => {
   if (v === null || v === undefined) return "—";
-  const abs = Math.abs(v);
-  const sign = v < 0 ? "-" : "";
-  if (abs >= 1_000_000) return `${sign}${(abs / 1_000_000).toFixed(2)}M`;
-  if (abs >= 1_000)     return `${sign}${(abs / 1_000).toFixed(1)}K`;
-  return `${sign}${abs.toFixed(0)}`;
+  return v.toLocaleString("en-IN", { maximumFractionDigits: 0 });
 };
 
 const fmtPrice = (v: number): string =>
