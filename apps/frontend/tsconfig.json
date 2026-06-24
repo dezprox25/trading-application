@@ -18,7 +18,13 @@
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+
+    /* Monorepo: resolve @stock/shared from TypeScript source so no dist/ is required */
+    "baseUrl": ".",
+    "paths": {
+      "@stock/shared": ["../../packages/shared/src/index.ts"]
+    }
   },
   "include": ["src"]
 }
