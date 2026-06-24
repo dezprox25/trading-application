@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.initAetramMarketDataService = exports.connectToAetramWebSocket = exports.subscribeToInstruments = exports.resolveOptionStrikeToken = exports.loginToAetram = exports.isAetramConnected = void 0;
+exports.initAetramMarketDataService = exports.loginToAetramWithCredentials = exports.connectToAetramWebSocket = exports.subscribeToInstruments = exports.resolveOptionStrikeToken = exports.loginToAetram = exports.isAetramConnected = void 0;
 const axios_1 = __importDefault(require("axios"));
 const socket_io_client_1 = require("socket.io-client");
 const redis_1 = __importDefault(require("../config/redis"));
@@ -253,12 +253,38 @@ const connectToAetramWebSocket = async () => {
 };
 exports.connectToAetramWebSocket = connectToAetramWebSocket;
 /**
- * Start the Aetram Service lifecycle
+ * Login using credentials provided at runtime by the user.
+ * Called by module2BrokerLogin controller — never called on server startup.
+ */
+const loginToAetramWithCredentials = async (appKey, secretKey) => {
+    const authUrl = getAuthUrl();
+    if (!authUrl) {
+        console.warn("[AetramMD] AETRAM_MARKETDATA_AUTH_URL not configured.");
+        return false;
+    }
+    try {
+        console.log("[AetramMD] Logging in with user-provided credentials...");
+        const response = await axios_1.default.post(authUrl, { secretKey, appKey, source: "WEBAPI" }, { headers: { "Content-Type": "application/json" }, timeout: 15000 });
+        if (response.data?.code === "success" && response.data?.result) {
+            sessionToken = response.data.result.token;
+            userID = response.data.result.userID;
+            console.log(`[AetramMD] Authenticated. User ID: ${userID}`);
+            return true;
+        }
+        console.error("[AetramMD] Auth rejected:", response.data);
+        return false;
+    }
+    catch (error) {
+        console.error("[AetramMD] Auth exception:", error?.message || error);
+        return false;
+    }
+};
+exports.loginToAetramWithCredentials = loginToAetramWithCredentials;
+/**
+ * Legacy env-based startup — NOT called anymore. Kept for reference only.
  */
 const initAetramMarketDataService = async () => {
-    const success = await (0, exports.loginToAetram)();
-    if (success) {
-        await (0, exports.connectToAetramWebSocket)();
-    }
+    // Removed from startup. Module 2 connects only after user broker login.
+    console.log("[AetramMD] initAetramMarketDataService: deferred — awaiting user login.");
 };
 exports.initAetramMarketDataService = initAetramMarketDataService;

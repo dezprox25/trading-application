@@ -20,41 +20,43 @@ export const useSocket = () => {
 
   useEffect(() => {
     if (!accessToken) {
-      // Disconnect socket if user logs out
       if (socketRef.current) {
+        console.log("[Socket] Disconnecting — no access token");
         socketRef.current.disconnect();
         socketRef.current = null;
       }
       return;
     }
 
-    // Connect to Socket.io server
+    console.log("[Socket] Connecting to server (token present)...");
     const socket = io({
       auth: { token: accessToken },
       reconnectionAttempts: 10,
-      reconnectionDelay: 3000
+      reconnectionDelay: 3000,
     });
 
     socketRef.current = socket;
 
     socket.on("connect", () => {
-      console.log("[SocketClient] Connected to trading socket server.");
-      
-      // Sync active rooms on connection
+      console.log("[Socket] Connected — ID:", socket.id);
       socket.emit("join:symbol", selectedSymbol);
       socket.emit("join:symbol", "NIFTY-SPOT");
       socket.emit("join:indicators", {
         symbol: selectedSymbol,
         timeframe: selectedTimeframe,
-        method: selectedMethod
+        method: selectedMethod,
       });
       if (activeSessionId) {
         socket.emit("join:tracker", activeSessionId);
       }
     });
 
-    socket.on("disconnect", () => {
-      console.log("[SocketClient] Disconnected from server.");
+    socket.on("connect_error", (err) => {
+      console.error("[Socket] Connection error:", err.message);
+    });
+
+    socket.on("disconnect", (reason) => {
+      console.log("[Socket] Disconnected — reason:", reason);
     });
 
     // Handle raw price ticks
@@ -72,8 +74,12 @@ export const useSocket = () => {
       setIndicators(signal.symbol, selectedTimeframe, selectedMethod, signal);
     });
 
-    // Handle real-time latest OI metrics updates
+    let latestOiCount = 0;
     socket.on("latest-oi", (metrics: any) => {
+      latestOiCount++;
+      if (latestOiCount === 1 || latestOiCount % 50 === 0) {
+        console.log(`[Socket] latest-oi event #${latestOiCount} received — c_tl: ${metrics?.c_tl} | p_tl: ${metrics?.p_tl}`);
+      }
       setLatestOiMetrics(metrics);
     });
 

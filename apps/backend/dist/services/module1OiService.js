@@ -104,6 +104,8 @@ const createOrUpdateLatestRow = (timestamp) => {
     }
     latestRow = baseRow;
 };
+let _diagTickCount = 0;
+let _diagLastLogTime = 0;
 // MARKET DATA API is the intended real source for option-chain OI and futures OI.
 // For now this consumes existing backend live/simulator ticks only; no Interactive Data API,
 // frontend secrets, order placement, order modification, or cancellation is involved.
@@ -122,7 +124,26 @@ const ingestModule1OiTick = (tick) => {
     else {
         return;
     }
+    _diagTickCount++;
     createOrUpdateLatestRow(tick.timestamp || new Date());
+    // Log calculation result every 60 ticks
+    const now = Date.now();
+    if (_diagTickCount % 60 === 0 || now - _diagLastLogTime > 60000) {
+        _diagLastLogTime = now;
+        const c_tl = Math.round(sumValues(ceOiBySymbol));
+        const p_tl = Math.round(sumValues(peOiBySymbol));
+        console.log(`[Calc] OI Tick #${_diagTickCount} | CE symbols: ${ceOiBySymbol.size} | PE symbols: ${peOiBySymbol.size}` +
+            ` | C_TL: ${c_tl} | P_TL: ${p_tl} | FUT OI: ${latestFuturesOi} | Rows: ${rows.length}`);
+        if (ceOiBySymbol.size === 0) {
+            console.warn("[Calc] WARNING: No CE OI data. Option tokens may be expired or not yet received.");
+        }
+        if (peOiBySymbol.size === 0) {
+            console.warn("[Calc] WARNING: No PE OI data. Option tokens may be expired or not yet received.");
+        }
+        if (latestRow) {
+            console.log(`[Calc] Latest Row: time=${latestRow.timestamp} c_tl=${latestRow.c_tl} c_buy=${latestRow.c_buy} c_sell=${latestRow.c_sell} p_tl=${latestRow.p_tl} signal=${latestRow.callSignal}`);
+        }
+    }
 };
 exports.ingestModule1OiTick = ingestModule1OiTick;
 const getLatestModule1OiMetrics = () => {

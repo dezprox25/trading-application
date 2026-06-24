@@ -6,8 +6,11 @@ import rateLimit from "express-rate-limit";
 import { Server } from "socket.io";
 import dotenv from "dotenv";
 
-// Load configuration parameters
+// Load configuration parameters — must be first so all subsequent imports see env vars.
+// On Render (production) there is no .env file; env vars are injected by the platform.
 dotenv.config();
+
+import { runStartupCheck } from "./utils/startupCheck";
 
 import { connectDB } from "./config/db";
 import redis from "./config/redis";
@@ -25,14 +28,25 @@ import { startMonitoringLoop, getMonitoringStatus } from "./services/monitoringS
 const app = express();
 const server = http.createServer(app);
 
-// Configure socket server base
+// Trust reverse proxy headers (required for express-rate-limit on Render / Heroku / etc.)
+app.set("trust proxy", 1);
+
+// CORS allowed origin: restrict to frontend domain in production
+const allowedOrigin = process.env.FRONTEND_URL || "*";
+
+// Configure socket server base.
+// transports: start with polling so the Render proxy can establish the connection,
+// then upgrade to WebSocket. pingInterval/pingTimeout keep the connection alive
+// through Render's 60-second idle proxy timeout.
 const io = new Server(server, {
   cors: {
-    origin: "*",
+    origin: allowedOrigin,
     methods: ["GET", "POST", "PUT"],
     credentials: true,
   },
-  pingTimeout: 60000,
+  transports: ["polling", "websocket"],
+  pingInterval: 25000,
+  pingTimeout:  60000,
 });
 
 // Security & utility middlewares
@@ -40,7 +54,7 @@ app.use(helmet());
 
 app.use(
   cors({
-    origin: "*",
+    origin: allowedOrigin,
     credentials: true,
   })
 );
@@ -153,6 +167,12 @@ app.use(
 const PORT = process.env.PORT || 5001;
 
 const startServer = async () => {
+  // ── Step 0: Startup validation ────────────────────────────────────────────
+  // Validates all required environment variables and logs structured startup
+  // status for each service. Exits with code 1 in production if critical
+  // variables are missing (JWT_SECRET, FRONTEND_URL).
+  runStartupCheck();
+
   // ── Step 1: Connect databases ─────────────────────────────────────────────
   // All services that use MongoDB or Redis must wait until these are ready.
 
@@ -161,12 +181,15 @@ const startServer = async () => {
     await connectDB();
     dbReady = true;
     console.log("[Server] MongoDB connected.");
-  } catch (error) {
+  } catch (error: any) {
+    console.error("[Server] MongoDB connection failed:", error?.message || error);
     if (process.env.NODE_ENV === "production") {
-      console.error("Fatal: MongoDB could not be contacted:", error);
+      // In production crash fast — Render will restart the service.
+      // A running server with no database is worse than a clean restart.
+      console.error("[Server] Aborting: MongoDB is required in production.");
       throw error;
     }
-    console.warn("[MongoDB] Database unavailable in development mode. Using in-memory fallbacks.");
+    console.warn("[Server] Running in development mode — continuing with in-memory fallbacks.");
   }
 
   try {
@@ -174,10 +197,13 @@ const startServer = async () => {
     console.log("[Server] Redis connected.");
   } catch (error) {
     if (process.env.NODE_ENV === "production") {
-      console.error("Fatal: Redis cache could not be contacted:", error);
-      throw new Error("Redis connection failed.");
+      // Redis uses an in-memory fallback (see config/redis.ts) — log but continue.
+      // The fallback loses data on restart; all ltp/oi prices must be re-populated
+      // from live ticks. This is acceptable for market-hours operation.
+      console.warn("[Server] Redis unreachable — continuing with in-memory fallback. LTP/OI data will not persist across restarts.");
+    } else {
+      console.warn("[Server] Redis unavailable in development mode — using in-memory fallback.");
     }
-    console.warn("[Redis] Redis unavailable in development mode.");
   }
 
   // ── Step 2: Initialize infrastructure (no DB queries here) ───────────────
@@ -212,6 +238,7 @@ const startServer = async () => {
       `[Server] TradePro backend ready on port ${PORT} (${process.env.NODE_ENV || "development"}).`
     );
     console.log("[Server] Broker data feeds will start after user authentication.");
+    console.log(`[Server] CORS origin: ${allowedOrigin}`);
   });
 
   // ── NOTE: Broker authentication is NOT performed here ────────────────────
@@ -226,5 +253,31 @@ startServer().catch((error) => {
   console.error("Fatal: Backend server failed to start:", error);
   process.exit(1);
 });
+
+// ── Graceful shutdown ─────────────────────────────────────────────────────────
+// Render sends SIGTERM before terminating containers. Close cleanly so in-flight
+// requests finish and connections drain before the process exits.
+const shutdown = (signal: string) => {
+  console.log(`[Server] Received ${signal}. Shutting down gracefully…`);
+  server.close(async () => {
+    console.log("[Server] HTTP server closed.");
+    try {
+      const mongoose = require("mongoose");
+      await mongoose.connection.close();
+      console.log("[Server] MongoDB connection closed.");
+    } catch {}
+    console.log("[Server] Shutdown complete.");
+    process.exit(0);
+  });
+
+  // Force-kill if graceful shutdown takes more than 15 seconds
+  setTimeout(() => {
+    console.error("[Server] Graceful shutdown timed out — forcing exit.");
+    process.exit(1);
+  }, 15000);
+};
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT",  () => shutdown("SIGINT"));
 
 export { app, server, io };

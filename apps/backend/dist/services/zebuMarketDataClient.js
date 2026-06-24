@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.startZebuMarketDataFeed = exports.isZebuMarketDataConfigured = exports.getZebuMissingConfig = exports.isZebuLiveConnected = void 0;
+exports.startZebuMarketDataFeedWithCredentials = exports.startZebuMarketDataFeed = exports.isZebuMarketDataConfigured = exports.getZebuMissingConfig = exports.isZebuLiveConnected = void 0;
 const ws_1 = __importDefault(require("ws"));
 const zebuOAuthService_1 = require("./zebuOAuthService");
 let wsConnected = false;
@@ -175,3 +175,89 @@ const startZebuMarketDataFeed = (onTick, onDataSource, onFallback) => {
     };
 };
 exports.startZebuMarketDataFeed = startZebuMarketDataFeed;
+/**
+ * Start Zebu feed using runtime credentials (from user-initiated broker login).
+ * Instruments remain env-configured (they are configuration, not credentials).
+ */
+const startZebuMarketDataFeedWithCredentials = (userId, sessionToken, onTick, onDataSource, onFallback) => {
+    const wsUrl = getZebuWsUrl();
+    const instruments = getModule1ZebuInstruments();
+    const symbolByKey = buildInstrumentMap(instruments);
+    const subscribeKeys = instruments.map((i) => i.key).join("#");
+    if (!wsUrl || !/^wss?:\/\//.test(wsUrl)) {
+        console.warn("[Feed] ZEBU_WS_URL not configured — cannot start live feed.");
+        onFallback("ZEBU_WS_URL not configured");
+        return { close: () => { } };
+    }
+    let tickCount = 0;
+    let lastPayload = null;
+    let liveConnected = false;
+    // Periodic diagnostics: log tick rate and latest payload every 30s
+    const diagInterval = setInterval(() => {
+        console.log(`[Feed] Tick Count (last 30s): ${tickCount} | Instruments subscribed: ${instruments.length}`);
+        if (lastPayload) {
+            console.log(`[Feed] Latest Payload: symbol=${lastPayload.symbol} ltp=${lastPayload.ltp} oi=${lastPayload.oi ?? "—"} ts=${lastPayload.timestamp?.toISOString?.() ?? "—"}`);
+        }
+        tickCount = 0;
+    }, 30000);
+    console.log(`[Feed] Connecting with session for user: ${userId} | URL: ${sanitizeFeedUrl(wsUrl)}`);
+    const ws = new ws_1.default(wsUrl);
+    ws.on("open", () => {
+        wsConnected = true;
+        ws.send(JSON.stringify({
+            t: "c",
+            uid: userId,
+            actid: userId,
+            susertoken: sessionToken,
+            source: process.env.ZEBU_SOURCE || "API",
+        }));
+        if (subscribeKeys) {
+            ws.send(JSON.stringify({ t: "t", k: subscribeKeys }));
+        }
+        liveConnected = true;
+        onDataSource("LIVE_MARKET_API");
+        console.log(`[Feed] Connected — user: ${userId}`);
+        console.log(`[Feed] Subscribed Instruments (${instruments.length}):`);
+        for (const inst of instruments) {
+            console.log(`  [Feed]   ${inst.key} → ${inst.symbol}`);
+        }
+    });
+    ws.on("message", async (raw) => {
+        try {
+            const payload = JSON.parse(raw.toString());
+            const records = Array.isArray(payload) ? payload : [payload];
+            for (const record of records) {
+                const tick = toTick(record, symbolByKey);
+                if (tick) {
+                    tickCount++;
+                    lastPayload = tick;
+                    await onTick(tick);
+                }
+            }
+        }
+        catch {
+            console.warn("[Feed] Ignored malformed tick payload.");
+        }
+    });
+    ws.on("close", () => {
+        wsConnected = false;
+        clearInterval(diagInterval);
+        onDataSource("SIMULATOR");
+        onFallback(liveConnected ? "live feed closed" : "connection closed before handshake");
+        console.log("[Feed] Disconnected.");
+    });
+    ws.on("error", (err) => {
+        wsConnected = false;
+        clearInterval(diagInterval);
+        onDataSource("SIMULATOR");
+        onFallback("WebSocket error");
+        console.error("[Feed] WebSocket error:", err.message);
+    });
+    return {
+        close: () => {
+            clearInterval(diagInterval);
+            ws.close();
+        }
+    };
+};
+exports.startZebuMarketDataFeedWithCredentials = startZebuMarketDataFeedWithCredentials;

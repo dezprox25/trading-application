@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.me = exports.logout = exports.refresh = exports.login = exports.register = void 0;
+exports.me = exports.moduleLogin = exports.logout = exports.refresh = exports.login = exports.register = void 0;
 const bcrypt_1 = __importDefault(require("bcrypt"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const User_1 = require("../models/User");
@@ -221,6 +221,32 @@ const logout = async (req, res) => {
     }
 };
 exports.logout = logout;
+// POST /auth/module-login — standalone module credential validation (no app JWT required)
+const moduleLogin = async (req, res) => {
+    try {
+        const { moduleId, username, password } = req.body;
+        if (!moduleId || !["module1", "module2"].includes(moduleId)) {
+            return res.status(400).json({ error: "Invalid moduleId. Must be 'module1' or 'module2'." });
+        }
+        if (!username || !password) {
+            return res.status(400).json({ error: "Username and password are required." });
+        }
+        const prefix = moduleId === "module1" ? "MOD1" : "MOD2";
+        const validUser = process.env[`${prefix}_ACCESS_USERNAME`] || (moduleId === "module1" ? "module1user" : "module2user");
+        const validPass = process.env[`${prefix}_ACCESS_PASSWORD`] || "module123";
+        if (username !== validUser || password !== validPass) {
+            return res.status(401).json({ error: "Invalid module credentials." });
+        }
+        const secret = process.env.JWT_SECRET || "supersecretjwtkeyforstockdashboardintraday2026";
+        const moduleToken = jsonwebtoken_1.default.sign({ moduleId, type: "module-access" }, secret, { expiresIn: "8h" });
+        return res.status(200).json({ moduleToken, moduleId });
+    }
+    catch (error) {
+        console.error("Module Login Error:", error);
+        return res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+exports.moduleLogin = moduleLogin;
 // GET /api/auth/me
 const me = async (req, res) => {
     try {

@@ -204,10 +204,12 @@ export const Module1 = ({ isSplit = false }: { isSplit?: boolean }) => {
   }, [spotLtp]);
 
   // ── Queries (DO NOT MODIFY — API integration layer) ────────────────────────
-  const { data: ohlcBars = [], isLoading } = useQuery<Candle[]>({
+  const { data: ohlcBars = [], isLoading, refetch: refetchOhlc } = useQuery<Candle[]>({
     queryKey: ["ohlc", selectedSymbol, selectedTimeframe],
     queryFn: () => api.get(`/api/market/ohlc/${selectedSymbol}/${selectedTimeframe}`),
     enabled: !!selectedSymbol,
+    refetchInterval: 10000,
+    staleTime: 5000,
   });
 
   useQuery({
@@ -718,7 +720,7 @@ export const Module1 = ({ isSplit = false }: { isSplit?: boolean }) => {
             ))}
           </div>
 
-          <button className="m1-get">GET STATISTICS</button>
+          <button className="m1-get" onClick={() => refetchOhlc()}>GET STATISTICS</button>
 
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
             <span className="live-dot" style={{ width: 7, height: 7, borderRadius: "50%", background: "#16a34a", display: "inline-block", boxShadow: "0 0 0 2px rgba(22,163,74,0.2)" }} />

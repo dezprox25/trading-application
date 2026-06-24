@@ -70,6 +70,7 @@ const initSocketServer = (io) => {
             console.log(`[Socket] Client disconnected: ${socket.id}`);
         });
     });
+    let _socketEmitCount = 0;
     // Wire tick ingestion callback to broadcast raw price updates and trigger real-time indicator updates
     (0, dataFeed_1.setOnTickReceived)(async (tick) => {
         if (!ioServer)
@@ -77,7 +78,14 @@ const initSocketServer = (io) => {
         // Broadcast raw tick to market room
         ioServer.to(`market:${tick.symbol}`).emit("tick", tick);
         // Broadcast latest computed OI metrics to all clients on every tick ingestion
-        ioServer.emit("latest-oi", (0, module1OiService_1.getLatestModule1OiMetrics)());
+        const oiMetrics = (0, module1OiService_1.getLatestModule1OiMetrics)();
+        ioServer.emit("latest-oi", oiMetrics);
+        _socketEmitCount++;
+        // Log socket emit stats every 100 ticks
+        if (_socketEmitCount % 100 === 0) {
+            const connectedClients = ioServer.sockets.sockets.size;
+            console.log(`[Socket] Emit #${_socketEmitCount} | Event: latest-oi | Clients: ${connectedClients} | c_tl: ${oiMetrics.c_tl} | p_tl: ${oiMetrics.p_tl}`);
+        }
         // If this is NIFTY-FUT, trigger indicator evaluations for any active rooms listening to this symbol
         if (tick.symbol === "NIFTY-FUT") {
             const timeframes = ["1m", "3m", "5m", "custom"];

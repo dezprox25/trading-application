@@ -21,10 +21,8 @@ const tracker_1 = __importDefault(require("./routes/tracker"));
 const module2_1 = __importDefault(require("./routes/module2"));
 const zebuOAuth_1 = require("./controllers/zebuOAuth");
 const pivotService_1 = require("./services/pivotService");
-const dataFeed_1 = require("./services/dataFeed");
 const socketService_1 = require("./services/socketService");
 const trackerService_1 = require("./services/trackerService");
-const aetramMarketDataService_1 = require("./services/aetramMarketDataService");
 const module1OiService_1 = require("./services/module1OiService");
 const monitoringService_1 = require("./services/monitoringService");
 const app = (0, express_1.default)();
@@ -130,45 +128,68 @@ app.use((err, _req, res, _next) => {
 });
 const PORT = process.env.PORT || 5001;
 const startServer = async () => {
-    // Establish MongoDB Atlas Connection
+    // ── Step 1: Connect databases ─────────────────────────────────────────────
+    // All services that use MongoDB or Redis must wait until these are ready.
+    let dbReady = false;
     try {
         await (0, db_1.connectDB)();
+        dbReady = true;
+        console.log("[Server] MongoDB connected.");
     }
     catch (error) {
         if (process.env.NODE_ENV === "production") {
             console.error("Fatal: MongoDB could not be contacted:", error);
             throw error;
         }
-        console.warn("[MongoDB] Warning: database unavailable in development mode. Continuing with in-memory/demo flows.");
+        console.warn("[MongoDB] Database unavailable in development mode. Using in-memory fallbacks.");
     }
-    // Validate Redis Connection
     try {
-        const redisPingResult = await redis_1.default.ping();
-        console.log("Redis cache ping successful:", redisPingResult);
+        await redis_1.default.ping();
+        console.log("[Server] Redis connected.");
     }
     catch (error) {
         if (process.env.NODE_ENV === "production") {
             console.error("Fatal: Redis cache could not be contacted:", error);
-            throw new Error("Redis connection failed. Redis is a hard dependency in production.");
+            throw new Error("Redis connection failed.");
         }
-        else {
-            console.warn("[Redis] Warning: Redis cache could not be contacted in development mode. Continuing server startup.");
-        }
+        console.warn("[Redis] Redis unavailable in development mode.");
     }
-    // Initialize core trading services
+    // ── Step 2: Initialize infrastructure (no DB queries here) ───────────────
     (0, pivotService_1.initPivotService)();
     (0, socketService_1.initSocketServer)(io);
-    (0, trackerService_1.initTrackerEngine)();
-    (0, aetramMarketDataService_1.initAetramMarketDataService)();
-    // Warm up OI cache from Redis before launching live data feed listeners
-    await (0, module1OiService_1.initModule1OiService)();
-    (0, dataFeed_1.initDataFeed)();
-    // Start feed validation and monitoring check loop
+    // ── Step 3: Initialize services that depend on DB being ready ────────────
+    // Only start these after the DB connection is confirmed.
+    if (dbReady) {
+        try {
+            (0, trackerService_1.initTrackerEngine)();
+        }
+        catch (err) {
+            console.warn("[Server] TrackerEngine init warning:", err);
+        }
+    }
+    else {
+        console.warn("[Server] Skipping TrackerEngine init — DB not ready.");
+    }
+    // Warm up in-memory OI state from Redis (safe to run even if Redis is offline)
+    try {
+        await (0, module1OiService_1.initModule1OiService)();
+    }
+    catch (err) {
+        console.warn("[Server] Module1OiService init warning:", err);
+    }
+    // ── Step 4: Start monitoring ──────────────────────────────────────────────
     (0, monitoringService_1.startMonitoringLoop)();
-    // Start HTTP / WebSocket Server
+    // ── Step 5: Start HTTP + WebSocket server ────────────────────────────────
     server.listen(PORT, () => {
-        console.log(`[Server] Live Trading Display Dashboard listening on port ${PORT} in ${process.env.NODE_ENV || "development"} mode.`);
+        console.log(`[Server] TradePro backend ready on port ${PORT} (${process.env.NODE_ENV || "development"}).`);
+        console.log("[Server] Broker data feeds will start after user authentication.");
     });
+    // ── NOTE: Broker authentication is NOT performed here ────────────────────
+    // initDataFeed()              ← REMOVED: starts after Module 1 user login
+    // initAetramMarketDataService() ← REMOVED: starts after Module 2 user login
+    // Data feeds begin only when the user authenticates via:
+    //   POST /auth/module1-broker-login
+    //   POST /auth/module2-broker-login
 };
 startServer().catch((error) => {
     console.error("Fatal: Backend server failed to start:", error);

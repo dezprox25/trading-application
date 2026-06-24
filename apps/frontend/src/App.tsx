@@ -329,22 +329,36 @@ function App() {
 
   const [isInitializing, setIsInitializing] = useState(true);
 
+  console.log("[App] App() render — isInitializing:", isInitializing, "| accessToken:", !!accessToken);
+
   // Silent app token refresh on load — only affects app-level auth
   useEffect(() => {
+    console.log("[App] Auth check useEffect fired");
     const checkAuth = async () => {
       try {
+        console.log("[App] Fetching /auth/refresh...");
         const response = await fetch("/auth/refresh", { method: "POST" });
+        console.log("[App] /auth/refresh response:", response.status, response.ok);
         if (response.ok) {
           const data = await response.json();
-          if (data.accessToken && data.user) setAuth(data.user, data.accessToken);
+          console.log("[App] Refresh data:", { hasToken: !!data.accessToken, hasUser: !!data.user });
+          if (data.accessToken && data.user) {
+            console.log("[App] Session restored — setting auth");
+            setAuth(data.user, data.accessToken);
+          }
         }
-      } catch {}
-      finally { setIsInitializing(false); }
+      } catch (err) {
+        console.warn("[App] /auth/refresh failed:", err);
+      } finally {
+        console.log("[App] Auth check complete — setting isInitializing=false");
+        setIsInitializing(false);
+      }
     };
     checkAuth();
   }, [setAuth]);
 
   if (isInitializing) {
+    console.log("[App] Rendering initializing spinner");
     return (
       <div style={{ display: "flex", minHeight: "100vh", alignItems: "center", justifyContent: "center", background: "#f5f7fa", fontFamily: "'Inter', sans-serif" }}>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
@@ -354,6 +368,8 @@ function App() {
       </div>
     );
   }
+
+  console.log("[App] Rendering routes — accessToken:", !!accessToken);
 
   return (
     <>

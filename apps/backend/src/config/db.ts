@@ -1,5 +1,14 @@
 import mongoose from "mongoose";
 
+const maskMongoUri = (uri: string): string => {
+  try {
+    // Replace user:password@ with ***:***@ to avoid leaking credentials in logs
+    return uri.replace(/:\/\/([^:@]+)(:[^@]+)?@/, "://***:***@");
+  } catch {
+    return "[configured]";
+  }
+};
+
 export const connectDB = async (): Promise<void> => {
   const mongoUri =
     process.env.MONGODB_URI ||
@@ -8,8 +17,8 @@ export const connectDB = async (): Promise<void> => {
   mongoose.set("bufferCommands", false);
 
   await mongoose.connect(mongoUri, {
-    serverSelectionTimeoutMS: 1500,
+    serverSelectionTimeoutMS: 10000,
   });
 
-  console.log("MongoDB connected successfully to:", mongoUri);
+  console.log("[DB] MongoDB connected:", maskMongoUri(mongoUri));
 };

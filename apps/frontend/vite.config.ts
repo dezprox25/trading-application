@@ -3,6 +3,12 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  optimizeDeps: {
+    // Force Vite to pre-bundle this workspace package (CJS → ESM conversion).
+    // Without this, Vite serves the CommonJS dist directly to the browser,
+    // which fails because the browser can't handle require() calls.
+    include: ["@stock/shared"],
+  },
   server: {
     port: 3000,
     proxy: {

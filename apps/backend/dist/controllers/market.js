@@ -136,6 +136,8 @@ const getOHLCBars = async (req, res) => {
     const { symbol, tf } = req.params;
     const limit = req.query.limit ? parseInt(req.query.limit) : 15;
     const fetchLimit = limit + 1;
+    let bars = [];
+    // Step 1: Try MongoDB for finalized candles
     try {
         const dbBars = await FuturesOHLC_1.FuturesOHLC.find({ symbol, timeframe: tf })
             .sort({ bar_time: -1 })
@@ -152,7 +154,7 @@ const getOHLCBars = async (req, res) => {
                 break;
             }
         }
-        const bars = uniqueBars.reverse().map((b) => ({
+        bars = uniqueBars.reverse().map((b) => ({
             symbol: b.symbol,
             timeframe: b.timeframe,
             open: b.bar_open,
@@ -162,13 +164,34 @@ const getOHLCBars = async (req, res) => {
             openTime: new Date(b.bar_time).getTime(),
             volume: b.volume
         }));
-        return res.status(200).json(bars);
     }
     catch (error) {
-        console.error("Get OHLC Bars Error, falling back to memory cache:", error);
-        const cachedBars = (0, ohlcAggregator_1.getCachedOHLCBars)(symbol, tf, fetchLimit);
-        return res.status(200).json(cachedBars);
+        console.error("[OHLC] MongoDB error, trying in-memory finalized cache:", error);
     }
+    // Step 2: Fall back to in-memory finalized candle cache if MongoDB returned nothing
+    if (bars.length === 0) {
+        const cached = (0, ohlcAggregator_1.getCachedOHLCBars)(symbol, tf, fetchLimit);
+        if (cached.length > 0) {
+            console.log(`[OHLC] MongoDB empty for ${symbol}/${tf} — serving ${cached.length} in-memory finalized bars.`);
+            bars = cached;
+        }
+    }
+    // Step 3: Include the active (currently building) candle as the most recent data point.
+    // This ensures the matrix populates even when no candle has closed yet in this session.
+    const activeCandle = (0, ohlcAggregator_1.getActiveCandle)(symbol, tf);
+    if (activeCandle) {
+        if (bars.length === 0) {
+            console.log(`[OHLC] No finalized bars for ${symbol}/${tf} — seeding with active candle (ltp=${activeCandle.close}).`);
+            bars = [activeCandle];
+        }
+        else if (activeCandle.openTime > bars[bars.length - 1].openTime) {
+            bars = [...bars, activeCandle];
+        }
+    }
+    if (bars.length === 0) {
+        console.warn(`[OHLC] No data at all for ${symbol}/${tf} — live feed may not have started yet.`);
+    }
+    return res.status(200).json(bars);
 };
 exports.getOHLCBars = getOHLCBars;
 // Get computed pivots (all 3 methods)

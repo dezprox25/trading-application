@@ -138,6 +138,7 @@ const createOrUpdateLatestRow = (timestamp: Date) => {
 
 let _diagTickCount = 0;
 let _diagLastLogTime = 0;
+let _diagFirstTickLogged = false;
 
 // MARKET DATA API is the intended real source for option-chain OI and futures OI.
 // For now this consumes existing backend live/simulator ticks only; no Interactive Data API,
@@ -145,14 +146,24 @@ let _diagLastLogTime = 0;
 export const ingestModule1OiTick = (tick: Tick) => {
   if (tick.oi === undefined || Number.isNaN(tick.oi)) return;
 
+  let bucket: "CE" | "PE" | "FUT" | "SKIP" = "SKIP";
+
   if (tick.symbol.endsWith("CE") || /C\d+$/.test(tick.symbol)) {
     ceOiBySymbol.set(tick.symbol, tick.oi);
+    bucket = "CE";
   } else if (tick.symbol.endsWith("PE") || /P\d+$/.test(tick.symbol)) {
     peOiBySymbol.set(tick.symbol, tick.oi);
+    bucket = "PE";
   } else if (tick.symbol.endsWith("-FUT") || tick.symbol.includes("FUT")) {
     latestFuturesOi = tick.oi;
+    bucket = "FUT";
   } else {
     return;
+  }
+
+  if (!_diagFirstTickLogged) {
+    _diagFirstTickLogged = true;
+    console.log(`[OI] First classified tick — symbol: ${tick.symbol} | bucket: ${bucket} | oi: ${tick.oi} | ltp: ${tick.ltp}`);
   }
 
   _diagTickCount++;
@@ -168,10 +179,17 @@ export const ingestModule1OiTick = (tick: Tick) => {
       `[Calc] OI Tick #${_diagTickCount} | CE symbols: ${ceOiBySymbol.size} | PE symbols: ${peOiBySymbol.size}` +
       ` | C_TL: ${c_tl} | P_TL: ${p_tl} | FUT OI: ${latestFuturesOi} | Rows: ${rows.length}`
     );
-    if (ceOiBySymbol.size === 0) {
+    // Log individual symbol OI to identify token classification issues
+    if (ceOiBySymbol.size > 0) {
+      const ceEntries = Array.from(ceOiBySymbol.entries()).map(([s, v]) => `${s}=${v}`).join(", ");
+      console.log(`[Calc] CE bucket: ${ceEntries}`);
+    } else {
       console.warn("[Calc] WARNING: No CE OI data. Option tokens may be expired or not yet received.");
     }
-    if (peOiBySymbol.size === 0) {
+    if (peOiBySymbol.size > 0) {
+      const peEntries = Array.from(peOiBySymbol.entries()).map(([s, v]) => `${s}=${v}`).join(", ");
+      console.log(`[Calc] PE bucket: ${peEntries}`);
+    } else {
       console.warn("[Calc] WARNING: No PE OI data. Option tokens may be expired or not yet received.");
     }
     if (latestRow) {
