@@ -3,6 +3,11 @@ import { io, Socket } from "socket.io-client";
 import { useStore } from "../store/useStore";
 import { Tick, PivotLevels, Module1Indicators, Module2Cell, Module2StrikeState } from "@stock/shared";
 
+// In production, Socket.IO must connect to the Render backend, not the Vercel frontend.
+// VITE_SOCKET_URL falls back to VITE_API_URL since they share the same server.
+// In development both are undefined and the no-URL form uses Vite's /socket.io proxy.
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_URL || "";
+
 export const useSocket = () => {
   const socketRef = useRef<Socket | null>(null);
   const accessToken = useStore((state) => state.accessToken);
@@ -29,11 +34,12 @@ export const useSocket = () => {
     }
 
     console.log("[Socket] Connecting to server (token present)...");
-    const socket = io({
+    const socketOpts = {
       auth: { token: accessToken },
       reconnectionAttempts: 10,
       reconnectionDelay: 3000,
-    });
+    };
+    const socket = SOCKET_URL ? io(SOCKET_URL, socketOpts) : io(socketOpts);
 
     socketRef.current = socket;
 

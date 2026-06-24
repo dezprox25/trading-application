@@ -3,7 +3,7 @@ import { Routes, Route, Navigate, Link, useLocation, useNavigate } from "react-r
 import { useQuery } from "@tanstack/react-query";
 import { useSocket } from "./hooks/useSocket";
 import { useStore } from "./store/useStore";
-import { api } from "./utils/api";
+import { api, API_BASE } from "./utils/api";
 import { Module1 } from "./components/Module1";
 import { Module2 } from "./components/Module2";
 import { Auth } from "./components/Auth";
@@ -329,28 +329,27 @@ function App() {
 
   const [isInitializing, setIsInitializing] = useState(true);
 
-  console.log("[App] App() render — isInitializing:", isInitializing, "| accessToken:", !!accessToken);
+  if (import.meta.env.DEV) {
+    console.log("[App] App() render — isInitializing:", isInitializing, "| accessToken:", !!accessToken);
+  }
 
   // Silent app token refresh on load — only affects app-level auth
   useEffect(() => {
-    console.log("[App] Auth check useEffect fired");
     const checkAuth = async () => {
       try {
-        console.log("[App] Fetching /auth/refresh...");
-        const response = await fetch("/auth/refresh", { method: "POST" });
-        console.log("[App] /auth/refresh response:", response.status, response.ok);
+        const response = await fetch(`${API_BASE}/auth/refresh`, { method: "POST" });
+        if (import.meta.env.DEV) {
+          console.log("[App] /auth/refresh response:", response.status, response.ok);
+        }
         if (response.ok) {
           const data = await response.json();
-          console.log("[App] Refresh data:", { hasToken: !!data.accessToken, hasUser: !!data.user });
           if (data.accessToken && data.user) {
-            console.log("[App] Session restored — setting auth");
             setAuth(data.user, data.accessToken);
           }
         }
       } catch (err) {
         console.warn("[App] /auth/refresh failed:", err);
       } finally {
-        console.log("[App] Auth check complete — setting isInitializing=false");
         setIsInitializing(false);
       }
     };
@@ -358,7 +357,6 @@ function App() {
   }, [setAuth]);
 
   if (isInitializing) {
-    console.log("[App] Rendering initializing spinner");
     return (
       <div style={{ display: "flex", minHeight: "100vh", alignItems: "center", justifyContent: "center", background: "#f5f7fa", fontFamily: "'Inter', sans-serif" }}>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
@@ -368,8 +366,6 @@ function App() {
       </div>
     );
   }
-
-  console.log("[App] Rendering routes — accessToken:", !!accessToken);
 
   return (
     <>

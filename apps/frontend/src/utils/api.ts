@@ -4,6 +4,12 @@ interface RequestOptions extends RequestInit {
   skipAuth?: boolean;
 }
 
+// All API calls are prefixed with this base URL.
+// In development Vite's proxy handles relative paths, so API_BASE can be "".
+// In production set VITE_API_URL to the Render backend URL:
+//   VITE_API_URL=https://trading-application-r4fd.onrender.com
+export const API_BASE = import.meta.env.VITE_API_URL || "";
+
 const handleResponse = async (response: Response) => {
   const data = await response.json().catch(() => null);
   if (!response.ok) {
@@ -20,6 +26,9 @@ export const api = {
     const { accessToken, setAuth } = useStore.getState();
     const headers = new Headers(options.headers || {});
 
+    // Resolve URL — prepend API_BASE for relative paths
+    const fullUrl = url.startsWith("http") ? url : `${API_BASE}${url}`;
+
     // Set default JSON headers
     if (!(options.body instanceof FormData) && !headers.has("Content-Type")) {
       headers.set("Content-Type", "application/json");
@@ -33,14 +42,14 @@ export const api = {
     options.headers = headers;
 
     try {
-      const response = await fetch(url, options);
+      const response = await fetch(fullUrl, options);
 
       // Handle 401 Unauthorized (attempt token refresh)
       if (response.status === 401 && accessToken && !options.skipAuth) {
         console.log("[API] Access token expired. Attempting silent token refresh...");
 
         try {
-          const refreshRes = await fetch("/auth/refresh", { method: "POST" });
+          const refreshRes = await fetch(`${API_BASE}/auth/refresh`, { method: "POST" });
           const refreshData = await refreshRes.json();
 
           if (refreshRes.ok && refreshData.accessToken) {
@@ -51,7 +60,7 @@ export const api = {
             // Re-bind new header and retry
             headers.set("Authorization", `Bearer ${refreshData.accessToken}`);
             options.headers = headers;
-            const retryResponse = await fetch(url, options);
+            const retryResponse = await fetch(fullUrl, options);
             return await handleResponse(retryResponse);
           } else {
             // Refresh token expired — clear only the app JWT, preserve module tokens
