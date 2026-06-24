@@ -1,0 +1,12 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const auth_1 = require("../middleware/auth");
+const tracker_1 = require("../controllers/tracker");
+const router = (0, express_1.Router)();
+router.post("/session/start", auth_1.authenticate, tracker_1.startSession);
+router.get("/session/current", auth_1.authenticate, tracker_1.getCurrentSession);
+router.put("/session/strikes", auth_1.authenticate, tracker_1.updateStrikes);
+router.put("/filters", auth_1.authenticate, tracker_1.updateFilters);
+router.get("/export", auth_1.authenticate, tracker_1.exportCSV);
+exports.default = router;

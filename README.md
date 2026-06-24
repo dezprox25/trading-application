@@ -1,1 +1,1 @@
-# trading-application
+# Stock-Trading-Consultancy-project
