@@ -56,8 +56,7 @@ export const ModuleSelection: React.FC = () => {
       ),
       status: moduleStatus?.module1,
       token: module1Token,
-      loginPath: "/module-1/login",
-      dashboardPath: "/module-1/dashboard",
+      dashboardPath: "/dashboard/module-1",
       accentColor: GREEN,
       bgAccent: "#f0fdf4",
       borderAccent: "#86efac",
@@ -74,8 +73,7 @@ export const ModuleSelection: React.FC = () => {
       ),
       status: moduleStatus?.module2,
       token: module2Token,
-      loginPath: "/module-2/login",
-      dashboardPath: "/module-2/dashboard",
+      dashboardPath: "/dashboard/module-2",
       accentColor: "#2563eb",
       bgAccent: "#eff6ff",
       borderAccent: "#bfdbfe",
@@ -202,7 +200,7 @@ export const ModuleSelection: React.FC = () => {
                   <button
                     className="ms-launch-btn"
                     style={{ background: mod.accentColor, color: "#ffffff", boxShadow: `0 4px 12px ${mod.accentColor}40` }}
-                    onClick={() => navigate(mod.token ? mod.dashboardPath : mod.loginPath)}
+                    onClick={() => navigate(mod.dashboardPath)}
                   >
                     {mod.token ? `Open ${mod.label} Dashboard` : `Login to ${mod.label}`}
                   </button>
@@ -210,7 +208,15 @@ export const ModuleSelection: React.FC = () => {
                   {/* If has token, also show re-login link */}
                   {mod.token && (
                     <button
-                      onClick={() => navigate(mod.loginPath)}
+                      onClick={() => {
+                        // Clear the module token and navigate back to show login panel
+                        if (mod.id === "module1") {
+                          useStore.setState({ module1Token: null });
+                        } else {
+                          useStore.setState({ module2Token: null });
+                        }
+                        navigate(mod.dashboardPath);
+                      }}
                       style={{ background: "none", border: "none", cursor: "pointer", marginTop: 10, width: "100%", textAlign: "center", fontSize: 12, fontWeight: 600, color: "#94a3b8", textDecoration: "underline" }}>
                       Switch credentials
                     </button>

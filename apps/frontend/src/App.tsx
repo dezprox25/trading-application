@@ -1,14 +1,12 @@
 import { useEffect, useState } from "react";
-import { Routes, Route, Navigate, Link, useLocation, useNavigate } from "react-router-dom";
+import { Routes, Route, Navigate, Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useSocket } from "./hooks/useSocket";
 import { useStore } from "./store/useStore";
 import { api, API_BASE } from "./utils/api";
-import { Module1 } from "./components/Module1";
-import { Module2 } from "./components/Module2";
 import { Auth } from "./components/Auth";
 import { ModuleSelection } from "./components/ModuleSelection";
-import { ModuleLogin } from "./components/ModuleLogin";
+import ModuleWorkspace from "./components/ModuleWorkspace";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
 const GREEN = "#16a34a";
@@ -19,18 +17,6 @@ const GREEN = "#16a34a";
 function RequireAppAuth({ children }: { children: React.ReactNode }) {
   const accessToken = useStore((s) => s.accessToken);
   if (!accessToken) return <Navigate to="/login" replace />;
-  return <>{children}</>;
-}
-
-// Requires ONLY the module token. Never redirects to /login.
-// Redirects to the module's own login page if no module token.
-function RequireModuleAuth({ children, moduleId }: { children: React.ReactNode; moduleId: "module1" | "module2" }) {
-  const module1Token = useStore((s) => s.module1Token);
-  const module2Token = useStore((s) => s.module2Token);
-  const moduleToken  = moduleId === "module1" ? module1Token : module2Token;
-  const loginPath    = moduleId === "module1" ? "/module-1/login" : "/module-2/login";
-
-  if (!moduleToken) return <Navigate to={loginPath} replace />;
   return <>{children}</>;
 }
 
@@ -157,8 +143,8 @@ function ModuleSidebar({
   moduleStatus: { module1: string; module2: string } | undefined;
 }) {
   const location     = useLocation();
-  const module1Token = useStore((s) => s.module1Token);
-  const module2Token = useStore((s) => s.module2Token);
+  const module1Status = useStore((s) => s.module1Status);
+  const module2Status = useStore((s) => s.module2Status);
 
   const navItem = (to: string, label: string, sublabel: string, badge: string, locked: boolean) => {
     const isActive = location.pathname === to;
@@ -194,13 +180,6 @@ function ModuleSidebar({
     );
   };
 
-  const statusDot = (status: string | undefined) => {
-    const connected = status === "CONNECTED";
-    const waiting   = status?.includes("WAITING") || status?.includes("CONFIG");
-    const color     = connected ? GREEN : waiting ? "#d97706" : "#dc2626";
-    return <span style={{ width: 7, height: 7, borderRadius: "50%", background: color, display: "inline-block", boxShadow: `0 0 0 2px ${color}30` }} />;
-  };
-
   return (
     <aside className={`hidden md:flex sidebar-aside ${isSidebarCollapsed ? "collapsed" : ""}`}>
       <div style={{ width: 240, display: "flex", flexDirection: "column", height: "100%", flexShrink: 0 }}>
@@ -230,35 +209,33 @@ function ModuleSidebar({
 
         {/* Nav links */}
         <nav style={{ flex: 1, padding: "0 12px", display: "flex", flexDirection: "column", gap: 3 }}>
-          {navItem("/module-1/dashboard", "Module 1", "OI Analytics",    "M1", !module1Token)}
-          {navItem("/module-2/dashboard", "Module 2", "Strike Tracker",  "M2", !module2Token)}
-          {!module1Token && (
-            <Link to="/module-1/login" style={{ fontSize: 11, fontWeight: 600, color: GREEN, paddingLeft: 14, paddingTop: 4, textDecoration: "none" }}>
-              → Login to Module 1
-            </Link>
-          )}
-          {!module2Token && (
-            <Link to="/module-2/login" style={{ fontSize: 11, fontWeight: 600, color: "#2563eb", paddingLeft: 14, paddingTop: 4, textDecoration: "none" }}>
-              → Login to Module 2
-            </Link>
-          )}
+          {navItem("/dashboard/module-1", "Module 1", "OI Analytics",    "M1", false)}
+          {navItem("/dashboard/module-2", "Module 2", "Strike Tracker",  "M2", false)}
         </nav>
 
         {/* Module connection status */}
         <div style={{ padding: "14px 20px", borderTop: "1.5px solid #d8e0ea", display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ fontSize: 9, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.15em" }}>Connection Status</div>
           {[
-            { label: "Module 1 (Zebu)",   status: moduleStatus?.module1 },
-            { label: "Module 2 (Aetram)", status: moduleStatus?.module2 },
-          ].map(({ label, status }) => (
-            <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 12, fontWeight: 700, color: "#102033" }}>{label}</span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 700, color: status === "CONNECTED" ? GREEN : "#94a3b8" }}>
-                {statusDot(status)}
-                {status === "CONNECTED" ? "Live" : status?.includes("WAIT") ? "Config" : "Offline"}
-              </span>
-            </div>
-          ))}
+            { label: "Module 1 (Zebu)",   storeStatus: module1Status, apiStatus: moduleStatus?.module1 },
+            { label: "Module 2 (Aetram)", storeStatus: module2Status, apiStatus: moduleStatus?.module2 },
+          ].map(({ label, storeStatus, apiStatus }) => {
+            // Prioritize store status (real auth state) over API status
+            let displayStatus = storeStatus === "authenticated" ? "CONNECTED" : storeStatus === "authenticating" ? "WAITING" : apiStatus || "OFFLINE";
+            const isConnected = displayStatus === "CONNECTED";
+            const waiting = displayStatus === "WAITING";
+            const color = isConnected ? GREEN : waiting ? "#d97706" : "#dc2626";
+            
+            return (
+              <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: "#102033" }}>{label}</span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 700, color }}>
+                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: color, display: "inline-block", boxShadow: `0 0 0 2px ${color}30` }} />
+                  {isConnected ? "Live" : waiting ? "Authenticating" : "Offline"}
+                </span>
+              </div>
+            );
+          })}
         </div>
       </div>
     </aside>
@@ -372,54 +349,27 @@ function App() {
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');`}</style>
       <Routes>
         {/* ── PUBLIC: App login ─────────────────────────────────────────── */}
-        <Route
-          path="/login"
-          element={accessToken ? <Navigate to="/dashboard" replace /> : <Auth />}
-        />
+        <Route path="/login" element={accessToken ? <Navigate to="/dashboard" replace /> : <Auth />} />
 
-        {/* ── PUBLIC: Module logins (no app auth required) ──────────────── */}
-        {/* These are intentionally public so an expired/missing app token  */}
-        {/* never blocks access to the module authentication screen.        */}
-        <Route path="/module-1/login" element={<ModuleLogin />} />
-        <Route path="/module-2/login" element={<ModuleLogin />} />
-
-        {/* ── PROTECTED (app auth): Module selection dashboard ──────────── */}
+        {/* ── DASHBOARD SHELL: all /dashboard/* routes share the same layout ─ */}
         <Route
-          path="/dashboard"
+          path="/dashboard/*"
           element={
-            <RequireAppAuth><ModuleSelection /></RequireAppAuth>
+            <RequireAppAuth>
+              <ModuleDashboardLayout>
+                <Outlet />
+              </ModuleDashboardLayout>
+            </RequireAppAuth>
           }
-        />
-
-        {/* ── PROTECTED (module token only): Module dashboards ──────────── */}
-        {/* RequireModuleAuth never redirects to /login — only to module login */}
-        <Route
-          path="/module-1/dashboard"
-          element={
-            <RequireModuleAuth moduleId="module1">
-              <ModuleDashboardLayout><Module1 /></ModuleDashboardLayout>
-            </RequireModuleAuth>
-          }
-        />
-        <Route
-          path="/module-2/dashboard"
-          element={
-            <RequireModuleAuth moduleId="module2">
-              <ModuleDashboardLayout><Module2 /></ModuleDashboardLayout>
-            </RequireModuleAuth>
-          }
-        />
-
-        {/* ── Legacy redirects ──────────────────────────────────────────── */}
-        <Route path="/dashboard/module-1"   element={<Navigate to="/module-1/dashboard" replace />} />
-        <Route path="/dashboard/module-2"   element={<Navigate to="/module-2/dashboard" replace />} />
-        <Route path="/dashboard/split-view" element={<Navigate to="/dashboard" replace />} />
+        >
+          <Route index element={<ModuleSelection />} />
+          <Route path="home" element={<ModuleSelection />} />
+          <Route path="module-1" element={<ModuleWorkspace moduleId="module1" />} />
+          <Route path="module-2" element={<ModuleWorkspace moduleId="module2" />} />
+        </Route>
 
         {/* ── Catch-all ─────────────────────────────────────────────────── */}
-        <Route
-          path="*"
-          element={<Navigate to={accessToken ? "/dashboard" : "/login"} replace />}
-        />
+        <Route path="*" element={<Navigate to={accessToken ? "/dashboard" : "/login"} replace />} />
       </Routes>
     </>
   );

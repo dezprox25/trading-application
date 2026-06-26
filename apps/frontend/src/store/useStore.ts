@@ -6,6 +6,31 @@ import {
   Module2StrikeState
 } from "@stock/shared";
 
+// ── Module 1 types (not in @stock/shared) ─────────────────────────────────────
+
+export type OiSignal = "STRONG_BULL" | "MILD_BULL" | "NEUTRAL" | "MILD_BEAR" | "STRONG_BEAR" | "DIVERGENCE";
+
+export interface Module1OiMetrics {
+  timestamp: string;
+  dataSource: "LIVE_MARKET_API" | "SIMULATOR";
+  tin: number;
+  c_tl: number; c_mn: number; c_hig: number; c_low: number;
+  c_buy: number; c_sell: number;
+  f_buy: number; f_sell: number;
+  p_tl: number; p_mn: number; p_hig: number; p_low: number;
+  p_buy: number; p_sell: number;
+  callSignal: OiSignal;
+  putSignal: OiSignal;
+}
+
+export interface Module1IndicatorState {
+  symbol: string;
+  callState: string;
+  putState: string;
+  divergencePct: number;
+  hasDivergenceWarning: boolean;
+}
+
 interface AppState {
   // Authentication State
   user: UserSession | null;
@@ -14,11 +39,27 @@ interface AppState {
   clearAuth: () => void;
   clearAppAuth: () => void;
 
+  // Module 1: OI matrix + indicator state + indicator room
+  oiMetrics: Module1OiMetrics | null;
+  setOiMetrics: (m: Module1OiMetrics) => void;
+  module1IndicatorState: Module1IndicatorState | null;
+  setModule1IndicatorState: (i: Module1IndicatorState) => void;
+  module1IndicatorRoom: string | null;
+  setModule1IndicatorRoom: (room: string | null) => void;
+
   // Module-level authentication tokens (sessionStorage-persisted)
   module1Token: string | null;
   module2Token: string | null;
   setModule1Token: (token: string | null) => void;
   setModule2Token: (token: string | null) => void;
+
+  // Module connection status
+  module1Status: "idle" | "authenticating" | "authenticated" | "error";
+  module2Status: "idle" | "authenticating" | "authenticated" | "error";
+  module1Error: string | null;
+  module2Error: string | null;
+  setModule1Status: (status: "idle" | "authenticating" | "authenticated" | "error", error?: string | null) => void;
+  setModule2Status: (status: "idle" | "authenticating" | "authenticated" | "error", error?: string | null) => void;
 
   // Watchlist & Column Preferences State
   watchlist: string[];
@@ -52,11 +93,29 @@ export const useStore = create<AppState>((set) => ({
   clearAuth: () => {
     sessionStorage.removeItem("m1_token");
     sessionStorage.removeItem("m2_token");
-    set({ user: null, accessToken: null, activeSession: null, module1Token: null, module2Token: null });
+    set({ 
+      user: null, 
+      accessToken: null, 
+      activeSession: null, 
+      module1Token: null, 
+      module2Token: null,
+      module1Status: "idle",
+      module2Status: "idle",
+      module1Error: null,
+      module2Error: null,
+    });
   },
   clearAppAuth: () => {
     set({ user: null, accessToken: null, activeSession: null });
   },
+
+  // Module 1: OI metrics + indicator state
+  oiMetrics: null,
+  setOiMetrics: (m) => set({ oiMetrics: m }),
+  module1IndicatorState: null,
+  setModule1IndicatorState: (i) => set({ module1IndicatorState: i }),
+  module1IndicatorRoom: null,
+  setModule1IndicatorRoom: (room) => set({ module1IndicatorRoom: room }),
 
   // Module token state
   module1Token: sessionStorage.getItem("m1_token") || null,
@@ -71,6 +130,14 @@ export const useStore = create<AppState>((set) => ({
     else sessionStorage.removeItem("m2_token");
     set({ module2Token: token });
   },
+
+  // Module connection status
+  module1Status: "idle",
+  module2Status: "idle",
+  module1Error: null,
+  module2Error: null,
+  setModule1Status: (status, error = null) => set({ module1Status: status, module1Error: error }),
+  setModule2Status: (status, error = null) => set({ module2Status: status, module2Error: error }),
 
   // Watchlist State
   watchlist: ["NIFTY-SPOT", "NIFTY-FUT"],
