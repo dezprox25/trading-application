@@ -1,4 +1,3 @@
-import React from "react";
 import { useStore } from "../store/useStore";
 import Module1LoginPanel from "./Module1LoginPanel";
 import Module2LoginPanel from "./Module2LoginPanel";
