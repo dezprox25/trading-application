@@ -215,6 +215,43 @@ export const getOHLCBars = async (req: AuthenticatedRequest, res: Response) => {
   return res.status(200).json(bars);
 };
 
+// Get historical OHLC candles for a specific calendar date (NSE market hours)
+export const getHistoricalOHLCBars = async (req: AuthenticatedRequest, res: Response) => {
+  const { symbol, tf } = req.params;
+  const date = req.query.date as string;
+
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: "date query param required in YYYY-MM-DD format" });
+  }
+
+  // NSE market window in UTC: 09:15 IST = 03:45 UTC, 15:30 IST = 10:00 UTC
+  const startUtc = new Date(`${date}T03:44:00.000Z`);
+  const endUtc   = new Date(`${date}T10:01:00.000Z`);
+
+  try {
+    const dbBars = await FuturesOHLC.find({
+      symbol,
+      timeframe: tf,
+      bar_time: { $gte: startUtc, $lte: endUtc },
+    }).sort({ bar_time: 1 });
+
+    const bars = dbBars.map((b) => ({
+      symbol: b.symbol,
+      timeframe: b.timeframe,
+      open:  b.bar_open,
+      high:  b.bar_high,
+      low:   b.bar_low,
+      close: b.bar_close,
+      openTime: new Date(b.bar_time).getTime(),
+      volume: b.volume,
+    }));
+
+    return res.status(200).json(bars);
+  } catch (error) {
+    console.error("[Historical OHLC] Query error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+};
 
 // Get computed pivots (all 3 methods)
 export const getPivotLevelsEndpoint = async (req: AuthenticatedRequest, res: Response) => {
