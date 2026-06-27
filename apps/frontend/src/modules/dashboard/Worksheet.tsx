@@ -144,7 +144,6 @@ export function Worksheet({ rows, pivotMethod, hiddenCols, feedStatus, isLoading
   };
   const [colWidths, setColWidths] = useState<Record<string, number>>(initWidths);
 
-  const [hoveredRow, setHoveredRow]   = useState<number | null>(null);
   const [selRange, setSelRange]        = useState<SelRange | null>(null);
   const [isDragging, setIsDragging]   = useState(false);
 
@@ -381,8 +380,6 @@ export function Worksheet({ rows, pivotMethod, hiddenCols, feedStatus, isLoading
                 <tr
                   key={row.t}
                   className="ws-row"
-                  onMouseEnter={() => setHoveredRow(ri)}
-                  onMouseLeave={() => setHoveredRow(null)}
                 >
                   {cols.map((c, ci) => {
                     const isFrozen = !!c.frozen;
