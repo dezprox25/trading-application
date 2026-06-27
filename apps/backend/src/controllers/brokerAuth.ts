@@ -1,9 +1,10 @@
 import { Request, Response } from "express";
-import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import axios from "axios";
 import { startDataFeedWithCredentials } from "../services/dataFeed";
 import { loginToAetramWithCredentials, connectToAetramWebSocket } from "../services/aetramMarketDataService";
+import { generateAccessToken, JWT_SECRET } from "../utils/token";
+import jwt from "jsonwebtoken";
 
 const sha256 = (data: string) => crypto.createHash("sha256").update(data).digest("hex");
 
@@ -121,15 +122,16 @@ export const module1BrokerLogin = async (req: Request, res: Response) => {
     const sessionToken = data.susertoken as string;
     console.log(`[Module1/BrokerLogin] SUCCESS — session token obtained (${sessionToken.length} chars).`);
 
-    // ── Start live data feed ─────────────────────────────────────────────────
-    console.log("[Module1/BrokerLogin] Starting live data feed...");
-    startDataFeedWithCredentials(userId, sessionToken);
+    // ── Start live data feed (async — runs in background, does not block response) ─
+    console.log("[Module1/BrokerLogin] Starting live data feed (async)...");
+    startDataFeedWithCredentials(userId, sessionToken).catch((err) => {
+      console.error("[Module1/BrokerLogin] Feed start error:", err?.message || err);
+    });
 
     // ── Issue module JWT ─────────────────────────────────────────────────────
-    const secret = process.env.JWT_SECRET || "supersecretjwtkeyforstockdashboardintraday2026";
     const moduleToken = jwt.sign(
       { moduleId: "module1", userId, type: "module-access" },
-      secret,
+      JWT_SECRET,
       { expiresIn: "8h" }
     );
 
@@ -171,10 +173,9 @@ export const module2BrokerLogin = async (req: Request, res: Response) => {
     console.log("[Module2/BrokerLogin] Aetram auth success. Connecting WebSocket...");
     await connectToAetramWebSocket();
 
-    const secret = process.env.JWT_SECRET || "supersecretjwtkeyforstockdashboardintraday2026";
     const moduleToken = jwt.sign(
       { moduleId: "module2", type: "module-access" },
-      secret,
+      JWT_SECRET,
       { expiresIn: "8h" }
     );
 

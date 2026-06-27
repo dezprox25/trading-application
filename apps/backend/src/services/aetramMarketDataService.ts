@@ -80,6 +80,7 @@ export const loginToAetram = async (): Promise<boolean> => {
       },
       {
         headers: { "Content-Type": "application/json" },
+        timeout: 15000,
       }
     );
 
@@ -130,7 +131,7 @@ export const resolveOptionStrikeToken = async (
     const searchString = `${indexShort} ${strikePrice} ${optionType}`;
     const searchUrl = `${baseUrl}/search/instruments?searchString=${encodeURIComponent(searchString)}`;
     
-    const response = await axios.get(searchUrl, { headers: getHeaders() });
+    const response = await axios.get(searchUrl, { headers: getHeaders(), timeout: 10000 });
     
     if (response.data && response.data.code === "success" && Array.isArray(response.data.result)) {
       const targetYmd = parseDateToYMD(expiryDate);
@@ -193,8 +194,8 @@ export const subscribeToInstruments = async (
     };
 
     console.log(`[AetramMD] Subscribing to LTP/OI for ${instruments.length} instruments...`);
-    await axios.post(`${baseUrl}/instruments/subscription`, payload, { headers: getHeaders() });
-    await axios.post(`${baseUrl}/instruments/subscription`, payloadOI, { headers: getHeaders() });
+    await axios.post(`${baseUrl}/instruments/subscription`, payload, { headers: getHeaders(), timeout: 10000 });
+    await axios.post(`${baseUrl}/instruments/subscription`, payloadOI, { headers: getHeaders(), timeout: 10000 });
   } catch (error: any) {
     console.error("[AetramMD] Subscription request failed:", error?.message || error);
   }

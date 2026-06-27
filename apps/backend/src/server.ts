@@ -23,7 +23,8 @@ import { initPivotService } from "./services/pivotService";
 import { initSocketServer } from "./services/socketService";
 import { initTrackerEngine } from "./services/trackerService";
 import { initModule1OiService } from "./services/module1OiService";
-import { startMonitoringLoop, getMonitoringStatus } from "./services/monitoringService";
+import { startMonitoringLoop, stopMonitoringLoop, getMonitoringStatus } from "./services/monitoringService";
+import { stopDataFeed } from "./services/dataFeed";
 
 const app = express();
 const server = http.createServer(app);
@@ -261,6 +262,8 @@ const shutdown = (signal: string) => {
   console.log(`[Server] Received ${signal}. Shutting down gracefully…`);
   server.close(async () => {
     console.log("[Server] HTTP server closed.");
+    stopMonitoringLoop();
+    stopDataFeed();
     try {
       const mongoose = require("mongoose");
       await mongoose.connection.close();

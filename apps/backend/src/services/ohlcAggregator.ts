@@ -5,24 +5,33 @@ import redis from "../config/redis";
 // Local cache for active candles: activeCandles[symbol][timeframe]
 const activeCandles: Record<string, Record<string, Candle>> = {};
 
+const parseTfMinutes = (tf: string): number => {
+  if (tf.endsWith("h")) {
+    const h = parseInt(tf, 10);
+    return !isNaN(h) && h > 0 ? h * 60 : 0;
+  }
+  if (tf.endsWith("m")) {
+    const m = parseInt(tf, 10);
+    return !isNaN(m) && m > 0 ? m : 0;
+  }
+  return 0;
+};
+
 const getTimeframeMinutes = async (tfStr: string): Promise<number> => {
-  if (tfStr === "1m") return 1;
-  if (tfStr === "3m") return 3;
-  if (tfStr === "5m") return 5;
   if (tfStr === "custom") {
     try {
       const customTf = await redis.get("config:custom_timeframe");
-      if (customTf && customTf.endsWith("m")) {
-        const mins = parseInt(customTf);
+      if (customTf) {
+        const mins = parseTfMinutes(customTf);
         if (mins > 0) return mins;
       }
     } catch {
       // Ignore Redis offline/read errors
     }
-    return 10; // Default fallback for custom
+    return 10;
   }
-  const mins = parseInt(tfStr);
-  return isNaN(mins) || mins <= 0 ? 5 : mins;
+  const mins = parseTfMinutes(tfStr);
+  return mins > 0 ? mins : 5;
 };
 
 // Start a proactive checker loop on startup/module load

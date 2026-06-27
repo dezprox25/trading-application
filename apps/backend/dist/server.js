@@ -27,6 +27,7 @@ const socketService_1 = require("./services/socketService");
 const trackerService_1 = require("./services/trackerService");
 const module1OiService_1 = require("./services/module1OiService");
 const monitoringService_1 = require("./services/monitoringService");
+const dataFeed_1 = require("./services/dataFeed");
 const app = (0, express_1.default)();
 exports.app = app;
 const server = http_1.default.createServer(app);
@@ -226,6 +227,8 @@ const shutdown = (signal) => {
     console.log(`[Server] Received ${signal}. Shutting down gracefully…`);
     server.close(async () => {
         console.log("[Server] HTTP server closed.");
+        (0, monitoringService_1.stopMonitoringLoop)();
+        (0, dataFeed_1.stopDataFeed)();
         try {
             const mongoose = require("mongoose");
             await mongoose.connection.close();

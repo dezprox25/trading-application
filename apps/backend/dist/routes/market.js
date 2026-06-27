@@ -11,6 +11,7 @@ router.put("/watchlist", auth_1.authenticate, market_1.updateWatchlist);
 router.get("/market/spot/:symbol", auth_1.authenticate, market_1.getSpotPrice);
 router.get("/market/futures/:symbol", auth_1.authenticate, market_1.getFuturesData);
 router.get("/market/ohlc/:symbol/:tf", auth_1.authenticate, market_1.getOHLCBars);
+router.get("/market/ohlc-history/:symbol/:tf", auth_1.authenticate, market_1.getHistoricalOHLCBars);
 router.get("/market/pivots/:symbol/:tf", auth_1.authenticate, market_1.getPivotLevelsEndpoint);
 router.get("/market/option-chain/:index", auth_1.authenticate, market_1.getOptionChain);
 router.post("/market/custom-timeframe", auth_1.authenticate, market_1.updateCustomTimeframe);

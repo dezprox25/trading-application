@@ -2,7 +2,18 @@ import { create } from "zustand";
 import type { DashboardRow } from "../../calc";
 
 type PivotMethod = "client" | "classic";
-type FeedStatus  = "idle" | "live" | "interrupted";
+export type FeedStatus =
+  | "idle"
+  | "connecting"
+  | "live"
+  | "interrupted"
+  | "market-closed"
+  | "auth-error"
+  | "api-error"
+  | "no-network"
+  | "broker-disconnected"
+  | "session-expired"
+  | "reconnecting";
 
 interface DashboardStore {
   // Config selection
@@ -17,6 +28,7 @@ interface DashboardStore {
   // Generated
   isGenerated:     boolean;
   timeframe:       string;
+  customRange:     { from: string; to: string; candleTf: string } | null;
   pivotMethod:     PivotMethod;
   configCollapsed: boolean;
 
@@ -41,7 +53,9 @@ interface DashboardStore {
   setStrike(v: number | null): void;
   generate(): void;
   reset(): void;
+  clearRows(): void;
   setTimeframe(tf: string): void;
+  setCustomRange(r: { from: string; to: string; candleTf: string } | null): void;
   setPivotMethod(m: PivotMethod): void;
   toggleConfigCollapsed(): void;
   appendRow(row: DashboardRow): void;
@@ -61,7 +75,7 @@ export const useDashStore = create<DashboardStore>((set, get) => ({
   type: "Call+Put",
   callStrike: null, putStrike: null, strike: null,
   isGenerated: false,
-  timeframe: "5m", pivotMethod: "client", configCollapsed: false,
+  timeframe: "5m", customRange: null, pivotMethod: "client", configCollapsed: false,
   rows: [], feedStatus: "idle",
   spotLtp: null, futureLtp: null, spotDir: null, futureDir: null,
   hiddenCols: savedHidden(),
@@ -75,7 +89,9 @@ export const useDashStore = create<DashboardStore>((set, get) => ({
   setStrike:     (v) => set({ strike: v }),
   generate:      ()  => set({ isGenerated: true, rows: [] }),
   reset:         ()  => set({ isGenerated: false, rows: [], feedStatus: "idle" }),
+  clearRows:     ()  => set({ rows: [] }),
   setTimeframe:  (tf) => set({ timeframe: tf }),
+  setCustomRange: (r) => set({ customRange: r }),
   setPivotMethod: (m) => set({ pivotMethod: m }),
   toggleConfigCollapsed: () => set((s) => ({ configCollapsed: !s.configCollapsed })),
 

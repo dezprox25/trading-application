@@ -72,6 +72,7 @@ const loginToAetram = async () => {
             source: "WEBAPI",
         }, {
             headers: { "Content-Type": "application/json" },
+            timeout: 15000,
         });
         if (response.data && response.data.code === "success" && response.data.result) {
             sessionToken = response.data.result.token;
@@ -115,7 +116,7 @@ const resolveOptionStrikeToken = async (index, expiryDate, strikeSymbol) => {
         // Search using searchString
         const searchString = `${indexShort} ${strikePrice} ${optionType}`;
         const searchUrl = `${baseUrl}/search/instruments?searchString=${encodeURIComponent(searchString)}`;
-        const response = await axios_1.default.get(searchUrl, { headers: getHeaders() });
+        const response = await axios_1.default.get(searchUrl, { headers: getHeaders(), timeout: 10000 });
         if (response.data && response.data.code === "success" && Array.isArray(response.data.result)) {
             const targetYmd = parseDateToYMD(expiryDate);
             // Filter list in-memory for the closest match
@@ -168,8 +169,8 @@ const subscribeToInstruments = async (instruments) => {
             xtsMessageCode: 1510, // OI updates
         };
         console.log(`[AetramMD] Subscribing to LTP/OI for ${instruments.length} instruments...`);
-        await axios_1.default.post(`${baseUrl}/instruments/subscription`, payload, { headers: getHeaders() });
-        await axios_1.default.post(`${baseUrl}/instruments/subscription`, payloadOI, { headers: getHeaders() });
+        await axios_1.default.post(`${baseUrl}/instruments/subscription`, payload, { headers: getHeaders(), timeout: 10000 });
+        await axios_1.default.post(`${baseUrl}/instruments/subscription`, payloadOI, { headers: getHeaders(), timeout: 10000 });
     }
     catch (error) {
         console.error("[AetramMD] Subscription request failed:", error?.message || error);

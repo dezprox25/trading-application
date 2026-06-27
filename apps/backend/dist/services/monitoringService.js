@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.startMonitoringLoop = exports.getMonitoringStatus = exports.recordTickReceived = void 0;
+exports.stopMonitoringLoop = exports.startMonitoringLoop = exports.getMonitoringStatus = exports.recordTickReceived = void 0;
 const redis_1 = __importDefault(require("../config/redis"));
 const zebuMarketDataClient_1 = require("./zebuMarketDataClient");
 let lastTickTime = Date.now();
@@ -29,7 +29,7 @@ const getMonitoringStatus = async () => {
         }
     }
     else {
-        alerts.push("Live feed is disconnected (running in fallback simulator mode).");
+        alerts.push("Live feed is disconnected. No live data available — waiting for broker reconnection.");
     }
     if (!spotLtp || parseFloat(spotLtp) === 0) {
         alerts.push("Spot LTP is missing or zero.");
@@ -53,18 +53,29 @@ const getMonitoringStatus = async () => {
     };
 };
 exports.getMonitoringStatus = getMonitoringStatus;
+let monitoringInterval = null;
 /**
  * Starts a background loop to perform validation checks every 10 seconds.
+ * Safe to call multiple times — prevents duplicate intervals.
  */
 const startMonitoringLoop = () => {
+    if (monitoringInterval)
+        return;
     console.log("[MonitoringService] Active validation and freshness loop started.");
-    setInterval(async () => {
+    monitoringInterval = setInterval(async () => {
         try {
             await (0, exports.getMonitoringStatus)();
         }
         catch (err) {
             console.error("[MonitoringService] Error running monitoring status checks:", err);
         }
-    }, 10000); // Check every 10 seconds
+    }, 10000);
 };
 exports.startMonitoringLoop = startMonitoringLoop;
+const stopMonitoringLoop = () => {
+    if (monitoringInterval) {
+        clearInterval(monitoringInterval);
+        monitoringInterval = null;
+    }
+};
+exports.stopMonitoringLoop = stopMonitoringLoop;

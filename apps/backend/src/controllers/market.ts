@@ -215,18 +215,36 @@ export const getOHLCBars = async (req: AuthenticatedRequest, res: Response) => {
   return res.status(200).json(bars);
 };
 
-// Get historical OHLC candles for a specific calendar date (NSE market hours)
+// Get historical OHLC candles within a date/time range.
+// Accepts either:
+//   ?date=YYYY-MM-DD           — returns bars for that trading day (NSE market hours)
+//   ?from=ISO&to=ISO           — returns bars between two arbitrary UTC datetimes
 export const getHistoricalOHLCBars = async (req: AuthenticatedRequest, res: Response) => {
   const { symbol, tf } = req.params;
-  const date = req.query.date as string;
+  const { date, from, to } = req.query as { date?: string; from?: string; to?: string };
 
-  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return res.status(400).json({ error: "date query param required in YYYY-MM-DD format" });
+  let startUtc: Date;
+  let endUtc: Date;
+
+  if (from && to) {
+    startUtc = new Date(from);
+    endUtc   = new Date(to);
+    if (isNaN(startUtc.getTime()) || isNaN(endUtc.getTime())) {
+      return res.status(400).json({ error: "Invalid from/to datetime — use ISO 8601 format" });
+    }
+    if (startUtc >= endUtc) {
+      return res.status(400).json({ error: "from must be before to" });
+    }
+  } else if (date) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: "date query param required in YYYY-MM-DD format" });
+    }
+    // NSE market window in UTC: 09:15 IST = 03:45 UTC, 15:30 IST = 10:00 UTC
+    startUtc = new Date(`${date}T03:44:00.000Z`);
+    endUtc   = new Date(`${date}T10:01:00.000Z`);
+  } else {
+    return res.status(400).json({ error: "Provide either ?date=YYYY-MM-DD or ?from=ISO&to=ISO" });
   }
-
-  // NSE market window in UTC: 09:15 IST = 03:45 UTC, 15:30 IST = 10:00 UTC
-  const startUtc = new Date(`${date}T03:44:00.000Z`);
-  const endUtc   = new Date(`${date}T10:01:00.000Z`);
 
   try {
     const dbBars = await FuturesOHLC.find({
@@ -238,12 +256,12 @@ export const getHistoricalOHLCBars = async (req: AuthenticatedRequest, res: Resp
     const bars = dbBars.map((b) => ({
       symbol: b.symbol,
       timeframe: b.timeframe,
-      open:  b.bar_open,
-      high:  b.bar_high,
-      low:   b.bar_low,
-      close: b.bar_close,
+      open:     b.bar_open,
+      high:     b.bar_high,
+      low:      b.bar_low,
+      close:    b.bar_close,
       openTime: new Date(b.bar_time).getTime(),
-      volume: b.volume,
+      volume:   b.volume,
     }));
 
     return res.status(200).json(bars);

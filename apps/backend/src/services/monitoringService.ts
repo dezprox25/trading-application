@@ -27,7 +27,7 @@ export const getMonitoringStatus = async () => {
       alerts.push(`Live feed data freshness alert: No ticks received for ${secondsSinceLastTick.toFixed(1)} seconds.`);
     }
   } else {
-    alerts.push("Live feed is disconnected (running in fallback simulator mode).");
+    alerts.push("Live feed is disconnected. No live data available — waiting for broker reconnection.");
   }
   
   if (!spotLtp || parseFloat(spotLtp) === 0) {
@@ -54,16 +54,27 @@ export const getMonitoringStatus = async () => {
   };
 };
 
+let monitoringInterval: NodeJS.Timeout | null = null;
+
 /**
  * Starts a background loop to perform validation checks every 10 seconds.
+ * Safe to call multiple times — prevents duplicate intervals.
  */
 export const startMonitoringLoop = () => {
+  if (monitoringInterval) return;
   console.log("[MonitoringService] Active validation and freshness loop started.");
-  setInterval(async () => {
+  monitoringInterval = setInterval(async () => {
     try {
       await getMonitoringStatus();
     } catch (err) {
       console.error("[MonitoringService] Error running monitoring status checks:", err);
     }
-  }, 10000); // Check every 10 seconds
+  }, 10000);
+};
+
+export const stopMonitoringLoop = () => {
+  if (monitoringInterval) {
+    clearInterval(monitoringInterval);
+    monitoringInterval = null;
+  }
 };

@@ -3,12 +3,23 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.startZebuMarketDataFeedWithCredentials = exports.startZebuMarketDataFeed = exports.isZebuMarketDataConfigured = exports.getZebuMissingConfig = exports.isZebuLiveConnected = void 0;
+exports.startZebuMarketDataFeedWithCredentials = exports.startZebuMarketDataFeed = exports.isZebuMarketDataConfigured = exports.getZebuMissingConfig = exports.setRuntimeInstrumentTokens = exports.isZebuLiveConnected = void 0;
 const ws_1 = __importDefault(require("ws"));
 const zebuOAuthService_1 = require("./zebuOAuthService");
 let wsConnected = false;
 const isZebuLiveConnected = () => wsConnected;
 exports.isZebuLiveConnected = isZebuLiveConnected;
+// Runtime token overrides (set by instrumentTokenService after NFO refresh)
+let runtimeFutToken = null;
+let runtimeCeTokens = null;
+let runtimePeTokens = null;
+const setRuntimeInstrumentTokens = (futToken, ceTokens, peTokens) => {
+    runtimeFutToken = futToken || null;
+    runtimeCeTokens = ceTokens.length > 0 ? ceTokens.join(",") : null;
+    runtimePeTokens = peTokens.length > 0 ? peTokens.join(",") : null;
+    console.log(`[Zebu] Runtime tokens updated — FUT: ${futToken ? "set" : "null"} | CE: ${ceTokens.length} | PE: ${peTokens.length}`);
+};
+exports.setRuntimeInstrumentTokens = setRuntimeInstrumentTokens;
 const isPlaceholder = (value) => !value || value.includes("your-") || value.includes("placeholder");
 const getZebuWsUrl = () => process.env.ZEBU_WS_URL || process.env.CLIENT_API_URL || "";
 const getZebuUserId = () => process.env.ZEBU_CLIENT_ID || process.env.ZEBU_USER_ID || "";
@@ -49,9 +60,9 @@ const parseInstrumentEnv = (value) => {
 };
 const getModule1ZebuInstruments = () => [
     ...parseInstrumentEnv(process.env.ZEBU_NIFTY_SPOT_TOKEN || "NSE|26000:NIFTY-SPOT"),
-    ...parseInstrumentEnv(process.env.ZEBU_NIFTY_FUT_TOKEN),
-    ...parseInstrumentEnv(process.env.ZEBU_NIFTY_CE_TOKENS),
-    ...parseInstrumentEnv(process.env.ZEBU_NIFTY_PE_TOKENS),
+    ...parseInstrumentEnv(runtimeFutToken || process.env.ZEBU_NIFTY_FUT_TOKEN),
+    ...parseInstrumentEnv(runtimeCeTokens || process.env.ZEBU_NIFTY_CE_TOKENS),
+    ...parseInstrumentEnv(runtimePeTokens || process.env.ZEBU_NIFTY_PE_TOKENS),
 ];
 const getZebuMissingConfig = () => {
     const missing = [];
@@ -179,7 +190,15 @@ exports.startZebuMarketDataFeed = startZebuMarketDataFeed;
  * Start Zebu feed using runtime credentials (from user-initiated broker login).
  * Instruments remain env-configured (they are configuration, not credentials).
  */
-const startZebuMarketDataFeedWithCredentials = (userId, sessionToken, onTick, onDataSource, onFallback) => {
+const SESSION_EXPIRY_PATTERNS = [
+    "session expired", "sessionexpired", "invalid session", "token expired",
+    "susertoken", "not_ok", "login", "unauthorized", "invalid user"
+];
+const isSessionExpiredMessage = (emsg, stat) => {
+    const combined = `${emsg || ""} ${stat || ""}`.toLowerCase();
+    return SESSION_EXPIRY_PATTERNS.some(p => combined.includes(p));
+};
+const startZebuMarketDataFeedWithCredentials = (userId, sessionToken, onTick, onDataSource, onFallback, onSessionExpired) => {
     const wsUrl = getZebuWsUrl();
     const instruments = getModule1ZebuInstruments();
     const symbolByKey = buildInstrumentMap(instruments);
@@ -265,7 +284,13 @@ const startZebuMarketDataFeedWithCredentials = (userId, sessionToken, onTick, on
                 }
                 else {
                     console.error(`[Feed:ACK] Connection REJECTED by Zebu — s="${record.s}" emsg="${record.emsg ?? "(none)"}" | Full: ${JSON.stringify(record)}`);
-                    onFallback(`Zebu rejected connection: ${record.emsg || record.s}`);
+                    if (isSessionExpiredMessage(record.emsg, record.s) && onSessionExpired) {
+                        console.warn("[Feed:ACK] Session token rejected — likely expired. Triggering session expiry handler.");
+                        onSessionExpired();
+                    }
+                    else {
+                        onFallback(`Zebu rejected connection: ${record.emsg || record.s}`);
+                    }
                 }
                 continue;
             }

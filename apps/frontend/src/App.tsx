@@ -94,7 +94,7 @@ function ModuleTopBar({
           <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 14, fontWeight: 800, color: "#102033" }}>{timeStr}</span>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 6, paddingRight: 20, borderRight: "1.5px solid #d8e0ea" }}>
+        <div style={{ display: "none", alignItems: "center", gap: 6, paddingRight: 20, borderRight: "1.5px solid #d8e0ea" }}>
           {[{ key: "1m", label: "1M" }, { key: "3m", label: "3M" }, { key: "5m", label: "5M" }].map((tf) => (
             <button key={tf.key} onClick={() => setSelectedTimeframe(tf.key)} style={tfBtn(selectedTimeframe === tf.key)}>
               {tf.label}
@@ -105,7 +105,7 @@ function ModuleTopBar({
           </button>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <div style={{ display: "none", alignItems: "center", gap: 6 }}>
           <span style={{
             width: 7, height: 7, borderRadius: "50%", display: "inline-block",
             background: isMarketClosed ? "#dc2626" : GREEN,

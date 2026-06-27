@@ -152,3 +152,19 @@ export const broadcastTrackerUpdate = (sessionId: string, data: any) => {
     ioServer.to(`tracker:${sessionId}`).emit("tracker_update", data);
   }
 };
+
+export type BrokerStatus =
+  | "live"
+  | "reconnecting"
+  | "broker-disconnected"
+  | "session-expired";
+
+/**
+ * Broadcasts broker connection status to all connected frontend clients.
+ * Used by dataFeed to push real-time connection state changes.
+ */
+export const broadcastBrokerStatus = (status: BrokerStatus, detail?: string) => {
+  if (!ioServer) return;
+  ioServer.emit("broker_status", { status, detail, timestamp: new Date().toISOString() });
+  console.log(`[Socket] Broadcast broker_status: ${status}${detail ? ` (${detail})` : ""}`);
+};

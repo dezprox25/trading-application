@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.broadcastTrackerUpdate = exports.initSocketServer = void 0;
+exports.broadcastBrokerStatus = exports.broadcastTrackerUpdate = exports.initSocketServer = void 0;
 const token_1 = require("../utils/token");
 const dataFeed_1 = require("./dataFeed");
 const pivotService_1 = require("./pivotService");
@@ -126,3 +126,14 @@ const broadcastTrackerUpdate = (sessionId, data) => {
     }
 };
 exports.broadcastTrackerUpdate = broadcastTrackerUpdate;
+/**
+ * Broadcasts broker connection status to all connected frontend clients.
+ * Used by dataFeed to push real-time connection state changes.
+ */
+const broadcastBrokerStatus = (status, detail) => {
+    if (!ioServer)
+        return;
+    ioServer.emit("broker_status", { status, detail, timestamp: new Date().toISOString() });
+    console.log(`[Socket] Broadcast broker_status: ${status}${detail ? ` (${detail})` : ""}`);
+};
+exports.broadcastBrokerStatus = broadcastBrokerStatus;

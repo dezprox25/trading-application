@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.me = exports.moduleLogin = exports.logout = exports.refresh = exports.login = exports.register = void 0;
+exports.moduleLogin = exports.me = exports.logout = exports.refresh = exports.register = exports.login = void 0;
 const bcrypt_1 = __importDefault(require("bcrypt"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const User_1 = require("../models/User");
@@ -11,106 +11,41 @@ const Watchlist_1 = require("../models/Watchlist");
 const shared_1 = require("@stock/shared");
 const token_1 = require("../utils/token");
 const redis_1 = __importDefault(require("../config/redis"));
-// Helper to parse cookies manually from raw header
+// Fixed user ID issued inside JWTs when authenticating via APP_LOGIN_* env vars.
+// Used by refresh and me to bypass the database lookup for this synthetic user.
+const ENV_USER_ID = "__app_env_user__";
 const getCookie = (req, name) => {
     const cookieHeader = req.headers.cookie;
     if (!cookieHeader)
         return null;
     const cookies = cookieHeader.split(";").reduce((acc, curr) => {
         const [k, v] = curr.split("=");
-        if (k && v) {
+        if (k && v)
             acc[k.trim()] = decodeURIComponent(v.trim());
-        }
         return acc;
     }, {});
     return cookies[name] || null;
 };
+// Returns the env-var user object, or null if env credentials are not configured.
+const getEnvUser = () => {
+    const username = process.env.APP_LOGIN_USERNAME;
+    const password = process.env.APP_LOGIN_PASSWORD;
+    if (!username || !password)
+        return null;
+    return { id: ENV_USER_ID, username, name: username, password };
+};
 // Local in-memory users store for when MongoDB is offline
 const inMemoryUsers = new Map();
-// Pre-seed a default guest user so the user doesn't strictly have to register
-bcrypt_1.default.hash("password123", 12).then(hashed => {
+bcrypt_1.default.hash("password123", 12).then((hashed) => {
     inMemoryUsers.set("60c72b2f9b1d8a0015f8e567", {
         _id: "60c72b2f9b1d8a0015f8e567",
         username: "guest",
         password: hashed,
         name: "Guest User",
-        status: "active"
+        status: "active",
     });
 });
-// User Registration — saves user active, no OTP
-const register = async (req, res) => {
-    try {
-        const parseResult = shared_1.RegisterSchema.safeParse(req.body);
-        if (!parseResult.success) {
-            return res.status(400).json({ error: "Validation failed", details: parseResult.error.errors });
-        }
-        const { username, password, name } = parseResult.data;
-        let existingUser = null;
-        try {
-            existingUser = await User_1.User.findOne({ username });
-        }
-        catch (dbErr) {
-            console.warn("[Auth] MongoDB offline. Checking in-memory users.");
-            existingUser = Array.from(inMemoryUsers.values()).find(u => u.username === username);
-        }
-        if (existingUser) {
-            return res.status(409).json({ error: "Username is already registered" });
-        }
-        const hashedPassword = await bcrypt_1.default.hash(password, 12);
-        let newUser;
-        try {
-            newUser = await User_1.User.create({
-                username,
-                password: hashedPassword,
-                name: name || username,
-                status: "active",
-            });
-            await Watchlist_1.Watchlist.create({
-                user_id: newUser._id,
-                symbols_json: [],
-                column_prefs_json: {},
-            });
-        }
-        catch (dbErr) {
-            console.warn("[Auth] MongoDB offline. Registering user in memory.");
-            const mockId = "mock-user-" + Date.now() + "-" + Math.random().toString(36).substring(2, 9);
-            newUser = {
-                _id: mockId,
-                username: password ? hashedPassword : "", // just for safety
-                password: hashedPassword,
-                name: name || username,
-                status: "active",
-            };
-            // Keep it in both locations
-            newUser.username = username;
-            inMemoryUsers.set(mockId, newUser);
-        }
-        // Auto-login with JWT
-        const accessToken = (0, token_1.generateAccessToken)(newUser._id.toString());
-        const refreshToken = (0, token_1.generateRefreshToken)(newUser._id.toString());
-        res.cookie("refresh", refreshToken, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            sameSite: "strict",
-            maxAge: 7 * 24 * 60 * 60 * 1000,
-        });
-        return res.status(201).json({
-            message: "Account created successfully!",
-            accessToken,
-            user: {
-                id: newUser._id,
-                username: newUser.username,
-                name: newUser.name || newUser.username,
-            },
-        });
-    }
-    catch (error) {
-        console.error("Registration Error:", error);
-        return res.status(500).json({ error: "Internal Server Error" });
-    }
-};
-exports.register = register;
-// User Login — checks username and password, returns JWT
+// POST /auth/login
 const login = async (req, res) => {
     try {
         const parseResult = shared_1.LoginSchema.safeParse(req.body);
@@ -118,20 +53,40 @@ const login = async (req, res) => {
             return res.status(400).json({ error: "Validation failed", details: parseResult.error.errors });
         }
         const { username, password } = parseResult.data;
+        // ── Env-var authentication path ────────────────────────────────────────────
+        const envUser = getEnvUser();
+        if (envUser) {
+            if (username !== envUser.username || password !== envUser.password) {
+                return res.status(401).json({ error: "Invalid username or password." });
+            }
+            const accessToken = (0, token_1.generateAccessToken)(ENV_USER_ID);
+            const refreshToken = (0, token_1.generateRefreshToken)(ENV_USER_ID);
+            res.cookie("refresh", refreshToken, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === "production",
+                sameSite: "strict",
+                maxAge: 7 * 24 * 60 * 60 * 1000,
+            });
+            return res.status(200).json({
+                accessToken,
+                user: { id: ENV_USER_ID, username: envUser.username, name: envUser.name },
+            });
+        }
+        // ── Database authentication path (fallback when env credentials not set) ──
         let user = null;
         try {
             user = await User_1.User.findOne({ username });
         }
         catch (dbErr) {
             console.warn("[Auth] MongoDB offline. Authenticating via in-memory users.");
-            user = Array.from(inMemoryUsers.values()).find(u => u.username === username);
+            user = Array.from(inMemoryUsers.values()).find((u) => u.username === username);
         }
         if (!user) {
-            return res.status(401).json({ error: "Invalid credentials" });
+            return res.status(401).json({ error: "Invalid username or password." });
         }
         const match = await bcrypt_1.default.compare(password, user.password);
         if (!match || user.status === "inactive") {
-            return res.status(401).json({ error: "Invalid credentials" });
+            return res.status(401).json({ error: "Invalid username or password." });
         }
         const accessToken = (0, token_1.generateAccessToken)(user._id.toString());
         const refreshToken = (0, token_1.generateRefreshToken)(user._id.toString());
@@ -143,11 +98,7 @@ const login = async (req, res) => {
         });
         return res.status(200).json({
             accessToken,
-            user: {
-                id: user._id,
-                username: user.username,
-                name: user.name || user.username,
-            },
+            user: { id: user._id, username: user.username, name: user.name || user.username },
         });
     }
     catch (error) {
@@ -156,7 +107,60 @@ const login = async (req, res) => {
     }
 };
 exports.login = login;
-// Token Refresh
+// POST /auth/register — disabled when env-var authentication is active
+const register = async (req, res) => {
+    if (getEnvUser()) {
+        return res.status(403).json({ error: "Registration is disabled for this deployment." });
+    }
+    try {
+        const parseResult = shared_1.RegisterSchema.safeParse(req.body);
+        if (!parseResult.success) {
+            return res.status(400).json({ error: "Validation failed", details: parseResult.error.errors });
+        }
+        const { username, password, name } = parseResult.data;
+        let existingUser = null;
+        try {
+            existingUser = await User_1.User.findOne({ username });
+        }
+        catch (dbErr) {
+            existingUser = Array.from(inMemoryUsers.values()).find((u) => u.username === username);
+        }
+        if (existingUser) {
+            return res.status(409).json({ error: "Username is already registered" });
+        }
+        const hashedPassword = await bcrypt_1.default.hash(password, 12);
+        let newUser;
+        try {
+            newUser = await User_1.User.create({ username, password: hashedPassword, name: name || username, status: "active" });
+            await Watchlist_1.Watchlist.create({ user_id: newUser._id, symbols_json: [], column_prefs_json: {} });
+        }
+        catch (dbErr) {
+            console.warn("[Auth] MongoDB offline. Registering user in memory.");
+            const mockId = "mock-user-" + Date.now() + "-" + Math.random().toString(36).substring(2, 9);
+            newUser = { _id: mockId, username, password: hashedPassword, name: name || username, status: "active" };
+            inMemoryUsers.set(mockId, newUser);
+        }
+        const accessToken = (0, token_1.generateAccessToken)(newUser._id.toString());
+        const refreshToken = (0, token_1.generateRefreshToken)(newUser._id.toString());
+        res.cookie("refresh", refreshToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "strict",
+            maxAge: 7 * 24 * 60 * 60 * 1000,
+        });
+        return res.status(201).json({
+            message: "Account created successfully!",
+            accessToken,
+            user: { id: newUser._id, username: newUser.username, name: newUser.name || newUser.username },
+        });
+    }
+    catch (error) {
+        console.error("Registration Error:", error);
+        return res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+exports.register = register;
+// POST /auth/refresh
 const refresh = async (req, res) => {
     try {
         const refreshToken = getCookie(req, "refresh");
@@ -164,6 +168,19 @@ const refresh = async (req, res) => {
             return res.status(401).json({ error: "Refresh token not provided" });
         }
         const decoded = (0, token_1.verifyRefreshToken)(refreshToken);
+        // ── Env user refresh ───────────────────────────────────────────────────────
+        if (decoded.userId === ENV_USER_ID) {
+            const envUser = getEnvUser();
+            if (!envUser) {
+                return res.status(401).json({ error: "Session invalid." });
+            }
+            const newAccessToken = (0, token_1.generateAccessToken)(ENV_USER_ID);
+            return res.status(200).json({
+                accessToken: newAccessToken,
+                user: { id: ENV_USER_ID, username: envUser.username, name: envUser.name },
+            });
+        }
+        // ── Database user refresh ──────────────────────────────────────────────────
         let user = null;
         try {
             user = await User_1.User.findById(decoded.userId);
@@ -178,11 +195,7 @@ const refresh = async (req, res) => {
         const newAccessToken = (0, token_1.generateAccessToken)(user._id.toString());
         return res.status(200).json({
             accessToken: newAccessToken,
-            user: {
-                id: user._id,
-                username: user.username,
-                name: user.name || user.username,
-            },
+            user: { id: user._id, username: user.username, name: user.name || user.username },
         });
     }
     catch (error) {
@@ -191,7 +204,7 @@ const refresh = async (req, res) => {
     }
 };
 exports.refresh = refresh;
-// User Logout
+// POST /auth/logout
 const logout = async (req, res) => {
     try {
         const authHeader = req.headers.authorization;
@@ -221,7 +234,46 @@ const logout = async (req, res) => {
     }
 };
 exports.logout = logout;
-// POST /auth/module-login — standalone module credential validation (no app JWT required)
+// GET /auth/me
+const me = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        if (!userId) {
+            return res.status(401).json({ error: "Unauthorized" });
+        }
+        // ── Env user ───────────────────────────────────────────────────────────────
+        if (userId === ENV_USER_ID) {
+            const envUser = getEnvUser();
+            if (!envUser) {
+                return res.status(401).json({ error: "Session invalid." });
+            }
+            return res.status(200).json({
+                user: { id: ENV_USER_ID, username: envUser.username, name: envUser.name },
+            });
+        }
+        // ── Database user ──────────────────────────────────────────────────────────
+        let user = null;
+        try {
+            user = await User_1.User.findById(userId);
+        }
+        catch (dbErr) {
+            console.warn("[Auth] MongoDB offline. Finding user in-memory for me.");
+            user = inMemoryUsers.get(userId);
+        }
+        if (!user || user.status === "inactive") {
+            return res.status(404).json({ error: "User not found or inactive" });
+        }
+        return res.status(200).json({
+            user: { id: user._id, username: user.username, name: user.name || user.username },
+        });
+    }
+    catch (error) {
+        console.error("Get Me Error:", error);
+        return res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+exports.me = me;
+// POST /auth/module-login (legacy — kept for compatibility)
 const moduleLogin = async (req, res) => {
     try {
         const { moduleId, username, password } = req.body;
@@ -247,35 +299,3 @@ const moduleLogin = async (req, res) => {
     }
 };
 exports.moduleLogin = moduleLogin;
-// GET /api/auth/me
-const me = async (req, res) => {
-    try {
-        const userId = req.user?.id;
-        if (!userId) {
-            return res.status(401).json({ error: "Unauthorized" });
-        }
-        let user = null;
-        try {
-            user = await User_1.User.findById(userId);
-        }
-        catch (dbErr) {
-            console.warn("[Auth] MongoDB offline. Finding user in-memory for me.");
-            user = inMemoryUsers.get(userId);
-        }
-        if (!user || user.status === "inactive") {
-            return res.status(404).json({ error: "User not found or inactive" });
-        }
-        return res.status(200).json({
-            user: {
-                id: user._id,
-                username: user.username,
-                name: user.name || user.username,
-            },
-        });
-    }
-    catch (error) {
-        console.error("Get Me Error:", error);
-        return res.status(500).json({ error: "Internal Server Error" });
-    }
-};
-exports.me = me;

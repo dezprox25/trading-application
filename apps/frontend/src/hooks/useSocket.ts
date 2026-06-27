@@ -1,12 +1,12 @@
 import { useEffect, useRef } from "react";
 import { io, Socket } from "socket.io-client";
 import { useStore } from "../store/useStore";
+import { useDashStore } from "../modules/dashboard/store";
 import { Tick, Module2Cell, Module2StrikeState } from "@stock/shared";
 import type { Module1OiMetrics, Module1IndicatorState } from "../store/useStore";
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_URL || "";
 
-// Parses a room string "indicators:NIFTY-FUT:5m:classic" → { symbol, timeframe, method }
 function parseIndicatorRoom(room: string): { symbol: string; timeframe: string; method: string } | null {
   const parts = room.split(":");
   if (parts.length < 4) return null;
@@ -51,6 +51,11 @@ export const useSocket = () => {
 
     socket.on("connect", () => {
       console.log("[Socket] Connected — ID:", socket.id);
+      // Update dashboard status to live on successful (re)connect
+      const dash = useDashStore.getState();
+      if (dash.feedStatus === "reconnecting" || dash.feedStatus === "no-network") {
+        // Don't override — let broker_status event set the final state
+      }
 
       // Re-subscribe to all active rooms on reconnect
       socket.emit("join:symbol", selectedSymbol);
@@ -69,6 +74,13 @@ export const useSocket = () => {
 
     socket.on("disconnect", (reason) => {
       console.log("[Socket] Disconnected — reason:", reason);
+      // Only update to no-network for transport-level disconnects
+      if (reason === "transport close" || reason === "transport error") {
+        const dash = useDashStore.getState();
+        if (dash.feedStatus === "live") {
+          useDashStore.getState().setFeedStatus("no-network");
+        }
+      }
     });
 
     // Raw price ticks → price cache
@@ -76,12 +88,12 @@ export const useSocket = () => {
       updatePrice(tick.symbol, tick.ltp);
     });
 
-    // Module 1 OI matrix — broadcast to all clients on every tick, no room needed
+    // Module 1 OI matrix
     socket.on("latest-oi", (data: Module1OiMetrics) => {
       setOiMetrics(data);
     });
 
-    // Module 1 indicator state — per indicator room
+    // Module 1 indicator state
     socket.on("indicators", (data: Module1IndicatorState) => {
       setModule1IndicatorState(data);
     });
@@ -99,13 +111,37 @@ export const useSocket = () => {
       }
     );
 
+    // Broker connection status from backend
+    socket.on("broker_status", (data: { status: string; detail?: string }) => {
+      console.log("[Socket] broker_status:", data.status, data.detail || "");
+      const dash = useDashStore.getState();
+      if (!dash.isGenerated) return; // dashboard not active, nothing to update
+
+      switch (data.status) {
+        case "live":
+          if (dash.feedStatus === "reconnecting" || dash.feedStatus === "broker-disconnected") {
+            dash.setFeedStatus("live");
+          }
+          break;
+        case "reconnecting":
+          dash.setFeedStatus("reconnecting");
+          break;
+        case "broker-disconnected":
+          dash.setFeedStatus("broker-disconnected");
+          break;
+        case "session-expired":
+          dash.setFeedStatus("session-expired");
+          break;
+      }
+    });
+
     return () => {
       socket.disconnect();
       socketRef.current = null;
     };
   }, [accessToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Join / leave the selected instrument tick room ─────────────────────────
+  // ── Join / leave selected instrument tick room ─────────────────────────────
   useEffect(() => {
     const socket = socketRef.current;
     if (!socket || !socket.connected) return;

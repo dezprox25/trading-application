@@ -97,9 +97,8 @@ const resolveZebuSessionToken = async () => {
             };
             const dataString = `jData=${JSON.stringify(payload)}`;
             const response = await axios_1.default.post(loginUrl, dataString, {
-                headers: {
-                    "Content-Type": "application/x-www-form-urlencoded"
-                }
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                timeout: 15000,
             });
             if (response.data && response.data.stat === "Ok" && response.data.susertoken) {
                 console.log("[ZebuAuth] QuickAuth login successful.");

@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useDashStore } from "./store";
 import {
   fetchExchanges, fetchInstruments, fetchSymbols, fetchStrikes,
-} from "../../data/mock";
+} from "../../data/liveApi";
 
 // ── Styled select ─────────────────────────────────────────────────────────────
 
