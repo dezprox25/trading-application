@@ -61,6 +61,10 @@ interface AppState {
   setModule1Status: (status: "idle" | "authenticating" | "authenticated" | "error", error?: string | null) => void;
   setModule2Status: (status: "idle" | "authenticating" | "authenticated" | "error", error?: string | null) => void;
 
+  // Module 2 live broker connection state (set by broker_status socket events)
+  module2BrokerStatus: "live" | "broker-disconnected" | "session-expired" | "reconnecting" | null;
+  setModule2BrokerStatus: (status: "live" | "broker-disconnected" | "session-expired" | "reconnecting" | null) => void;
+
   // Watchlist & Column Preferences State
   watchlist: string[];
   columnPrefs: Record<string, boolean>;
@@ -138,6 +142,9 @@ export const useStore = create<AppState>((set) => ({
   module2Error: null,
   setModule1Status: (status, error = null) => set({ module1Status: status, module1Error: error }),
   setModule2Status: (status, error = null) => set({ module2Status: status, module2Error: error }),
+
+  module2BrokerStatus: null,
+  setModule2BrokerStatus: (status) => set({ module2BrokerStatus: status }),
 
   // Watchlist State
   watchlist: ["NIFTY-SPOT", "NIFTY-FUT"],

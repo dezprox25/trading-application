@@ -24,12 +24,28 @@ export interface FibLevel {
   value: number;
 }
 
+// Snapshot of the OI matrix at the moment a row is assembled.
+// Matches the Module1OiMetrics shape from module1OiService / useStore,
+// kept here as a plain interface so calc/ stays framework-free.
+export interface OiSnapshot {
+  tin: number;
+  c_tl: number; c_mn: number; c_hig: number; c_low: number;
+  c_buy: number; c_sell: number;
+  f_buy: number; f_sell: number;
+  p_tl: number; p_mn: number; p_hig: number; p_low: number;
+  p_buy: number; p_sell: number;
+  callSignal: string;
+  putSignal: string;
+  dataSource: string;
+}
+
 export interface DashboardRow {
   t: number;
   call: OHLCBar;
   put: OHLCBar;
   futureLtp: number;
   spotLtp: number;
+  premiumDiscount: number;
   callPP: number;
   putPP: number;
   callPPClassic: number;
@@ -38,6 +54,7 @@ export interface DashboardRow {
   callTLA: number;
   putMMA: number;
   putTLA: number;
+  oiMatrix: OiSnapshot | null;
   smc: string;
   fib: string;
   rsi: number | null;

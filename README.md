@@ -10,6 +10,7 @@ The application has solid architectural bones: clean separation of concerns, pro
 
 ---
 
+
 ## Production Readiness Scores
 
 | Category | Score | Notes |

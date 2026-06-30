@@ -21,8 +21,8 @@ const ZEBU_KEYS = [
 const AETRAM_KEYS = [
   "MOD2_API_KEY",
   "MOD2_API_SECRET",
+  "AETRAM_MARKETDATA_API_BASE_URL",
   "AETRAM_MARKETDATA_AUTH_URL",
-  "AETRAM_INTERACTIVE_API_BASE_URL",
 ];
 
 const INSECURE_DEFAULTS = [
@@ -125,6 +125,39 @@ export const runStartupCheck = (): void => {
   } else {
     warnings.push(`Zebu Module 1 incomplete — missing: ${zebuMissing.join(", ")}`);
     console.warn(`[Startup] Zebu broker (Module 1)  ⚠  (missing: ${zebuMissing.join(", ")})`);
+  }
+
+  // ── Zebu token expiry check ───────────────────────────────────────────────
+  // Parse DDMONYY embedded in symbols like NIFTY23JUN26C22000 and warn if expired.
+  // This only checks .env fallback tokens — runtime tokens are refreshed at login.
+  const MON_MAP: Record<string, number> = {
+    JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11,
+  };
+  const extractExpiry = (tokenEnv: string | undefined): Date | null => {
+    if (!tokenEnv) return null;
+    const m = tokenEnv.match(/([A-Z]+)(\d{2}[A-Z]{3}\d{2})[CP]/);
+    if (!m) return null;
+    const raw = m[2]; // e.g. "23JUN26"
+    const day = parseInt(raw.slice(0, 2), 10);
+    const mon = MON_MAP[raw.slice(2, 5)];
+    const yr  = 2000 + parseInt(raw.slice(5, 7), 10);
+    if (isNaN(day) || mon === undefined || isNaN(yr)) return null;
+    return new Date(Date.UTC(yr, mon, day, 10, 0, 0)); // 15:30 IST = 10:00 UTC
+  };
+
+  const today = new Date();
+  const ceExpiry = extractExpiry(process.env.ZEBU_NIFTY_CE_TOKENS);
+  const peExpiry = extractExpiry(process.env.ZEBU_NIFTY_PE_TOKENS);
+
+  if (ceExpiry && ceExpiry < today) {
+    const label = ceExpiry.toISOString().slice(0, 10);
+    warnings.push(`ZEBU_NIFTY_CE_TOKENS fallback expiry ${label} is in the past — auto-refresh at login will override this`);
+    console.warn(`[Startup] Zebu CE tokens  ⚠  (fallback expiry ${label} EXPIRED — will auto-refresh at login)`);
+  }
+  if (peExpiry && peExpiry < today) {
+    const label = peExpiry.toISOString().slice(0, 10);
+    warnings.push(`ZEBU_NIFTY_PE_TOKENS fallback expiry ${label} is in the past — auto-refresh at login will override this`);
+    console.warn(`[Startup] Zebu PE tokens  ⚠  (fallback expiry ${label} EXPIRED — will auto-refresh at login)`);
   }
 
   // ── Aetram broker (Module 2) ──────────────────────────────────────────────

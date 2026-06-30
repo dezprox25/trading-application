@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
-import type { DashboardRow } from "../../calc";
+import type { DashboardRow, OHLCBar } from "../../calc";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type Group = "date" | "call" | "put" | "market" | "rating" | "mma-call" | "mma-put" | "tla-call" | "tla-put" | "analysis";
+type Group = "date" | "call" | "put" | "flat";
 type Align = "left" | "right" | "center";
 type PivotMethod = "client" | "classic";
 
@@ -24,56 +24,118 @@ interface WorksheetProps {
   hiddenCols: string[];
   feedStatus: "idle" | "live" | "interrupted";
   isLoading: boolean;
+  type: "Call" | "Put" | "Call+Put";
 }
+
+// Columns to suppress for each type selection
+const TYPE_HIDDEN: Record<string, string[]> = {
+  "Call":     ["pe-o", "pe-h", "pe-l", "pe-c", "put-pp", "mma-p", "tla-p"],
+  "Put":      ["ce-o", "ce-h", "ce-l", "ce-c", "call-pp", "mma-c", "tla-c"],
+  "Call+Put": [],
+};
 
 // ── Column definitions ────────────────────────────────────────────────────────
 
 const ALL_COLS: ColSpec[] = [
-  { id: "date",    sub: "Date",    group: "date",     defaultW: 72,  frozen: true,  align: "center" },
-  { id: "time",    sub: "Time",    group: "date",     defaultW: 60,  frozen: true,  align: "center" },
-  { id: "ce-o",    sub: "Open",    group: "call",     defaultW: 80 },
-  { id: "ce-h",    sub: "High",    group: "call",     defaultW: 80 },
-  { id: "ce-l",    sub: "Low",     group: "call",     defaultW: 80 },
-  { id: "ce-c",    sub: "Close",   group: "call",     defaultW: 80 },
-  { id: "call-pp", sub: "Call PP", group: "call",     defaultW: 82 },
-  { id: "pe-o",    sub: "Open",    group: "put",      defaultW: 80 },
-  { id: "pe-h",    sub: "High",    group: "put",      defaultW: 80 },
-  { id: "pe-l",    sub: "Low",     group: "put",      defaultW: 80 },
-  { id: "pe-c",    sub: "Close",   group: "put",      defaultW: 80 },
-  { id: "put-pp",  sub: "Put PP",  group: "put",      defaultW: 82 },
-  { id: "future",  sub: "Future",  group: "market",   defaultW: 88 },
-  { id: "spot",    sub: "Spot",    group: "market",   defaultW: 88 },
-  { id: "rating",  sub: "Rating",  group: "rating",   defaultW: 90,  align: "center" },
-  { id: "mma-c",   sub: "Call",    group: "mma-call", defaultW: 80 },
-  { id: "mma-p",   sub: "Put",     group: "mma-put",  defaultW: 80 },
-  { id: "tla-c",   sub: "Call",    group: "tla-call", defaultW: 80 },
-  { id: "tla-p",   sub: "Put",     group: "tla-put",  defaultW: 80 },
-  { id: "smc",     sub: "SMC",     group: "analysis", defaultW: 120, align: "left"  },
-  { id: "fib",     sub: "Fib",     group: "analysis", defaultW: 110, align: "left"  },
-  { id: "rsi",     sub: "RSI(14)", group: "analysis", defaultW: 70 },
+  { id: "date",    sub: "Date",     group: "date", defaultW: 72,  frozen: true, align: "center" },
+  { id: "time",    sub: "Time",     group: "date", defaultW: 60,  frozen: true, align: "center" },
+  { id: "ce-o",    sub: "Open",     group: "call", defaultW: 80 },
+  { id: "ce-h",    sub: "High",     group: "call", defaultW: 80 },
+  { id: "ce-l",    sub: "Low",      group: "call", defaultW: 80 },
+  { id: "ce-c",    sub: "Close",    group: "call", defaultW: 80 },
+  { id: "call-pp", sub: "Call PP",  group: "call", defaultW: 82 },
+  { id: "pe-o",    sub: "Open",     group: "put",  defaultW: 80 },
+  { id: "pe-h",    sub: "High",     group: "put",  defaultW: 80 },
+  { id: "pe-l",    sub: "Low",      group: "put",  defaultW: 80 },
+  { id: "pe-c",    sub: "Close",    group: "put",  defaultW: 80 },
+  { id: "put-pp",  sub: "Put PP",   group: "put",  defaultW: 82 },
+  { id: "future",  sub: "Future",   group: "flat", defaultW: 88 },
+  { id: "spot",    sub: "Spot",     group: "flat", defaultW: 88 },
+  { id: "rating",  sub: "Rating",   group: "flat", defaultW: 90,  align: "center" },
+  { id: "mma-c",   sub: "MMA Call", group: "flat", defaultW: 88 },
+  { id: "mma-p",   sub: "MMA Put",  group: "flat", defaultW: 88 },
+  { id: "tla-c",   sub: "TLA Call", group: "flat", defaultW: 88 },
+  { id: "tla-p",   sub: "TLA Put",  group: "flat", defaultW: 88 },
+  { id: "smc",     sub: "SMC",      group: "flat", defaultW: 120, align: "left" },
+  { id: "fib",     sub: "Fib",      group: "flat", defaultW: 110, align: "left" },
+  { id: "rsi",     sub: "RSI(14)",  group: "flat", defaultW: 70 },
 ];
 
 // ── Group header definitions ──────────────────────────────────────────────────
 
+// Only "Call (CE)" and "Put (PE)" get banners; every other column is flat (empty label, span 1).
 const GROUP_DEFS: { label: string; ids: string[] }[] = [
-  { label: "",           ids: ["date","time"] },
-  { label: "Call (CE)",  ids: ["ce-o","ce-h","ce-l","ce-c","call-pp"] },
-  { label: "Put (PE)",   ids: ["pe-o","pe-h","pe-l","pe-c","put-pp"] },
-  { label: "Market",     ids: ["future","spot"] },
-  { label: "Signal",     ids: ["rating"] },
-  { label: "MMA",        ids: ["mma-c","mma-p"] },
-  { label: "TLA",        ids: ["tla-c","tla-p"] },
-  { label: "Analysis",   ids: ["smc","fib","rsi"] },
+  { label: "",          ids: ["date","time"] },
+  { label: "Call (CE)", ids: ["ce-o","ce-h","ce-l","ce-c","call-pp"] },
+  { label: "Put (PE)",  ids: ["pe-o","pe-h","pe-l","pe-c","put-pp"] },
+  { label: "",          ids: ["future"] },
+  { label: "",          ids: ["spot"] },
+  { label: "",          ids: ["rating"] },
+  { label: "",          ids: ["mma-c"] },
+  { label: "",          ids: ["mma-p"] },
+  { label: "",          ids: ["tla-c"] },
+  { label: "",          ids: ["tla-p"] },
+  { label: "",          ids: ["smc"] },
+  { label: "",          ids: ["fib"] },
+  { label: "",          ids: ["rsi"] },
 ];
 
-// ── Per-column cell style (plain white / black) ───────────────────────────────
+// ── OHLC conditional coloring ─────────────────────────────────────────────────
+// Priority: High > Low > Close==High > Close==Low > Open==High > Open==Low
+//           > Bullish close > Bearish close > Default
 
-function cellStyle(_colId: string): { bg: string; textColor: string; bold?: boolean } {
-  return { bg: "#FFFFFF", textColor: "#000000" };
+type CellColor = { bg: string; textColor: string };
+
+const C_HIGH: CellColor      = { bg: "#22C55E", textColor: "#FFFFFF" }; // green
+const C_LOW: CellColor       = { bg: "#EF4444", textColor: "#FFFFFF" }; // red
+const C_OPEN: CellColor      = { bg: "#3B82F6", textColor: "#FFFFFF" }; // blue
+const C_BULL: CellColor      = { bg: "#DCFCE7", textColor: "#000000" }; // light green
+const C_BEAR: CellColor      = { bg: "#FCA5A5", textColor: "#FFFFFF" }; // light red
+const C_CALL_TINT: CellColor = { bg: "#EFF6FF", textColor: "#1E40AF" }; // blue tint — Call PP, MMA Call, TLA Call
+const C_PUT_TINT: CellColor  = { bg: "#FFFBEB", textColor: "#92400E" }; // amber tint — Put PP, MMA Put, TLA Put
+const C_DEFAULT: CellColor   = { bg: "#FFFFFF", textColor: "#000000" };
+
+function ohlcColor(role: "o" | "h" | "l" | "c", bar: OHLCBar): CellColor {
+  const { o, h, l, c } = bar;
+  switch (role) {
+    case "h": return C_HIGH;
+    case "l": return C_LOW;
+    case "c":
+      if (c === h) return C_HIGH;
+      if (c === l) return C_LOW;
+      if (c > o)   return C_BULL;
+      if (c < o)   return C_BEAR;
+      return C_DEFAULT; // doji
+    case "o":
+      if (o === h) return C_HIGH;
+      if (o === l) return C_LOW;
+      return C_OPEN;
+  }
 }
 
-function ratingStyle(_label: string): { bg: string; textColor: string } {
-  return { bg: "#FFFFFF", textColor: "#000000" };
+function getCellStyle(colId: string, row: DashboardRow): CellColor {
+  switch (colId) {
+    // Call OHLC — conditional colour scale
+    case "ce-o": return ohlcColor("o", row.call);
+    case "ce-h": return ohlcColor("h", row.call);
+    case "ce-l": return ohlcColor("l", row.call);
+    case "ce-c": return ohlcColor("c", row.call);
+    // Put OHLC — conditional colour scale
+    case "pe-o": return ohlcColor("o", row.put);
+    case "pe-h": return ohlcColor("h", row.put);
+    case "pe-l": return ohlcColor("l", row.put);
+    case "pe-c": return ohlcColor("c", row.put);
+    // Call-side derived values — blue tint
+    case "call-pp":
+    case "mma-c":
+    case "tla-c":  return C_CALL_TINT;
+    // Put-side derived values — amber tint
+    case "put-pp":
+    case "mma-p":
+    case "tla-p":  return C_PUT_TINT;
+    // Everything else — neutral white
+    default:       return C_DEFAULT;
+  }
 }
 
 // ── Formatting ────────────────────────────────────────────────────────────────
@@ -81,11 +143,12 @@ function ratingStyle(_label: string): { bg: string; textColor: string } {
 const p0 = (n: number | null | undefined): string =>
   n == null || !Number.isFinite(n) ? "—" : Math.floor(n).toLocaleString("en-IN");
 
-const fmtDate = (ms: number) => new Date(ms).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
-const fmtTime = (ms: number) => {
-  const d = new Date(ms);
-  return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
-};
+const fmtDate = (ms: number) => new Date(ms).toLocaleDateString("en-IN", {
+  day: "2-digit", month: "short", timeZone: "Asia/Kolkata",
+});
+const fmtTime = (ms: number) => new Date(ms).toLocaleTimeString("en-IN", {
+  hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Kolkata",
+});
 
 // ── Get raw text value per cell (for TSV copy) ────────────────────────────────
 
@@ -110,14 +173,14 @@ function getCellValue(row: DashboardRow, colId: string, pm: PivotMethod): string
     case "future":  return p0(row.futureLtp);
     case "spot":    return p0(row.spotLtp);
     case "rating":  return row.rating.label;
-    case "mma-c":   return p0(row.callMMA);
-    case "mma-p":   return p0(row.putMMA);
-    case "tla-c":   return p0(row.callTLA);
-    case "tla-p":   return p0(row.putTLA);
-    case "smc":     return row.smc;
-    case "fib":     return row.fib;
-    case "rsi":     return p0(row.rsi);
-    default:        return "—";
+    case "mma-c":     return p0(row.callMMA);
+    case "mma-p":     return p0(row.putMMA);
+    case "tla-c":     return p0(row.callTLA);
+    case "tla-p":     return p0(row.putTLA);
+    case "smc":       return row.smc;
+    case "fib":       return row.fib;
+    case "rsi":       return p0(row.rsi);
+    default:          return "—";
   }
 }
 
@@ -134,8 +197,9 @@ const SHIMMER_STYLE: React.CSSProperties = {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function Worksheet({ rows, pivotMethod, hiddenCols, feedStatus, isLoading }: WorksheetProps) {
-  const cols = ALL_COLS.filter(c => !hiddenCols.includes(c.id));
+export function Worksheet({ rows, pivotMethod, hiddenCols, feedStatus, isLoading, type }: WorksheetProps) {
+  const typeHidden = TYPE_HIDDEN[type] ?? [];
+  const cols = ALL_COLS.filter(c => !hiddenCols.includes(c.id) && !typeHidden.includes(c.id));
 
   const initWidths = (): Record<string, number> => {
     const w: Record<string, number> = {};
@@ -260,14 +324,11 @@ export function Worksheet({ rows, pivotMethod, hiddenCols, feedStatus, isLoading
           <tbody>
             {Array.from({ length: 5 }).map((_, ri) => (
               <tr key={ri}>
-                {cols.map(c => {
-                  const cs = cellStyle(c.id);
-                  return (
-                    <td key={c.id} style={{ ...tdBase, background: cs.bg }}>
-                      <span style={SHIMMER_STYLE} />
-                    </td>
-                  );
-                })}
+                {cols.map(c => (
+                  <td key={c.id} style={{ ...tdBase, background: "#FFFFFF" }}>
+                    <span style={SHIMMER_STYLE} />
+                  </td>
+                ))}
               </tr>
             ))}
           </tbody>
@@ -387,11 +448,7 @@ export function Worksheet({ rows, pivotMethod, hiddenCols, feedStatus, isLoading
                       && ri >= selRange.r1 && ri <= selRange.r2
                       && ci >= selRange.c1 && ci <= selRange.c2;
 
-                    // Cell style: rating is dynamic, all others are per-column
-                    const cs = c.id === "rating"
-                      ? ratingStyle(row.rating.label)
-                      : cellStyle(c.id);
-
+                    const cs = getCellStyle(c.id, row);
                     const textColor = cs.textColor;
 
                     // Cell value
@@ -410,7 +467,7 @@ export function Worksheet({ rows, pivotMethod, hiddenCols, feedStatus, isLoading
                           outlineOffset: "-1px",
                           textAlign: (c.align ?? "center") as "left" | "right" | "center",
                           color: textColor,
-                          fontWeight: (cs as { bold?: boolean }).bold ? 700 : 400,
+                          fontWeight: 400,
                           position: isFrozen ? "sticky" : "relative",
                           left:   isFrozen ? frozenLeft(c.id) : undefined,
                           zIndex: isFrozen ? 2 : undefined,
@@ -444,7 +501,7 @@ export function Worksheet({ rows, pivotMethod, hiddenCols, feedStatus, isLoading
         display: "flex", justifyContent: "space-between",
         fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
       }}>
-        <span>{rows.length} bar{rows.length !== 1 ? "s" : ""} · Max 15 · Select range + Ctrl/Cmd-C to copy as TSV</span>
+        <span>{rows.length} bar{rows.length !== 1 ? "s" : ""} · Select range + Ctrl/Cmd-C to copy as TSV</span>
         <span>Client PP=(O+H+L+C)/4 · Classic PP=(H+L+C)/3 · MMA=2PP−H · TLA=2PP−L · RSI Wilder(14)</span>
       </div>
     </div>

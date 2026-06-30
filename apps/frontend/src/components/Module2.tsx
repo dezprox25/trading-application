@@ -3,6 +3,16 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useStore } from "../store/useStore";
 import { api } from "../utils/api";
 
+const formatExpiryLabel = (dateStr: string): string => {
+  try {
+    const d = new Date(dateStr + "T00:00:00");
+    const months = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+    return `${String(d.getDate()).padStart(2,"0")}-${months[d.getMonth()]}-${d.getFullYear()}`;
+  } catch {
+    return dateStr;
+  }
+};
+
 // ── ALL ORIGINAL LOGIC — UNTOUCHED ───────────────────────────────────────────
 
 const parseStrikeSymbol = (symbol: string) => {
@@ -141,11 +151,12 @@ function FilterChip({ label, active, onClick, color = GREEN }: { label: string; 
 export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
   const activeSession = useStore((s) => s.activeSession);
   const setActiveSession = useStore((s) => s.setActiveSession);
+  const module2BrokerStatus = useStore((s) => s.module2BrokerStatus);
   const [isConfigExpanded, setIsConfigExpanded] = useState(!isSplit);
 
 
   const [indexSymbol, setIndexSymbol] = useState("NIFTY50");
-  const [expiryDate, setExpiryDate] = useState("2026-06-04");
+  const [expiryDate, setExpiryDate] = useState("");
   const [sessionType, setSessionType] = useState<"CE" | "PE" | "mixed">("mixed");
   const [selectedStrikes, setSelectedStrikes] = useState<string[]>([]);
   const [sortOrder, setSortOrder] = useState<"high_value" | "low_value" | "default">("default");
@@ -155,6 +166,29 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
   const [callDownCollapsedToggle, setCallDownCollapsedToggle] = useState(false);
   const [filterType, setFilterType] = useState<"CE" | "PE" | "mixed">(isSplit ? "CE" : "mixed");
   const [isAdvancedFiltersExpanded, setIsAdvancedFiltersExpanded] = useState(false);
+
+  const { data: expiriesData } = useQuery({
+    queryKey: ["module2-expiries", indexSymbol],
+    queryFn: () => api.get(`/api/module2/expiries?symbol=${indexSymbol}`),
+    staleTime: 60 * 60 * 1000,
+    retry: 1,
+  });
+
+  const expiryOptions: { value: string; label: string }[] = (expiriesData?.expiries || []).map(
+    (date: string) => ({ value: date, label: formatExpiryLabel(date) })
+  );
+
+  // Set default expiry to first available when list loads
+  useEffect(() => {
+    if (expiriesData?.expiries?.length > 0 && !expiryDate) {
+      setExpiryDate(expiriesData.expiries[0]);
+    }
+  }, [expiriesData, expiryDate]);
+
+  // Reset expiry selection when index changes
+  useEffect(() => {
+    setExpiryDate("");
+  }, [indexSymbol]);
 
   const { data: chainData } = useQuery({
     queryKey: ["option-chain", indexSymbol],
@@ -405,6 +439,26 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
 
               <>
 
+              {/* Broker status banner */}
+              {module2BrokerStatus === "session-expired" && (
+                <div className="m2-section" style={{ background: "rgba(239,68,68,0.08)", border: "1.5px solid rgba(239,68,68,0.3)", borderRadius: 10, padding: "12px 18px", display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 16 }}>⚠</span>
+                  <div>
+                    <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 700, color: "#dc2626" }}>Broker Session Expired</div>
+                    <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: "#dc2626", opacity: 0.8, marginTop: 2 }}>Please reconnect from the Module 2 login page.</div>
+                  </div>
+                </div>
+              )}
+
+              {(module2BrokerStatus === "broker-disconnected" || module2BrokerStatus === "reconnecting") && (
+                <div className="m2-section animate-pulse" style={{ background: "rgba(217,119,6,0.08)", border: "1.5px solid rgba(217,119,6,0.3)", borderRadius: 10, padding: "12px 18px", display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 16 }}>↻</span>
+                  <div>
+                    <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 700, color: "#d97706" }}>Disconnected</div>
+                    <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: "#d97706", opacity: 0.8, marginTop: 2 }}>Attempting to reconnect to broker…</div>
+                  </div>
+                </div>
+              )}
 
               {/* Configuration */}
               {isConfigExpanded ? (
@@ -443,12 +497,14 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
                       ]}
                     />
                     <SelectField
-                      label="Options Expiry" value={expiryDate} onChange={setExpiryDate}
-                      options={[
-                        { value: "2026-06-04", label: "04-JUN-2026 (Weekly)" },
-                        { value: "2026-06-11", label: "11-JUN-2026 (Weekly)" },
-                        { value: "2026-06-25", label: "25-JUN-2026 (Monthly)" },
-                      ]}
+                      label="Options Expiry"
+                      value={expiryDate}
+                      onChange={setExpiryDate}
+                      options={
+                        expiryOptions.length > 0
+                          ? expiryOptions
+                          : [{ value: "", label: "Loading expiries…" }]
+                      }
                     />
                     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                       <label style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 600, color: "var(--trading-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>

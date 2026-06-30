@@ -5,7 +5,6 @@ import { ConfigRow } from "./ConfigRow";
 import { TimeframeRow } from "./TimeframeRow";
 import { Worksheet } from "./Worksheet";
 import { useStore } from "../../store/useStore";
-import type { OiSignal } from "../../store/useStore";
 import { api } from "../../utils/api";
 import type { OHLCBar, DashboardRow } from "../../calc";
 import {
@@ -21,15 +20,11 @@ function tfToMs(tf: string): number {
   return 5 * 60 * 1000;
 }
 
-function oiSignalToVote(signal: OiSignal): number {
-  switch (signal) {
-    case "STRONG_BULL":  return  1.0;
-    case "MILD_BULL":    return  0.4;
-    case "NEUTRAL":      return  0.0;
-    case "MILD_BEAR":    return -0.4;
-    case "STRONG_BEAR":  return -1.0;
-    case "DIVERGENCE":   return  0.0;
-  }
+function ratingVotes(rsi: number | null, price: number, pp: number, cMMA: number, cTLA: number): number[] {
+  const rsiVote  = rsi !== null ? (rsi < 30 ? 1 : rsi > 70 ? -1 : 0) : 0;
+  const ppVote   = price > pp   ? 1 : price < pp   ? -1 : 0;
+  const mtVote   = price > cMMA ? 1 : price < cTLA ? -1 : 0;
+  return [rsiVote, ppVote, mtVote];
 }
 
 // Normalise a backend OHLC record to the internal OHLCBar shape.
@@ -167,26 +162,11 @@ function StatusPanel({ status, onRetry }: { status: string; onRetry?: () => void
 // ── InfoBar ───────────────────────────────────────────────────────────────────
 
 function InfoBar() {
-  const { spotLtp, futureLtp, spotDir, futureDir, pivotMethod, setPivotMethod } = useDashStore();
+  const { pivotMethod, setPivotMethod } = useDashStore();
 
-  const p2 = (n: number | null) =>
-    n == null ? "—" : n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-  const DirArrow = ({ dir }: { dir: "up" | "down" | null }) =>
-    dir === "up"   ? <span style={{ color: "#4ade80", marginLeft: 2 }}>▲</span> :
-    dir === "down" ? <span style={{ color: "#f87171", marginLeft: 2 }}>▼</span> : null;
-
-  const tickerStyle: React.CSSProperties = {
-    display: "flex", alignItems: "center", gap: 4,
-    padding: "0 14px", borderLeft: "1px solid rgba(255,255,255,0.1)",
-    fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
-  };
   const labelStyle: React.CSSProperties = {
     fontSize: 9, fontWeight: 700, color: "rgba(255,255,255,0.5)",
     textTransform: "uppercase", letterSpacing: "0.1em",
-  };
-  const valueStyle: React.CSSProperties = {
-    fontSize: 13, fontWeight: 700, color: "#f1f5f9",
   };
 
   return (
@@ -204,18 +184,6 @@ function InfoBar() {
         letterSpacing: "0.04em", whiteSpace: "nowrap",
       }}>
         ◆ SYNERGY <span style={{ opacity: 0.4 }}>·</span> Trading Dashboard
-      </div>
-
-      <div style={tickerStyle}>
-        <span style={labelStyle}>SPOT</span>
-        <span style={valueStyle}>{p2(spotLtp)}</span>
-        <DirArrow dir={spotDir} />
-      </div>
-
-      <div style={tickerStyle}>
-        <span style={labelStyle}>FUT</span>
-        <span style={valueStyle}>{p2(futureLtp)}</span>
-        <DirArrow dir={futureDir} />
       </div>
 
       <div style={{ flex: 1 }} />
@@ -257,6 +225,7 @@ export function Dashboard() {
     setFeedStatus, feedStatus,
     setLivePrices,
     pivotMethod, hiddenCols,
+    generateKey, type,
   } = useDashStore();
 
   const [isLoading, setIsLoading] = useState(false);
@@ -266,6 +235,7 @@ export function Dashboard() {
   const prevRsiCloses = useRef<number[]>([]);
   const swHighRef     = useRef<number>(0);
   const swLowRef      = useRef<number>(Infinity);
+  const prevOiTin     = useRef<number>(-1);   // tracks OI tick index to detect stale snapshots
 
   // Effect 1: fetch history and set feed status whenever config changes
   useEffect(() => {
@@ -286,8 +256,9 @@ export function Dashboard() {
     }
 
     let cancelled = false;
-    barRef.current = null;
+    barRef.current    = null;
     prevRsiCloses.current = [];
+    prevOiTin.current = -1;
 
     async function init() {
       clearRows();
@@ -338,19 +309,52 @@ export function Dashboard() {
           // OHLC history unavailable — proceed with live-only feed
         }
 
+        // 3b. For live mode, discard any bars that pre-date the current NSE session
+        // (09:15 IST = 03:45 UTC). This is a client-side safety net against stale
+        // backend data leaking through during edge cases (e.g. missed server-side pruning).
+        if (timeframe !== "custom" && bars.length > 0) {
+          const nowMs = Date.now();
+          const todayMidnightMs = nowMs - (nowMs % (24 * 60 * 60 * 1000));
+          const sessionOpenMs = todayMidnightMs + (3 * 60 + 45) * 60 * 1000;
+          const cutoffMs = nowMs < sessionOpenMs ? sessionOpenMs - 24 * 60 * 60 * 1000 : sessionOpenMs;
+          bars = bars.filter(b => b.t >= cutoffMs);
+        }
+
         if (cancelled) return;
 
-        // 4. Build and append historical rows
-        if (bars.length > 0) {
-          const closes  = bars.map(b => b.c);
+        // 4. Build and append historical rows.
+        //
+        // KEY INVARIANTS enforced here:
+        //   a) Closed bars only — the current live window is owned entirely by Effect 2
+        //      (the OI poller). Including an in-progress bar here would mix futures-price
+        //      scale (~22 000) with OI scale (~100 M) in the same row when Effect 2's
+        //      first Math.max() runs, producing garbage OHLC values.
+        //   b) call / put use independent clones of bar — they must be separate objects
+        //      so CE and PE columns can diverge once the live OI feed takes over.
+        //   c) swHighRef / swLowRef are seeded from the full session cumulative range,
+        //      not just the last bar, so SMC and Fib labels are correct from the start.
+
+        // Determine the live window boundary so we can exclude it from historical display.
+        const nowForBoundary  = Date.now();
+        const activeTfMs      = tfToMs(timeframe === "custom" ? (customRange?.candleTf ?? "5m") : timeframe);
+        const liveWindowStart = Math.floor(nowForBoundary / activeTfMs) * activeTfMs;
+
+        // Only show CLOSED bars in the historical table. Current-window bar (if the backend
+        // included the active candle) is excluded — Effect 2 will create it from OI data.
+        const closedBars = timeframe === "custom"
+          ? bars                                          // custom range: show everything
+          : bars.filter(b => b.t < liveWindowStart);     // live mode: closed bars only
+
+        if (closedBars.length > 0) {
+          const closes    = closedBars.map(b => b.c);
           const rsiSeries = computeRsiSeries(closes);
 
-          let sessionHigh = bars[0].h;
-          let sessionLow  = bars[0].l;
-          let prevH = bars[0].h;
-          let prevL = bars[0].l;
+          let sessionHigh = closedBars[0].h;
+          let sessionLow  = closedBars[0].l;
+          let prevH = closedBars[0].h;
+          let prevL = closedBars[0].l;
 
-          bars.forEach((bar, i) => {
+          closedBars.forEach((bar, i) => {
             if (i > 0) {
               sessionHigh = Math.max(sessionHigh, bar.h);
               sessionLow  = Math.min(sessionLow,  bar.l);
@@ -359,26 +363,37 @@ export function Dashboard() {
             const pdh = i === 0 ? bar.h : prevH;
             const pdl = i === 0 ? bar.l : prevL;
 
-            const callPP = clientPivot4Bar(bar).pp;
-            const putPP  = clientPivot4Bar(bar).pp;
+            const callPP   = clientPivot4Bar(bar).pp;
+            const putPP    = clientPivot4Bar(bar).pp;
+            const hCallMMA = mma(callPP, bar.h);
+            const hCallTLA = tla(callPP, bar.l);
+            const hRsi     = rsiSeries[i] ?? null;
+
+            // Bug fix: clone bar independently for call and put.
+            // Sharing the same object reference made CE and PE columns always
+            // show identical values and created a silent mutation hazard.
+            const callBar: OHLCBar = { ...bar };
+            const putBar:  OHLCBar = { ...bar };
 
             const row: DashboardRow = {
               t: bar.t,
-              call: bar,
-              put:  bar,
+              call: callBar,
+              put:  putBar,
               futureLtp: bar.c,
               spotLtp:   bar.c,
+              premiumDiscount: 0,
               callPP, putPP,
               callPPClassic: classicPivot(bar).pp,
               putPPClassic:  classicPivot(bar).pp,
-              callMMA: mma(callPP, bar.h),
-              callTLA: tla(callPP, bar.l),
+              callMMA: hCallMMA,
+              callTLA: hCallTLA,
               putMMA:  mma(putPP,  bar.h),
               putTLA:  tla(putPP,  bar.l),
+              oiMatrix: null,
               smc: smcNearest(bar.c, sessionHigh, sessionLow, pdh, pdl),
               fib: nearestFibLabel(bar.c, sessionHigh, sessionLow) ?? "—",
-              rsi: rsiSeries[i] ?? null,
-              rating: aggregateRating([]),
+              rsi: hRsi,
+              rating: aggregateRating(ratingVotes(hRsi, bar.c, callPP, hCallMMA, hCallTLA)),
             };
             appendRow(row);
 
@@ -387,27 +402,25 @@ export function Dashboard() {
           });
 
           prevRsiCloses.current = closes.slice(-50);
-          swHighRef.current = bars[bars.length - 1].h;
-          swLowRef.current  = bars[bars.length - 1].l;
 
-          // Seed InfoBar live prices from last historical close
-          const last = bars[bars.length - 1];
+          // Bug fix: seed from full session cumulative high/low, not just the last bar.
+          // Using only last bar's range produced wrong SMC and Fib labels for all live rows.
+          swHighRef.current = sessionHigh;
+          swLowRef.current  = sessionLow;
+
+          const last = closedBars[closedBars.length - 1];
           setLivePrices(last.c, last.c);
 
-          // Prime barRef with the current window if the last historical bar is still active.
-          // This prevents the live OI poller from appending a duplicate row for the same window.
-          const now         = Date.now();
-          const activeTf    = timeframe === "custom" ? (customRange?.candleTf ?? "5m") : timeframe;
-          const tfMs        = tfToMs(activeTf);
-          const windowStart = Math.floor(now / tfMs) * tfMs;
-          if (last.t === windowStart) {
-            barRef.current = {
-              callO: last.o, callH: last.h, callL: last.l, callC: last.c,
-              putO:  last.o, putH:  last.h, putL:  last.l, putC:  last.c,
-              windowStart,
-            };
-          }
+          console.log(
+            `[Dashboard] History loaded: ${closedBars.length} closed bars | ` +
+            `sessionHigh=${sessionHigh} sessionLow=${sessionLow} | last bar t=${last.t}`
+          );
         }
+
+        // barRef.current intentionally NOT seeded from history.
+        // Effect 2 will initialize the current live window from OI data on its next tick.
+        // Seeding from futures prices (~22 000) caused scale corruption when the first
+        // OI update applied Math.max(22 000, 100 000 000) to determine the candle High.
 
         setIsLoading(false);
         setFeedStatus("live");
@@ -428,7 +441,7 @@ export function Dashboard() {
     init();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isGenerated, symbol, timeframe, customRange, retryKey]);
+  }, [isGenerated, symbol, timeframe, customRange, retryKey, generateKey]);
 
   // Effect 2: 500ms live OI polling — builds and updates the active bar.
   // Skipped entirely in custom historical mode (no live stream needed).
@@ -450,6 +463,15 @@ export function Dashboard() {
       const futLtp  = prices["NIFTY-FUT"]?.ltp;
       const spotLtp = prices["NIFTY-SPOT"]?.ltp;
 
+      // Debug: log whenever OI tick index advances (confirms live data is flowing)
+      if (oi.tin !== prevOiTin.current) {
+        console.log(
+          `[Dashboard] OI tick — tin=${oi.tin} c_tl=${oi.c_tl} p_tl=${oi.p_tl} ` +
+          `src=${oi.dataSource} window=${new Date(windowStart).toISOString()}`
+        );
+        prevOiTin.current = oi.tin;
+      }
+
       if (!barRef.current || barRef.current.windowStart !== windowStart) {
         // New window — archive previous bar's close to RSI history
         if (barRef.current) {
@@ -458,36 +480,50 @@ export function Dashboard() {
           swLowRef.current  = Math.min(swLowRef.current,  barRef.current.callL);
         }
 
+        console.log(
+          `[Dashboard] New window at ${new Date(windowStart).toISOString()} ` +
+          `c_tl=${oi.c_tl} p_tl=${oi.p_tl} rows=${dash.rows.length}`
+        );
+
         barRef.current = {
           callO: oi.c_tl, callH: oi.c_tl, callL: oi.c_tl, callC: oi.c_tl,
           putO:  oi.p_tl, putH:  oi.p_tl, putL:  oi.p_tl, putC:  oi.p_tl,
           windowStart,
         };
 
-        const callBar: OHLCBar = { t: windowStart, o: oi.c_tl, h: oi.c_tl, l: oi.c_tl, c: oi.c_tl };
-        const putBar:  OHLCBar = { t: windowStart, o: oi.p_tl, h: oi.p_tl, l: oi.p_tl, c: oi.p_tl };
-        const callPP = clientPivot4Bar(callBar).pp;
-        const putPP  = clientPivot4Bar(putBar).pp;
-        const fLtp   = futLtp  ?? callBar.c;
-        const sLtp   = spotLtp ?? callBar.c;
-        const rsiSer = computeRsiSeries([...prevRsiCloses.current, callBar.c]);
-        const rsi    = rsiSer[rsiSer.length - 1] ?? null;
+        const callBar:  OHLCBar = { t: windowStart, o: oi.c_tl, h: oi.c_tl, l: oi.c_tl, c: oi.c_tl };
+        const putBar:   OHLCBar = { t: windowStart, o: oi.p_tl, h: oi.p_tl, l: oi.p_tl, c: oi.p_tl };
+        const callPP   = clientPivot4Bar(callBar).pp;
+        const putPP    = clientPivot4Bar(putBar).pp;
+        const fLtp     = futLtp  ?? callBar.c;
+        const sLtp     = spotLtp ?? callBar.c;
+        const rsiSer   = computeRsiSeries([...prevRsiCloses.current, callBar.c]);
+        const rsi      = rsiSer[rsiSer.length - 1] ?? null;
+        const nCallMMA = mma(callPP, callBar.h);
+        const nCallTLA = tla(callPP, callBar.l);
+
+        // Bug fix: spread oi into a plain snapshot object so each stored row has an
+        // independent copy — prevents future OI updates from silently mutating this row's
+        // oiMatrix reference if the store were ever to allow reference reuse.
+        const oiSnapshot = { ...oi };
 
         dash.appendRow({
           t: windowStart,
           call: callBar, put: putBar,
           futureLtp: fLtp, spotLtp: sLtp,
+          premiumDiscount: fLtp - sLtp,
           callPP, putPP,
           callPPClassic: classicPivot(callBar).pp,
           putPPClassic:  classicPivot(putBar).pp,
-          callMMA: mma(callPP, callBar.h),
-          callTLA: tla(callPP, callBar.l),
+          callMMA: nCallMMA,
+          callTLA: nCallTLA,
           putMMA:  mma(putPP,  putBar.h),
           putTLA:  tla(putPP,  putBar.l),
+          oiMatrix: oiSnapshot,
           smc: smcNearest(fLtp, swHighRef.current, swLowRef.current, swHighRef.current, swLowRef.current),
           fib: nearestFibLabel(fLtp, swHighRef.current, swLowRef.current) ?? "—",
           rsi,
-          rating: aggregateRating([oiSignalToVote(oi.callSignal), oiSignalToVote(oi.putSignal)]),
+          rating: aggregateRating(ratingVotes(rsi, fLtp, callPP, nCallMMA, nCallTLA)),
         });
 
       } else {
@@ -500,29 +536,35 @@ export function Dashboard() {
         b.putL  = Math.min(b.putL,  oi.p_tl);
         b.putC  = oi.p_tl;
 
-        const callBar: OHLCBar = { t: b.windowStart, o: b.callO, h: b.callH, l: b.callL, c: b.callC };
-        const putBar:  OHLCBar = { t: b.windowStart, o: b.putO,  h: b.putH,  l: b.putL,  c: b.putC  };
-        const callPP = clientPivot4Bar(callBar).pp;
-        const putPP  = clientPivot4Bar(putBar).pp;
-        const fLtp   = futLtp  ?? callBar.c;
-        const sLtp   = spotLtp ?? callBar.c;
-        const rsiSer = computeRsiSeries([...prevRsiCloses.current, callBar.c]);
-        const rsi    = rsiSer[rsiSer.length - 1] ?? null;
+        const callBar:  OHLCBar = { t: b.windowStart, o: b.callO, h: b.callH, l: b.callL, c: b.callC };
+        const putBar:   OHLCBar = { t: b.windowStart, o: b.putO,  h: b.putH,  l: b.putL,  c: b.putC  };
+        const callPP   = clientPivot4Bar(callBar).pp;
+        const putPP    = clientPivot4Bar(putBar).pp;
+        const fLtp     = futLtp  ?? callBar.c;
+        const sLtp     = spotLtp ?? callBar.c;
+        const rsiSer   = computeRsiSeries([...prevRsiCloses.current, callBar.c]);
+        const rsi      = rsiSer[rsiSer.length - 1] ?? null;
+        const uCallMMA = mma(callPP, callBar.h);
+        const uCallTLA = tla(callPP, callBar.l);
+
+        const oiSnapshot = { ...oi };
 
         dash.updateLatestRow({
           call: callBar, put: putBar,
           callPP, putPP,
           callPPClassic: classicPivot(callBar).pp,
           putPPClassic:  classicPivot(putBar).pp,
-          callMMA: mma(callPP, callBar.h),
-          callTLA: tla(callPP, callBar.l),
+          callMMA: uCallMMA,
+          callTLA: uCallTLA,
           putMMA:  mma(putPP,  putBar.h),
           putTLA:  tla(putPP,  putBar.l),
           futureLtp: fLtp, spotLtp: sLtp,
+          premiumDiscount: fLtp - sLtp,
+          oiMatrix: oiSnapshot,
           smc: smcNearest(fLtp, swHighRef.current, swLowRef.current, swHighRef.current, swLowRef.current),
           fib: nearestFibLabel(fLtp, swHighRef.current, swLowRef.current) ?? "—",
           rsi,
-          rating: aggregateRating([oiSignalToVote(oi.callSignal), oiSignalToVote(oi.putSignal)]),
+          rating: aggregateRating(ratingVotes(rsi, fLtp, callPP, uCallMMA, uCallTLA)),
         });
 
         if (futLtp != null && spotLtp != null) dash.setLivePrices(spotLtp, futLtp);
@@ -569,6 +611,7 @@ export function Dashboard() {
           hiddenCols={hiddenCols}
           feedStatus={worksheetFeedStatus}
           isLoading={isLoading}
+          type={type}
         />
       )}
     </div>

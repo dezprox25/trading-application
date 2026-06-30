@@ -57,6 +57,11 @@ export const useSocket = () => {
         // Don't override — let broker_status event set the final state
       }
 
+      // Always subscribe to core instruments for live Spot/Future display.
+      // These are permanent — independent of Generate or any config selection.
+      socket.emit("join:symbol", "NIFTY-SPOT");
+      socket.emit("join:symbol", "NIFTY-FUT");
+
       // Re-subscribe to all active rooms on reconnect
       socket.emit("join:symbol", selectedSymbol);
       if (activeSessionId) socket.emit("join:tracker", activeSessionId);
@@ -114,12 +119,23 @@ export const useSocket = () => {
     // Broker connection status from backend
     socket.on("broker_status", (data: { status: string; detail?: string }) => {
       console.log("[Socket] broker_status:", data.status, data.detail || "");
-      const dash = useDashStore.getState();
-      if (!dash.isGenerated) return; // dashboard not active, nothing to update
 
+      // Update Module 2 broker status in store
+      const { setModule2BrokerStatus } = useStore.getState();
+      const s = data.status as "live" | "broker-disconnected" | "session-expired" | "reconnecting";
+      setModule2BrokerStatus(s === "live" ? null : s);
+
+      // Update Module 1 dashboard feed status.
+      // Always propagate so the status indicator is accurate regardless of
+      // whether Generate has been clicked.
+      const dash = useDashStore.getState();
       switch (data.status) {
         case "live":
-          if (dash.feedStatus === "reconnecting" || dash.feedStatus === "broker-disconnected") {
+          if (
+            dash.feedStatus === "reconnecting" ||
+            dash.feedStatus === "broker-disconnected" ||
+            dash.feedStatus === "idle"
+          ) {
             dash.setFeedStatus("live");
           }
           break;
@@ -150,6 +166,17 @@ export const useSocket = () => {
     return () => {
       socket.emit("leave:symbol", selectedSymbol);
     };
+  }, [selectedSymbol]);
+
+  // ── Re-subscribe core instruments after any symbol change ──────────────────
+  // The selectedSymbol cleanup above may have sent a leave for NIFTY-FUT if
+  // the user changed away from it. Re-join both core symbols to ensure the
+  // Spot/Future live display is never interrupted by config changes.
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!socket?.connected) return;
+    socket.emit("join:symbol", "NIFTY-SPOT");
+    socket.emit("join:symbol", "NIFTY-FUT");
   }, [selectedSymbol]);
 
   // ── Join / leave Module 1 indicator room ──────────────────────────────────

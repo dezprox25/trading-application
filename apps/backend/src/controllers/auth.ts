@@ -7,6 +7,7 @@ import { LoginSchema, RegisterSchema } from "@stock/shared";
 import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from "../utils/token";
 import redis from "../config/redis";
 import { AuthenticatedRequest } from "../middleware/auth";
+import { stopDataFeed } from "../services/dataFeed";
 
 // Fixed user ID issued inside JWTs when authenticating via APP_LOGIN_* env vars.
 // Used by refresh and me to bypass the database lookup for this synthetic user.
@@ -190,7 +191,14 @@ export const refresh = async (req: Request, res: Response) => {
       if (!envUser) {
         return res.status(401).json({ error: "Session invalid." });
       }
-      const newAccessToken = generateAccessToken(ENV_USER_ID);
+      const newAccessToken  = generateAccessToken(ENV_USER_ID);
+      const newRefreshToken = generateRefreshToken(ENV_USER_ID);
+      res.cookie("refresh", newRefreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      });
       return res.status(200).json({
         accessToken: newAccessToken,
         user: { id: ENV_USER_ID, username: envUser.username, name: envUser.name },
@@ -210,7 +218,14 @@ export const refresh = async (req: Request, res: Response) => {
       return res.status(401).json({ error: "User is no longer active" });
     }
 
-    const newAccessToken = generateAccessToken(user._id.toString());
+    const newAccessToken  = generateAccessToken(user._id.toString());
+    const newRefreshToken = generateRefreshToken(user._id.toString());
+    res.cookie("refresh", newRefreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
 
     return res.status(200).json({
       accessToken: newAccessToken,
@@ -238,6 +253,10 @@ export const logout = async (req: Request, res: Response) => {
         }
       } catch (_) {}
     }
+
+    // Stop the Zebu data feed so the backend is in a clean state before the
+    // next login. Any pending reconnect timers or stale callbacks are discarded.
+    stopDataFeed();
 
     res.clearCookie("refresh", {
       httpOnly: true,

@@ -115,9 +115,11 @@ const buildActiveTokens = (rows: ZebuNFORow[], atmStrike: number): ActiveInstrum
   const nearestOptionExpiry = nearestExpiry.toISOString().slice(0, 10);
   console.log(`[InstrumentTokens] Nearest option expiry: ${nearestOptionExpiry}`);
 
-  // Select 10 strikes each side of ATM at 50-point intervals
+  // Select strikes within ±500 points of ATM (10 strikes each side at 50-pt intervals).
+  // Minimum radius is 1000 so that even if the ATM seed is slightly off (e.g., stale Redis
+  // or default fallback), we still capture the actual trading range.
   const atmRounded = Math.round(atmStrike / 50) * 50;
-  const strikeRadius = 500;
+  const strikeRadius = 1000; // ±20 strikes — wide enough to cover a stale ATM seed
   const expiryStr = formatExpiryForSymbol(nearestExpiry);
 
   const strikeRows = optRows.filter(r => {
@@ -174,11 +176,16 @@ export const refreshInstrumentTokens = async (): Promise<ActiveInstrumentTokens 
     }
 
     // Get current spot price to calculate ATM strike
-    let atmStrike = 22000;
+    let atmStrike = 24500; // Conservative fallback for cold-start (no Redis yet); overridden below
+    let atmSource = "fallback-default";
     try {
       const spotStr = await redis.get("ltp:NIFTY-SPOT");
-      if (spotStr) atmStrike = parseFloat(spotStr);
-    } catch {}
+      if (spotStr && parseFloat(spotStr) > 0) {
+        atmStrike = parseFloat(spotStr);
+        atmSource = "redis-cached";
+      }
+    } catch { /* Redis offline — use default */ }
+    console.log(`[InstrumentTokens] ATM source: ${atmSource} → ${atmStrike}${atmSource === "fallback-default" ? " (WARNING: first login or Redis empty — strikes around 24500, may miss actual ATM)" : ""}`);
 
     const tokens = buildActiveTokens(rows, atmStrike);
     cachedTokens = tokens;

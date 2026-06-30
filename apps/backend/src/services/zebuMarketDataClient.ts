@@ -243,6 +243,7 @@ export const startZebuMarketDataFeedWithCredentials = (
   onDataSource: (dataSource: DataSource) => void,
   onFallback: (reason: string) => void,
   onSessionExpired?: () => void,
+  onConnected?: () => void,
 ): ZebuClient => {
   const wsUrl = getZebuWsUrl();
   const instruments   = getModule1ZebuInstruments();
@@ -300,6 +301,7 @@ export const startZebuMarketDataFeedWithCredentials = (
     ws.send(JSON.stringify(connectMsg));
     liveConnected = true;
     onDataSource("LIVE_MARKET_API");
+    onConnected?.();
   });
 
   ws.on("message", async (raw) => {

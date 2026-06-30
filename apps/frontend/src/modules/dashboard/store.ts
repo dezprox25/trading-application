@@ -27,6 +27,7 @@ interface DashboardStore {
 
   // Generated
   isGenerated:     boolean;
+  generateKey:     number;  // increments on every Generate press to force effect re-run
   timeframe:       string;
   customRange:     { from: string; to: string; candleTf: string } | null;
   pivotMethod:     PivotMethod;
@@ -75,6 +76,7 @@ export const useDashStore = create<DashboardStore>((set, get) => ({
   type: "Call+Put",
   callStrike: null, putStrike: null, strike: null,
   isGenerated: false,
+  generateKey: 0,
   timeframe: "5m", customRange: null, pivotMethod: "client", configCollapsed: false,
   rows: [], feedStatus: "idle",
   spotLtp: null, futureLtp: null, spotDir: null, futureDir: null,
@@ -87,7 +89,7 @@ export const useDashStore = create<DashboardStore>((set, get) => ({
   setCallStrike: (v) => set({ callStrike: v }),
   setPutStrike:  (v) => set({ putStrike: v }),
   setStrike:     (v) => set({ strike: v }),
-  generate:      ()  => set({ isGenerated: true, rows: [] }),
+  generate:      ()  => set((s) => ({ isGenerated: true, rows: [], generateKey: s.generateKey + 1 })),
   reset:         ()  => set({ isGenerated: false, rows: [], feedStatus: "idle" }),
   clearRows:     ()  => set({ rows: [] }),
   setTimeframe:  (tf) => set({ timeframe: tf }),
@@ -95,7 +97,16 @@ export const useDashStore = create<DashboardStore>((set, get) => ({
   setPivotMethod: (m) => set({ pivotMethod: m }),
   toggleConfigCollapsed: () => set((s) => ({ configCollapsed: !s.configCollapsed })),
 
-  appendRow: (row) => set((s) => ({ rows: [...s.rows, row].slice(-15) })),
+  appendRow: (row) => set((s) => {
+    // Deduplication guard: never append a row whose timestamp already exists as the
+    // last entry — protects against a race where Effect 1 and Effect 2 both try to
+    // create the current-window row in the same JS tick.
+    if (s.rows.length > 0 && s.rows[s.rows.length - 1].t === row.t) {
+      console.warn(`[Dashboard] appendRow deduped t=${row.t} — already last row`);
+      return {};
+    }
+    return { rows: [...s.rows, row] };
+  }),
 
   updateLatestRow: (partial) => set((s) => {
     if (s.rows.length === 0) return {};

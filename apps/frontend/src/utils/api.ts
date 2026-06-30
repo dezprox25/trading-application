@@ -73,6 +73,7 @@ export const api = {
         try {
           const refreshRes = await fetch(`${API_BASE}/auth/refresh`, {
             method: "POST",
+            credentials: "include",
             signal: refreshController.signal,
           });
           clearTimeout(refreshTimeout);
@@ -89,7 +90,7 @@ export const api = {
             clearTimeout(retryTimeout);
             return await handleResponse(retryResponse);
           } else {
-            console.warn("[API] Refresh token expired. Clearing app session.");
+            console.warn("[API] Silent refresh failed (status", refreshRes.status, "). Clearing app session.");
             useStore.getState().clearAppAuth();
             throw new Error("Your broker session has expired. Please reconnect.");
           }

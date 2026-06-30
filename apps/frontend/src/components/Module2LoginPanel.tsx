@@ -7,9 +7,9 @@ const BLUE_BG = "#eff6ff";
 const BLUE_BORDER = "#bfdbfe";
 
 export function Module2LoginPanel() {
-  const [appKey, setAppKey] = useState("");
+  const [appKey, setAppKey] = useState(() => localStorage.getItem("m2_app_key") || "");
   const [secretKey, setSecretKey] = useState("");
-  const [remember, setRemember] = useState(false);
+  const [remember, setRemember] = useState(() => !!localStorage.getItem("m2_app_key"));
   const [showSecret, setShowSecret] = useState(false);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -28,6 +28,12 @@ export function Module2LoginPanel() {
       const res = await api.post("/auth/module2-broker-login", { appKey, secretKey });
       const token = res?.moduleToken;
       if (!token) throw new Error(res?.error || "Authentication failed");
+
+      if (remember) {
+        localStorage.setItem("m2_app_key", appKey);
+      } else {
+        localStorage.removeItem("m2_app_key");
+      }
 
       setSuccess(true);
       setModule2Token(token);
@@ -245,7 +251,10 @@ export function Module2LoginPanel() {
                     <input
                       type="checkbox"
                       checked={remember}
-                      onChange={(e) => setRemember(e.target.checked)}
+                      onChange={(e) => {
+                        setRemember(e.target.checked);
+                        if (!e.target.checked) localStorage.removeItem("m2_app_key");
+                      }}
                       style={{ width: 15, height: 15, cursor: "pointer", accentColor: BLUE }}
                     />
                     <span style={{ fontSize: 13, fontWeight: 500, color: "#5b6b82" }}>Remember App Key</span>

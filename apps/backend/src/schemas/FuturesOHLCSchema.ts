@@ -40,3 +40,7 @@ export const FuturesOHLCSchema = new Schema({
 
 // Index to query the latest candles for pivot calculation
 FuturesOHLCSchema.index({ symbol: 1, timeframe: 1, bar_time: -1 });
+
+// TTL index: MongoDB auto-deletes candles older than 25 hours (90000 seconds).
+// This ensures previous-day bars are purged automatically without a cron job.
+FuturesOHLCSchema.index({ bar_time: 1 }, { expireAfterSeconds: 90000 });

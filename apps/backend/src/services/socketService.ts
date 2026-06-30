@@ -4,6 +4,7 @@ import { setOnTickReceived } from "./dataFeed";
 import { setOnPivotsUpdated, evaluateIndicators } from "./pivotService";
 import { Tick, PivotLevels } from "@stock/shared";
 import { getLatestModule1OiMetrics } from "./module1OiService";
+import { isZebuLiveConnected } from "./zebuMarketDataClient";
 
 let ioServer: Server | null = null;
 
@@ -35,6 +36,12 @@ export const initSocketServer = (io: Server) => {
 
     // Send initial latest OI metrics immediately on connection
     socket.emit("latest-oi", getLatestModule1OiMetrics());
+
+    // Immediately tell this client the current Zebu broker connection state so
+    // it doesn't have to wait for the next broadcast event.
+    const currentBrokerStatus = isZebuLiveConnected() ? "live" : "broker-disconnected";
+    socket.emit("broker_status", { status: currentBrokerStatus, timestamp: new Date().toISOString() });
+    console.log(`[Socket] Sent initial broker_status="${currentBrokerStatus}" to ${socket.id}`);
 
     // 1. Join room to receive raw price ticks for a specific symbol
     socket.on("join:symbol", (symbol: string) => {

@@ -4,7 +4,7 @@ import redis from "../config/redis";
 import { broadcastTrackerUpdate } from "./socketService";
 import { Module2SessionData, Module2StrikeState, Module2Cell, TrendBadgeState } from "@stock/shared";
 import { getModule2DataSource, logModule2InteractiveStatus } from "./module2InteractiveDataService";
-import { resolveOptionStrikeToken, subscribeToInstruments } from "./aetramMarketDataService";
+import { resolveOptionStrikeToken, subscribeToInstruments, setOnAetramReconnect } from "./aetramMarketDataService";
 
 // In-memory cache for active tracker sessions to avoid database load
 export const activeSessions: Record<string, Module2SessionData> = {};
@@ -72,6 +72,9 @@ export const initTrackerEngine = async () => {
   } catch (error) {
     console.error("[TrackerEngine] Failed to restore sessions on startup:", error);
   }
+
+  // Register reconnect callback so subscriptions are restored on WebSocket reconnect
+  setOnAetramReconnect(() => syncAetramSubscriptions());
 
   // Schedule the minute boundary checker
   scheduleNextMinuteBoundary();

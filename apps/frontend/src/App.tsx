@@ -314,7 +314,7 @@ function App() {
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const response = await fetch(`${API_BASE}/auth/refresh`, { method: "POST" });
+        const response = await fetch(`${API_BASE}/auth/refresh`, { method: "POST", credentials: "include" });
         if (import.meta.env.DEV) {
           console.log("[App] /auth/refresh response:", response.status, response.ok);
         }

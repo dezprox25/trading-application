@@ -1,9 +1,9 @@
 import { Router } from "express";
-import { getModule2Status } from "../controllers/module2";
+import { getModule2Status, getModule2Expiries } from "../controllers/module2";
 
 const router = Router();
 
-// Endpoint to check configuration status and session statistics
 router.get("/status", getModule2Status);
+router.get("/expiries", getModule2Expiries);
 
 export default router;

@@ -206,12 +206,26 @@ export const getLatestModule1OiMetrics = (): Module1OiMetrics => {
 };
 
 /**
- * Warm up the in-memory CE/PE/Futures maps using last cached values in Redis
+ * Warm up the in-memory CE/PE/Futures maps using last cached values in Redis.
+ * Skips the warmup if the stored date does not match today — prevents yesterday's
+ * OI values from seeding a stale initial row on the next trading day.
  */
 export const initModule1OiService = async () => {
   try {
+    // Guard: only load cached OI if it was written during today's trading session.
+    // "Today" is measured in UTC date so it aligns with the session boundary (03:45 UTC).
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const storedDate = await redis.get("oi:trading_date");
+    if (storedDate !== today) {
+      await redis.set("oi:trading_date", today);
+      console.log(`[Module1OiService] New trading day (${today}). Skipping stale OI warmup — starting clean.`);
+      createOrUpdateLatestRow(new Date());
+      return;
+    }
+
     const keys = await redis.keys("oi:*");
     for (const key of keys) {
+      if (key === "oi:trading_date") continue;
       const val = await redis.get(key);
       if (val) {
         const symbol = key.replace("oi:", "");

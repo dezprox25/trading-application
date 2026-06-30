@@ -10,6 +10,16 @@ import { getLatestModule1OiMetrics } from "../services/module1OiService";
 import { isZebuLiveConnected } from "../services/zebuMarketDataClient";
 import { isAetramConnected } from "../services/aetramMarketDataService";
 
+// Returns the start of the current NSE trading session in UTC.
+// NSE opens at 09:15 IST = 03:45 UTC. If it's currently before 03:45 UTC,
+// the active session is from the previous calendar day.
+const getTodaySessionOpenUTC = (): Date => {
+  const now = new Date();
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 3, 45, 0, 0));
+  if (now.getTime() < d.getTime()) d.setUTCDate(d.getUTCDate() - 1);
+  return d;
+};
+
 // Local in-memory watchlists store for when MongoDB is offline
 const inMemoryWatchlists = new Map<string, { symbols: string[]; columnPrefs: any }>();
 
@@ -143,8 +153,8 @@ export const getFuturesData = async (req: AuthenticatedRequest, res: Response) =
 // Get completed OHLC candles from Database
 export const getOHLCBars = async (req: AuthenticatedRequest, res: Response) => {
   const { symbol, tf } = req.params;
-  const limit = req.query.limit ? parseInt(req.query.limit as string) : 15;
-  const fetchLimit = limit + 1;
+  const limit = req.query.limit ? parseInt(req.query.limit as string) : 400;
+  const fetchLimit = limit;
 
   type OhlcBar = {
     symbol: string; timeframe: string;
@@ -154,11 +164,12 @@ export const getOHLCBars = async (req: AuthenticatedRequest, res: Response) => {
 
   let bars: OhlcBar[] = [];
 
-  // Step 1: Try MongoDB for finalized candles
+  // Step 1: Try MongoDB for finalized candles — scoped to today's session only
   try {
-    const dbBars = await FuturesOHLC.find({ symbol, timeframe: tf })
+    const sessionOpen = getTodaySessionOpenUTC();
+    const dbBars = await FuturesOHLC.find({ symbol, timeframe: tf, bar_time: { $gte: sessionOpen } })
       .sort({ bar_time: -1 })
-      .limit(fetchLimit * 3);
+      .limit(fetchLimit);
 
     const seenTimes = new Set<number>();
     const uniqueBars: typeof dbBars = [];

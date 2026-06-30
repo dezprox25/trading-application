@@ -1,11 +1,23 @@
 import axios from "axios";
 import { io, Socket } from "socket.io-client";
 import redis from "../config/redis";
+import { broadcastBrokerStatus } from "./socketService";
 
 let sessionToken: string | null = null;
 let userID: string | null = null;
 let socket: Socket | null = null;
 let socketConnected = false;
+let _onReconnectFn: (() => Promise<void>) | null = null;
+
+export const setOnAetramReconnect = (fn: () => Promise<void>) => {
+  _onReconnectFn = fn;
+};
+
+export const clearAetramSession = () => {
+  sessionToken = null;
+  userID = null;
+  socketConnected = false;
+};
 
 export const isAetramConnected = (): "CONNECTED" | "ERROR" | "WAITING_FOR_CONFIGURATION" => {
   const apiKey = getApiKey();
@@ -165,7 +177,13 @@ export const resolveOptionStrikeToken = async (
     console.warn(`[AetramMD] Could not find matching Aetram instrument for strike ${strikeSymbol} (${expiryDate})`);
     return null;
   } catch (error: any) {
-    console.error(`[AetramMD] Instrument lookup error for ${strikeSymbol}:`, error?.message || error);
+    if (error?.response?.status === 401) {
+      console.warn("[AetramMD] Session expired (401) during instrument lookup.");
+      clearAetramSession();
+      broadcastBrokerStatus("session-expired", "Broker session expired. Please login again.");
+    } else {
+      console.error(`[AetramMD] Instrument lookup error for ${strikeSymbol}:`, error?.message || error);
+    }
     return null;
   }
 };
@@ -197,7 +215,13 @@ export const subscribeToInstruments = async (
     await axios.post(`${baseUrl}/instruments/subscription`, payload, { headers: getHeaders(), timeout: 10000 });
     await axios.post(`${baseUrl}/instruments/subscription`, payloadOI, { headers: getHeaders(), timeout: 10000 });
   } catch (error: any) {
-    console.error("[AetramMD] Subscription request failed:", error?.message || error);
+    if (error?.response?.status === 401) {
+      console.warn("[AetramMD] Session expired (401) during subscription.");
+      clearAetramSession();
+      broadcastBrokerStatus("session-expired", "Broker session expired. Please login again.");
+    } else {
+      console.error("[AetramMD] Subscription request failed:", error?.message || error);
+    }
   }
 };
 
@@ -227,7 +251,8 @@ const handleOiTick = async (tick: any) => {
 };
 
 /**
- * Establish WebSocket / Socket.IO connection
+ * Establish WebSocket / Socket.IO connection.
+ * Disconnects any existing socket before creating a new one.
  */
 export const connectToAetramWebSocket = async (): Promise<boolean> => {
   if (!sessionToken || !userID) {
@@ -235,7 +260,14 @@ export const connectToAetramWebSocket = async (): Promise<boolean> => {
     return false;
   }
 
-  // Extract base host URL
+  // Disconnect stale socket before creating new one
+  if (socket) {
+    socket.removeAllListeners();
+    socket.disconnect();
+    socket = null;
+    socketConnected = false;
+  }
+
   const baseUrl = getBaseUrl();
   let host = "";
   try {
@@ -258,21 +290,27 @@ export const connectToAetramWebSocket = async (): Promise<boolean> => {
     },
     transports: ["websocket"],
     reconnection: true,
-    reconnectionDelay: 1000,
+    reconnectionDelay: 2000,
     reconnectionAttempts: Infinity,
   });
 
-  socket.on("connect", () => {
+  socket.on("connect", async () => {
     socketConnected = true;
-    console.log("[AetramMD] Socket.IO feed connected successfully.");
+    console.log("[AetramMD] Socket connected.");
+    broadcastBrokerStatus("live");
+    if (_onReconnectFn) {
+      try { await _onReconnectFn(); } catch (err: any) {
+        console.error("[AetramMD] Reconnect callback error:", err?.message || err);
+      }
+    }
   });
 
   socket.on("connect_error", (error: Error) => {
     socketConnected = false;
-    console.error("[AetramMD] Socket connection error:", error);
+    console.error("[AetramMD] Socket connection error:", error.message);
+    broadcastBrokerStatus("reconnecting", "Lost connection to broker. Reconnecting...");
   });
 
-  // Attach handlers for LTP and OI
   socket.on("1512-json-full", handleLtpTick);
   socket.on("1512-json-partial", handleLtpTick);
   socket.on("1510-json-full", handleOiTick);
@@ -281,9 +319,60 @@ export const connectToAetramWebSocket = async (): Promise<boolean> => {
   socket.on("disconnect", (reason: string) => {
     socketConnected = false;
     console.warn(`[AetramMD] Socket disconnected: ${reason}`);
+    broadcastBrokerStatus("broker-disconnected", "Lost connection to broker. Reconnecting...");
   });
 
   return true;
+};
+
+/**
+ * Compute the next N upcoming Thursdays (NSE weekly expiry pattern, last resort fallback)
+ */
+const computeUpcomingThursdays = (count: number): string[] => {
+  const result: string[] = [];
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  const dayOfWeek = d.getDay();
+  const daysToThursday = (4 - dayOfWeek + 7) % 7;
+  d.setDate(d.getDate() + daysToThursday);
+  for (let i = 0; i < count; i++) {
+    result.push(parseDateToYMD(new Date(d)));
+    d.setDate(d.getDate() + 7);
+  }
+  return result;
+};
+
+/**
+ * Fetch available expiry dates for options on the given index.
+ * Priority: Aetram API → MOD2_EXPIRY_DATES env → computed Thursdays
+ */
+export const getAetramExpiryDates = async (indexSymbol: string): Promise<string[]> => {
+  const baseUrl = getBaseUrl();
+
+  if (baseUrl && sessionToken) {
+    try {
+      const name = indexSymbol.replace(/50$/i, "").replace(/FIFTY$/i, "").toUpperCase();
+      const url = `${baseUrl}/instruments/expiry?exchangeSegment=2&series=OPT&name=${encodeURIComponent(name)}`;
+      const response = await axios.get(url, { headers: getHeaders(), timeout: 8000 });
+
+      if (response.data?.code === "success" && Array.isArray(response.data.result)) {
+        const dates = response.data.result
+          .map((r: any) => parseDateToYMD(r.expiryDate || r.expiry || ""))
+          .filter(Boolean)
+          .sort();
+        if (dates.length > 0) return dates;
+      }
+    } catch {
+      // Fall through to config fallback
+    }
+  }
+
+  const configDates = (process.env.MOD2_EXPIRY_DATES || "").trim();
+  if (configDates) {
+    return configDates.split(",").map((d) => d.trim()).filter(Boolean).sort();
+  }
+
+  return computeUpcomingThursdays(5);
 };
 
 /**

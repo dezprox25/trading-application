@@ -24,6 +24,12 @@ let reconnectAttempts = 0;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let sessionExpired = false;
 
+// Each call to startDataFeedWithCredentials / stopDataFeed increments this
+// counter. Disconnect callbacks capture their generation at creation time and
+// bail out if it no longer matches — preventing a closing old connection from
+// clobbering the newly started one.
+let connectionGeneration = 0;
+
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BASE_DELAY_MS = 4000;
 
@@ -34,11 +40,16 @@ const clearReconnectTimer = () => {
   }
 };
 
-const handleFeedDisconnect = (reason: string) => {
+const handleFeedDisconnect = (reason: string, gen: number) => {
+  if (gen !== connectionGeneration) {
+    console.log(`[DataFeed] Ignoring stale disconnect (gen=${gen}, current=${connectionGeneration}) — reason: ${reason}`);
+    return;
+  }
+
   zebuClient = null;
   setModule1OiDataSource("SIMULATOR");
 
-  if (sessionExpired) return; // don't reconnect on session expiry
+  if (sessionExpired) return;
 
   if (!storedUserId || !storedSessionToken) {
     console.warn("[DataFeed] No stored credentials — cannot reconnect.");
@@ -61,11 +72,14 @@ const handleFeedDisconnect = (reason: string) => {
 
   reconnectTimer = setTimeout(async () => {
     if (!storedUserId || !storedSessionToken) return;
+    if (gen !== connectionGeneration) return; // Superseded before timer fired
     await startDataFeedWithCredentials(storedUserId!, storedSessionToken!);
   }, delay);
 };
 
-const handleSessionExpired = () => {
+const handleSessionExpired = (gen: number) => {
+  if (gen !== connectionGeneration) return;
+
   zebuClient = null;
   sessionExpired = true;
   storedUserId = null;
@@ -88,6 +102,10 @@ export const startDataFeedWithCredentials = async (userId: string, sessionToken:
   }
   clearReconnectTimer();
 
+  // Bump generation so any in-flight disconnect callbacks from the old
+  // connection are silently ignored when they eventually fire.
+  const gen = ++connectionGeneration;
+
   // Store credentials for auto-reconnection
   storedUserId = userId;
   storedSessionToken = sessionToken;
@@ -105,8 +123,6 @@ export const startDataFeedWithCredentials = async (userId: string, sessionToken:
   }
 
   console.log(`[DataFeed] Starting live feed for user: ${userId}`);
-  setModule1OiDataSource("LIVE_MARKET_API");
-  broadcastBrokerStatus("live");
 
   zebuClient = startZebuMarketDataFeedWithCredentials(
     userId,
@@ -115,16 +131,24 @@ export const startDataFeedWithCredentials = async (userId: string, sessionToken:
     setModule1OiDataSource,
     (reason) => {
       console.warn(`[DataFeed] Feed disconnected: ${reason}`);
-      handleFeedDisconnect(reason);
+      handleFeedDisconnect(reason, gen);
     },
-    () => handleSessionExpired(),
+    () => handleSessionExpired(gen),
+    () => {
+      // Called when the Zebu WebSocket actually connects and the handshake is sent.
+      // Only broadcast "live" at this point — not prematurely.
+      console.log("[DataFeed] Zebu WS open — broadcasting live status");
+      broadcastBrokerStatus("live");
+    },
   );
 };
 
 /**
- * Stop the live feed and clear credentials (called on explicit logout).
+ * Stop the live feed and clear all state (called on explicit user logout or server shutdown).
  */
 export const stopDataFeed = () => {
+  // Invalidate any in-flight or pending disconnect callbacks
+  connectionGeneration++;
   clearReconnectTimer();
   storedUserId = null;
   storedSessionToken = null;
@@ -161,7 +185,10 @@ export const processIncomingTick = async (tick: Tick) => {
   await redis.set(`ltp:${symbol}`, ltp.toString());
 
   if (oi !== undefined) {
-    await redis.set(`oi:${symbol}`, oi.toString());
+    // 25-hour TTL ensures keys expire overnight so next-day warmup never loads stale OI
+    await redis.setex(`oi:${symbol}`, 90000, oi.toString());
+    // Keep the trading-date marker current so OiService warmup guard stays accurate
+    await redis.set("oi:trading_date", new Date().toISOString().slice(0, 10));
   }
 
   ingestModule1OiTick(tick);

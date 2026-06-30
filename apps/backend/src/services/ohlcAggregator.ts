@@ -67,13 +67,46 @@ export const setOnCandleFinalized = (callback: CandleFinalizedCallback) => {
   onCandleFinalized = callback;
 };
 
+// NSE session open: 09:15 IST = 03:45 UTC = 225 minutes from UTC midnight
+const SESSION_OPEN_UTC_MINUTES = 3 * 60 + 45;
+
+// Returns the millisecond timestamp of the current trading day's session open (03:45 UTC).
+// If the current UTC time is before 03:45 today, returns yesterday's session open.
+export const getTodaySessionOpenMs = (): number => {
+  const now = Date.now();
+  const todayMidnightMs = now - (now % (24 * 60 * 60000));
+  const todaySessionOpenMs = todayMidnightMs + SESSION_OPEN_UTC_MINUTES * 60000;
+  return now < todaySessionOpenMs ? todaySessionOpenMs - 24 * 60 * 60000 : todaySessionOpenMs;
+};
+
 /**
- * Normalizes time boundary based on timeframe in minutes
+ * Normalizes time boundary based on timeframe in minutes.
+ * For timeframes < 60 minutes, boundaries align to UTC midnight (which coincidentally
+ * aligns with IST 09:15 for 1m/5m/15m/30m/45m because 225min is divisible by each).
+ * For timeframes >= 60 minutes, boundaries are offset to the NSE session open (09:15 IST)
+ * so that the first bar of the day starts exactly at market open, not at a UTC-midnight-
+ * aligned time that precedes the session by 30–75 minutes.
  */
 export const getBoundaryTime = (timestamp: Date, timeframeMinutes: number): number => {
   const timeMs = timestamp.getTime();
   const timeframeMs = timeframeMinutes * 60000;
-  return Math.floor(timeMs / timeframeMs) * timeframeMs;
+
+  if (timeframeMinutes < 60) {
+    return Math.floor(timeMs / timeframeMs) * timeframeMs;
+  }
+
+  // Anchor to session open so the first bar of the day starts at 09:15 IST (03:45 UTC)
+  const sessionOpenMs = SESSION_OPEN_UTC_MINUTES * 60000; // ms from UTC midnight
+  // Find midnight UTC for the same day as the timestamp
+  const midnightMs = timeMs - (timeMs % (24 * 60 * 60000));
+  const todaySessionOpenMs = midnightMs + sessionOpenMs;
+  const offsetMs = timeMs - todaySessionOpenMs;
+  if (offsetMs < 0) {
+    // Tick is before today's session open — snap to previous session's last boundary
+    const prevSessionOpenMs = todaySessionOpenMs - 24 * 60 * 60000;
+    return prevSessionOpenMs + Math.floor((timeMs - prevSessionOpenMs) / timeframeMs) * timeframeMs;
+  }
+  return todaySessionOpenMs + Math.floor(offsetMs / timeframeMs) * timeframeMs;
 };
 
 /**
@@ -133,7 +166,8 @@ const finaliseCandle = async (candle: Candle) => {
     finalizedCandlesCache[symbol][timeframe][existingIdx] = candle;
   } else {
     finalizedCandlesCache[symbol][timeframe].push(candle);
-    if (finalizedCandlesCache[symbol][timeframe].length > 15) {
+    // Keep at most 400 candles in memory (enough for a full 1m intraday session: 375 candles)
+    if (finalizedCandlesCache[symbol][timeframe].length > 400) {
       finalizedCandlesCache[symbol][timeframe].shift();
     }
   }
@@ -157,20 +191,17 @@ const finaliseCandle = async (candle: Candle) => {
 
     console.log(`[OHLC] Finalized/Updated ${candle.timeframe} candle for ${candle.symbol} at ${new Date(candle.openTime).toISOString()}`);
 
-    // Prune the database to keep exactly the latest 15 records
-    const oldestToKeep = await FuturesOHLC.find({ symbol: candle.symbol, timeframe: candle.timeframe })
-      .sort({ bar_time: -1 })
-      .skip(14)
-      .limit(1);
-
-    if (oldestToKeep.length > 0) {
-      const boundaryTime = oldestToKeep[0].bar_time;
-      await FuturesOHLC.deleteMany({
-        symbol: candle.symbol,
-        timeframe: candle.timeframe,
-        bar_time: { $lt: boundaryTime }
-      });
+    // Prune candles from previous trading sessions (before today's 09:15 IST = 03:45 UTC)
+    const sessionOpen = new Date(candle.openTime);
+    sessionOpen.setUTCHours(3, 45, 0, 0); // 09:15 IST
+    if (sessionOpen.getTime() > candle.openTime) {
+      sessionOpen.setUTCDate(sessionOpen.getUTCDate() - 1);
     }
+    await FuturesOHLC.deleteMany({
+      symbol: candle.symbol,
+      timeframe: candle.timeframe,
+      bar_time: { $lt: sessionOpen },
+    });
   } catch (error) {
     console.error("Failed to finalize candle in database:", error);
   }
@@ -186,10 +217,13 @@ const finaliseCandle = async (candle: Candle) => {
 };
 
 /**
- * Returns latest cached completed candles
+ * Returns latest cached completed candles for the current trading session only.
+ * Bars from previous sessions are excluded so stale data is never served.
  */
-export const getCachedOHLCBars = (symbol: string, timeframe: string, limit = 50): Candle[] => {
-  const list = finalizedCandlesCache[symbol]?.[timeframe] || [];
+export const getCachedOHLCBars = (symbol: string, timeframe: string, limit = 400): Candle[] => {
+  const sessionOpenMs = getTodaySessionOpenMs();
+  const list = (finalizedCandlesCache[symbol]?.[timeframe] || [])
+    .filter(c => c.openTime >= sessionOpenMs);
   return list.slice(-limit);
 };
 
