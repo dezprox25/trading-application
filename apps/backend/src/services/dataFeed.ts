@@ -176,7 +176,7 @@ export const processIncomingTick = async (tick: Tick) => {
 
   if (!_firstTickLogged) {
     _firstTickLogged = true;
-    console.log(`[Feed] First tick — symbol: ${symbol} ltp: ${ltp} oi: ${oi ?? "—"}`);
+    console.log(`[Feed] ✓ First market tick received — symbol: ${symbol} ltp: ${ltp} oi: ${oi ?? "—"}`);
   }
 
   if (_totalTickCount % 100 === 0) {

@@ -487,6 +487,9 @@ export function Dashboard() {
           `[Dashboard] New window at ${new Date(windowStart).toISOString()} ` +
           `futLtp=${futLtp} (was using c_tl=${oi.c_tl}) rows=${dash.rows.length}`
         );
+        if (dash.rows.length === 0) {
+          console.log(`[AutoGenerate] ✓ First candle created — futLtp=${futLtp} t=${new Date(windowStart).toISOString()}`);
+        }
 
         // Use futures LTP as the live OHLC price source — this matches the historical bars
         // which are built from tick.ltp (futures LTP) via ohlcAggregator → MongoDB → REST API.

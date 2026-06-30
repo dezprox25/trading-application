@@ -22,6 +22,7 @@ export const useSocket = () => {
   const updateFuturesOI    = useStore((s) => s.updateFuturesOI);
   const setOiMetrics       = useStore((s) => s.setOiMetrics);
   const setModule1IndicatorState = useStore((s) => s.setModule1IndicatorState);
+  const setMarketDataReady = useStore((s) => s.setMarketDataReady);
 
   const selectedSymbol     = useStore((s) => s.selectedSymbol);
   const activeSessionId    = useStore((s) => s.activeSession?.sessionId);
@@ -91,6 +92,15 @@ export const useSocket = () => {
     // Raw price ticks → price cache
     socket.on("tick", (tick: Tick) => {
       updatePrice(tick.symbol, tick.ltp);
+    });
+
+    // Market readiness confirmation from backend — emitted after first valid NIFTY-FUT tick.
+    // On receipt, the frontend knows all readiness conditions are met and can auto-generate.
+    socket.on("market_ready", (data: { ltp: number; symbol: string; timestamp: string }) => {
+      console.log(
+        `[Socket] ✓ market_ready received — symbol=${data.symbol} ltp=${data.ltp} ts=${data.timestamp}`
+      );
+      setMarketDataReady(true);
     });
 
     // Module 1 OI matrix

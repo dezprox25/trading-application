@@ -81,6 +81,10 @@ interface AppState {
   prices: Record<string, { ltp: number; lastUpdated: Date }>;
   updatePrice: (symbol: string, ltp: number) => void;
 
+  // Market readiness flag — set true when first valid NIFTY-FUT tick is confirmed by backend
+  marketDataReady: boolean;
+  setMarketDataReady: (ready: boolean) => void;
+
   // Module 2 Tracker Session State
   activeSession: Module2SessionData | null;
   setActiveSession: (session: Module2SessionData | null) => void;
@@ -97,16 +101,18 @@ export const useStore = create<AppState>((set) => ({
   clearAuth: () => {
     sessionStorage.removeItem("m1_token");
     sessionStorage.removeItem("m2_token");
-    set({ 
-      user: null, 
-      accessToken: null, 
-      activeSession: null, 
-      module1Token: null, 
+    set({
+      user: null,
+      accessToken: null,
+      activeSession: null,
+      module1Token: null,
       module2Token: null,
       module1Status: "idle",
       module2Status: "idle",
       module1Error: null,
       module2Error: null,
+      marketDataReady: false,
+      prices: {},
     });
   },
   clearAppAuth: () => {
@@ -167,6 +173,10 @@ export const useStore = create<AppState>((set) => ({
         [symbol]: { ltp, lastUpdated: new Date() }
       }
     })),
+
+  // Market readiness
+  marketDataReady: false,
+  setMarketDataReady: (ready) => set({ marketDataReady: ready }),
 
   // Module 2 Session State
   activeSession: null,

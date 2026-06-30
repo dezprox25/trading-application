@@ -8,6 +8,13 @@ import { isZebuLiveConnected } from "./zebuMarketDataClient";
 
 let ioServer: Server | null = null;
 
+// ── Market readiness tracking ─────────────────────────────────────────────────
+// Tracks whether the first valid NIFTY-FUT tick has been received this session.
+// Used to emit `market_ready` to clients so they can auto-generate without polling.
+let _marketReady = false;
+let _marketReadyLtp = 0;
+let _marketReadyTs = "";
+
 /**
  * Initialize Socket.io server with JWT authentication and room handlers
  */
@@ -42,6 +49,13 @@ export const initSocketServer = (io: Server) => {
     const currentBrokerStatus = isZebuLiveConnected() ? "live" : "broker-disconnected";
     socket.emit("broker_status", { status: currentBrokerStatus, timestamp: new Date().toISOString() });
     console.log(`[Socket] Sent initial broker_status="${currentBrokerStatus}" to ${socket.id}`);
+
+    // If market data is already ready (first tick already received before this client
+    // connected), immediately send market_ready so the client doesn't wait needlessly.
+    if (_marketReady) {
+      socket.emit("market_ready", { ltp: _marketReadyLtp, symbol: "NIFTY-FUT", timestamp: _marketReadyTs });
+      console.log(`[Socket] Sent market_ready replay to ${socket.id} — ltp=${_marketReadyLtp}`);
+    }
 
     // 1. Join room to receive raw price ticks for a specific symbol
     socket.on("join:symbol", (symbol: string) => {
@@ -105,6 +119,17 @@ export const initSocketServer = (io: Server) => {
 
     // Broadcast raw tick to market room
     ioServer.to(`market:${tick.symbol}`).emit("tick", tick);
+
+    // Emit market_ready once when the first valid NIFTY-FUT tick arrives.
+    // This is the authoritative readiness signal: broker is connected, subscriptions are
+    // active, and live prices are flowing. The frontend auto-generates on receipt.
+    if (!_marketReady && tick.symbol === "NIFTY-FUT" && tick.ltp > 0) {
+      _marketReady = true;
+      _marketReadyLtp = tick.ltp;
+      _marketReadyTs = new Date().toISOString();
+      console.log(`[Socket] ✓ LTP cache populated — first NIFTY-FUT tick: ltp=${tick.ltp} → emitting market_ready`);
+      ioServer.emit("market_ready", { ltp: tick.ltp, symbol: "NIFTY-FUT", timestamp: _marketReadyTs });
+    }
 
     // Broadcast latest computed OI metrics to all clients on every tick ingestion
     const oiMetrics = getLatestModule1OiMetrics();
