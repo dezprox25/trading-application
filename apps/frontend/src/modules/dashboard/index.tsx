@@ -463,10 +463,13 @@ export function Dashboard() {
       const futLtp  = prices["NIFTY-FUT"]?.ltp;
       const spotLtp = prices["NIFTY-SPOT"]?.ltp;
 
+      // No futures price yet — skip this tick entirely; don't build a bar with garbage values
+      if (!futLtp) return;
+
       // Debug: log whenever OI tick index advances (confirms live data is flowing)
       if (oi.tin !== prevOiTin.current) {
         console.log(
-          `[Dashboard] OI tick — tin=${oi.tin} c_tl=${oi.c_tl} p_tl=${oi.p_tl} ` +
+          `[Dashboard] OI tick — tin=${oi.tin} futLtp=${futLtp} c_tl=${oi.c_tl} p_tl=${oi.p_tl} ` +
           `src=${oi.dataSource} window=${new Date(windowStart).toISOString()}`
         );
         prevOiTin.current = oi.tin;
@@ -482,21 +485,25 @@ export function Dashboard() {
 
         console.log(
           `[Dashboard] New window at ${new Date(windowStart).toISOString()} ` +
-          `c_tl=${oi.c_tl} p_tl=${oi.p_tl} rows=${dash.rows.length}`
+          `futLtp=${futLtp} (was using c_tl=${oi.c_tl}) rows=${dash.rows.length}`
         );
 
+        // Use futures LTP as the live OHLC price source — this matches the historical bars
+        // which are built from tick.ltp (futures LTP) via ohlcAggregator → MongoDB → REST API.
+        // Using oi.c_tl/p_tl (option OI totals ~millions) here was the root cause of the
+        // live bar showing 26195 while historical bars correctly showed ~23900.
         barRef.current = {
-          callO: oi.c_tl, callH: oi.c_tl, callL: oi.c_tl, callC: oi.c_tl,
-          putO:  oi.p_tl, putH:  oi.p_tl, putL:  oi.p_tl, putC:  oi.p_tl,
+          callO: futLtp, callH: futLtp, callL: futLtp, callC: futLtp,
+          putO:  futLtp, putH:  futLtp, putL:  futLtp, putC:  futLtp,
           windowStart,
         };
 
-        const callBar:  OHLCBar = { t: windowStart, o: oi.c_tl, h: oi.c_tl, l: oi.c_tl, c: oi.c_tl };
-        const putBar:   OHLCBar = { t: windowStart, o: oi.p_tl, h: oi.p_tl, l: oi.p_tl, c: oi.p_tl };
+        const callBar:  OHLCBar = { t: windowStart, o: futLtp, h: futLtp, l: futLtp, c: futLtp };
+        const putBar:   OHLCBar = { t: windowStart, o: futLtp, h: futLtp, l: futLtp, c: futLtp };
         const callPP   = clientPivot4Bar(callBar).pp;
         const putPP    = clientPivot4Bar(putBar).pp;
-        const fLtp     = futLtp  ?? callBar.c;
-        const sLtp     = spotLtp ?? callBar.c;
+        const fLtp     = futLtp;
+        const sLtp     = spotLtp ?? futLtp;
         const rsiSer   = computeRsiSeries([...prevRsiCloses.current, callBar.c]);
         const rsi      = rsiSer[rsiSer.length - 1] ?? null;
         const nCallMMA = mma(callPP, callBar.h);
@@ -527,21 +534,21 @@ export function Dashboard() {
         });
 
       } else {
-        // Same window — update the active bar in place
+        // Same window — update the active bar in place using futures LTP
         const b = barRef.current;
-        b.callH = Math.max(b.callH, oi.c_tl);
-        b.callL = Math.min(b.callL, oi.c_tl);
-        b.callC = oi.c_tl;
-        b.putH  = Math.max(b.putH,  oi.p_tl);
-        b.putL  = Math.min(b.putL,  oi.p_tl);
-        b.putC  = oi.p_tl;
+        b.callH = Math.max(b.callH, futLtp);
+        b.callL = Math.min(b.callL, futLtp);
+        b.callC = futLtp;
+        b.putH  = Math.max(b.putH,  futLtp);
+        b.putL  = Math.min(b.putL,  futLtp);
+        b.putC  = futLtp;
 
         const callBar:  OHLCBar = { t: b.windowStart, o: b.callO, h: b.callH, l: b.callL, c: b.callC };
         const putBar:   OHLCBar = { t: b.windowStart, o: b.putO,  h: b.putH,  l: b.putL,  c: b.putC  };
         const callPP   = clientPivot4Bar(callBar).pp;
         const putPP    = clientPivot4Bar(putBar).pp;
-        const fLtp     = futLtp  ?? callBar.c;
-        const sLtp     = spotLtp ?? callBar.c;
+        const fLtp     = futLtp;
+        const sLtp     = spotLtp ?? futLtp;
         const rsiSer   = computeRsiSeries([...prevRsiCloses.current, callBar.c]);
         const rsi      = rsiSer[rsiSer.length - 1] ?? null;
         const uCallMMA = mma(callPP, callBar.h);

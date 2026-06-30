@@ -175,17 +175,32 @@ export const refreshInstrumentTokens = async (): Promise<ActiveInstrumentTokens 
       return null;
     }
 
-    // Get current spot price to calculate ATM strike
-    let atmStrike = 24500; // Conservative fallback for cold-start (no Redis yet); overridden below
+    // Get current spot price to calculate ATM strike.
+    // Priority: ltp:NIFTY-SPOT (live cash index) → ltp:NIFTY-FUT (close proxy, persists from
+    // last session even after contract expiry) → hardcoded fallback.
+    // The futures price diverges from spot by at most a few points intraday, making it a
+    // reliable ATM seed when the spot tick hasn't arrived yet on cold-start.
+    let atmStrike = 25500; // Fallback updated to reflect realistic NIFTY range; overridden below
     let atmSource = "fallback-default";
     try {
       const spotStr = await redis.get("ltp:NIFTY-SPOT");
-      if (spotStr && parseFloat(spotStr) > 0) {
-        atmStrike = parseFloat(spotStr);
-        atmSource = "redis-cached";
+      const futStr  = await redis.get("ltp:NIFTY-FUT");
+      const spot = spotStr ? parseFloat(spotStr) : 0;
+      const fut  = futStr  ? parseFloat(futStr)  : 0;
+      if (spot > 0) {
+        atmStrike = spot;
+        atmSource = "redis-spot";
+      } else if (fut > 0) {
+        // Futures price lags spot by at most the fair-value basis (typically <50 pts).
+        // Accurate enough for strike selection at ±1000 radius.
+        atmStrike = fut;
+        atmSource = "redis-futures";
       }
     } catch { /* Redis offline — use default */ }
-    console.log(`[InstrumentTokens] ATM source: ${atmSource} → ${atmStrike}${atmSource === "fallback-default" ? " (WARNING: first login or Redis empty — strikes around 24500, may miss actual ATM)" : ""}`);
+    const atmWarning = atmSource === "fallback-default"
+      ? ` (WARNING: Redis empty — using default ATM ${atmStrike}; if NIFTY has moved >1000pts from here, option selection may miss actual ATM)`
+      : "";
+    console.log(`[InstrumentTokens] ATM source: ${atmSource} → ${atmStrike}${atmWarning}`);
 
     const tokens = buildActiveTokens(rows, atmStrike);
     cachedTokens = tokens;

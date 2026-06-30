@@ -206,44 +206,43 @@ export const getLatestModule1OiMetrics = (): Module1OiMetrics => {
 };
 
 /**
- * Warm up the in-memory CE/PE/Futures maps using last cached values in Redis.
- * Skips the warmup if the stored date does not match today — prevents yesterday's
- * OI values from seeding a stale initial row on the next trading day.
+ * Warm up the futures OI from Redis on server start.
+ *
+ * Option OI is intentionally NOT loaded here. Each option's OI is bound to a specific
+ * weekly contract (e.g., NIFTY03JUL26C26200). Loading option OI from Redis risks
+ * populating ceOiBySymbol/peOiBySymbol with values from expired contracts — keys written
+ * before the TTL fix (setex) have no expiry and persist indefinitely. Expired option OI
+ * would freeze c_tl at a stale value (the root cause of OHLC = 26195/26195/26195/26195).
+ * Option OI will populate from live ticks within seconds of broker connection.
  */
 export const initModule1OiService = async () => {
   try {
-    // Guard: only load cached OI if it was written during today's trading session.
-    // "Today" is measured in UTC date so it aligns with the session boundary (03:45 UTC).
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-    const storedDate = await redis.get("oi:trading_date");
-    if (storedDate !== today) {
-      await redis.set("oi:trading_date", today);
-      console.log(`[Module1OiService] New trading day (${today}). Skipping stale OI warmup — starting clean.`);
-      createOrUpdateLatestRow(new Date());
-      return;
-    }
-
-    const keys = await redis.keys("oi:*");
-    for (const key of keys) {
-      if (key === "oi:trading_date") continue;
-      const val = await redis.get(key);
-      if (val) {
-        const symbol = key.replace("oi:", "");
-        const oi = parseInt(val);
-        if (!isNaN(oi)) {
-          if (symbol.endsWith("CE") || /C\d+$/.test(symbol)) {
-            ceOiBySymbol.set(symbol, oi);
-          } else if (symbol.endsWith("PE") || /P\d+$/.test(symbol)) {
-            peOiBySymbol.set(symbol, oi);
-          } else if (symbol.endsWith("-FUT") || symbol.includes("FUT")) {
-            latestFuturesOi = oi;
-          }
-        }
+    const futOiStr = await redis.get("oi:NIFTY-FUT");
+    if (futOiStr) {
+      const futOi = parseInt(futOiStr);
+      if (!isNaN(futOi) && futOi > 0) {
+        latestFuturesOi = futOi;
+        console.log(`[Module1OiService] Warmed up futures OI from Redis: ${futOi}`);
       }
     }
-    console.log(`[Module1OiService] Loaded ${ceOiBySymbol.size} CE and ${peOiBySymbol.size} PE options from Redis cache on start.`);
     createOrUpdateLatestRow(new Date());
+    console.log("[Module1OiService] Initialized — option OI will populate from live ticks after broker connection.");
   } catch (err) {
     console.warn("[Module1OiService] Redis warmup warning:", err);
   }
+};
+
+/**
+ * Clear all in-memory OI maps and reset the latest row.
+ * Called by dataFeed whenever fresh instrument tokens are applied so that any stale
+ * in-memory OI values (e.g., loaded from Redis warmup for now-expired contracts)
+ * are removed before the new option subscriptions begin streaming.
+ */
+export const resetModule1OiMaps = () => {
+  ceOiBySymbol.clear();
+  peOiBySymbol.clear();
+  latestFuturesOi = 0;
+  latestRow = null;
+  console.log("[Module1OiService] In-memory OI maps reset — stale values cleared, awaiting live ticks.");
+  createOrUpdateLatestRow(new Date());
 };

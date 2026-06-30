@@ -1,7 +1,7 @@
 import redis from "../config/redis";
 import { aggregateOHLC } from "./ohlcAggregator";
 import { Tick } from "@stock/shared";
-import { ingestModule1OiTick, setModule1OiDataSource } from "./module1OiService";
+import { ingestModule1OiTick, setModule1OiDataSource, resetModule1OiMaps } from "./module1OiService";
 import { recordTickReceived } from "./monitoringService";
 import { startZebuMarketDataFeedWithCredentials, setRuntimeInstrumentTokens } from "./zebuMarketDataClient";
 import { broadcastBrokerStatus } from "./socketService";
@@ -117,9 +117,12 @@ export const startDataFeedWithCredentials = async (userId: string, sessionToken:
   const freshTokens = await refreshInstrumentTokens().catch(() => null);
   if (freshTokens) {
     setRuntimeInstrumentTokens(freshTokens.futToken, freshTokens.ceTokens, freshTokens.peTokens);
+    // Purge any stale in-memory OI from warmup (may reference expired contracts whose
+    // Redis keys had no TTL). New values arrive from live ticks within seconds.
+    resetModule1OiMaps();
     console.log(`[DataFeed] Tokens refreshed — futures expiry: ${freshTokens.futExpiry} | option expiry: ${freshTokens.nearestOptionExpiry}`);
   } else {
-    console.warn("[DataFeed] NFO token refresh failed — using .env tokens.");
+    console.warn("[DataFeed] NFO token refresh failed — using .env tokens (check network / NFO URL).");
   }
 
   console.log(`[DataFeed] Starting live feed for user: ${userId}`);
