@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { DashboardRow } from "../../calc";
+import { useStore } from "../../store/useStore";
 
 type PivotMethod = "client" | "classic";
 export type FeedStatus =
@@ -16,18 +17,21 @@ export type FeedStatus =
   | "reconnecting";
 
 interface DashboardStore {
-  // Config selection
+  // Config selection — dependent chain:
+  // Exchange → Instrument → Contract Month → Expiry Date → Strikes
   exchange: string;
   instrument: string;
-  symbol: string;
+  /** Contract month id "YYYY-MM" (display label lives in the fetched ContractMonth model) */
+  contractMonth: string;
   type: "Call" | "Put" | "Call+Put";
   callStrike: number | null;
   putStrike:  number | null;
-  strike:     number | null;
+  /** Expiry stored internally as ISO "YYYY-MM-DD"; formatted for display only */
+  expiryDate: string;
 
   // Generated
   isGenerated:     boolean;
-  generateKey:     number;  // increments on every Generate press to force effect re-run
+  generateKey:     number;
   timeframe:       string;
   customRange:     { from: string; to: string; candleTf: string } | null;
   pivotMethod:     PivotMethod;
@@ -43,15 +47,16 @@ interface DashboardStore {
 
   // Column preferences
   hiddenCols: string[];
+  colOrder:   string[];
 
   // Actions
   setExchange(v: string): void;
   setInstrument(v: string): void;
-  setSymbol(v: string): void;
+  setContractMonth(v: string): void;
   setType(v: "Call" | "Put" | "Call+Put"): void;
   setCallStrike(v: number | null): void;
   setPutStrike(v: number | null): void;
-  setStrike(v: number | null): void;
+  setExpiryDate(v: string): void;
   generate(): void;
   reset(): void;
   clearRows(): void;
@@ -64,6 +69,8 @@ interface DashboardStore {
   setFeedStatus(s: FeedStatus): void;
   setLivePrices(spot: number, future: number): void;
   toggleColumn(id: string): void;
+  setColOrder(order: string[]): void;
+  rehydratePrefs(userId: string): void;
 }
 
 const savedHidden = (): string[] => {
@@ -71,36 +78,55 @@ const savedHidden = (): string[] => {
   catch { return []; }
 };
 
+const savedPivot = (): PivotMethod => {
+  try { return (localStorage.getItem("m1_pivot") ?? "client") as PivotMethod; }
+  catch { return "client"; }
+};
+
+const getUserId = (): string | undefined =>
+  useStore.getState().user?.id as string | undefined;
+
+const scopedKey = (base: string) => {
+  const uid = getUserId();
+  return uid ? `${base}_${uid}` : base;
+};
+
 export const useDashStore = create<DashboardStore>((set, get) => ({
-  exchange: "", instrument: "", symbol: "",
+  exchange: "", instrument: "", contractMonth: "",
   type: "Call+Put",
-  callStrike: null, putStrike: null, strike: null,
+  callStrike: null, putStrike: null,
+  expiryDate: "",
   isGenerated: false,
   generateKey: 0,
-  timeframe: "5m", customRange: null, pivotMethod: "client", configCollapsed: false,
+  timeframe: "5m", customRange: null, pivotMethod: savedPivot(), configCollapsed: false,
   rows: [], feedStatus: "idle",
   spotLtp: null, futureLtp: null, spotDir: null, futureDir: null,
   hiddenCols: savedHidden(),
+  colOrder: [],
 
-  setExchange:   (v) => set({ exchange: v, instrument: "", symbol: "", callStrike: null, putStrike: null, strike: null }),
-  setInstrument: (v) => set({ instrument: v, symbol: "", callStrike: null, putStrike: null, strike: null }),
-  setSymbol:     (v) => set({ symbol: v, callStrike: null, putStrike: null, strike: null }),
-  setType:       (v) => set({ type: v }),
-  setCallStrike: (v) => set({ callStrike: v }),
-  setPutStrike:  (v) => set({ putStrike: v }),
-  setStrike:     (v) => set({ strike: v }),
+  // Changing a parent selection resets every dependent selection below it.
+  setExchange:      (v) => set({ exchange: v, instrument: "", contractMonth: "", expiryDate: "", callStrike: null, putStrike: null }),
+  setInstrument:    (v) => set({ instrument: v, contractMonth: "", expiryDate: "", callStrike: null, putStrike: null }),
+  setContractMonth: (v) => set({ contractMonth: v, expiryDate: "", callStrike: null, putStrike: null }),
+  setType:          (v) => set({ type: v }),
+  setCallStrike:    (v) => set({ callStrike: v }),
+  setPutStrike:     (v) => set({ putStrike: v }),
+  // Expiry change reloads strikes (ConfigRow prunes selections no longer valid)
+  setExpiryDate:    (v) => set({ expiryDate: v }),
   generate:      ()  => set((s) => ({ isGenerated: true, rows: [], generateKey: s.generateKey + 1 })),
   reset:         ()  => set({ isGenerated: false, rows: [], feedStatus: "idle" }),
   clearRows:     ()  => set({ rows: [] }),
   setTimeframe:  (tf) => set({ timeframe: tf }),
   setCustomRange: (r) => set({ customRange: r }),
-  setPivotMethod: (m) => set({ pivotMethod: m }),
+
+  setPivotMethod: (m) => {
+    try { localStorage.setItem(scopedKey("m1_pivot"), m); } catch { /* noop */ }
+    set({ pivotMethod: m });
+  },
+
   toggleConfigCollapsed: () => set((s) => ({ configCollapsed: !s.configCollapsed })),
 
   appendRow: (row) => set((s) => {
-    // Deduplication guard: never append a row whose timestamp already exists as the
-    // last entry — protects against a race where Effect 1 and Effect 2 both try to
-    // create the current-window row in the same JS tick.
     if (s.rows.length > 0 && s.rows[s.rows.length - 1].t === row.t) {
       console.warn(`[Dashboard] appendRow deduped t=${row.t} — already last row`);
       return {};
@@ -126,7 +152,25 @@ export const useDashStore = create<DashboardStore>((set, get) => ({
   toggleColumn: (id) => {
     const current = get().hiddenCols;
     const hidden  = current.includes(id) ? current.filter(c => c !== id) : [...current, id];
-    try { localStorage.setItem("m1_cols", JSON.stringify(hidden)); } catch { /* noop */ }
+    try { localStorage.setItem(scopedKey("m1_cols"), JSON.stringify(hidden)); } catch { /* noop */ }
     set({ hiddenCols: hidden });
+  },
+
+  setColOrder: (order) => {
+    try { localStorage.setItem(scopedKey("m1_col_order"), JSON.stringify(order)); } catch { /* noop */ }
+    set({ colOrder: order });
+  },
+
+  rehydratePrefs: (userId: string) => {
+    try {
+      const colsKey  = `m1_cols_${userId}`;
+      const pivotKey = `m1_pivot_${userId}`;
+      const orderKey = `m1_col_order_${userId}`;
+      // Fall back to unscoped keys for migration
+      const savedCols  = JSON.parse(localStorage.getItem(colsKey)  ?? localStorage.getItem("m1_cols")  ?? "[]") as string[];
+      const savedPiv   = (localStorage.getItem(pivotKey) ?? localStorage.getItem("m1_pivot") ?? "client") as PivotMethod;
+      const savedOrder = JSON.parse(localStorage.getItem(orderKey) ?? "[]") as string[];
+      set({ hiddenCols: savedCols, pivotMethod: savedPiv, colOrder: savedOrder });
+    } catch { /* noop */ }
   },
 }));

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { register, login, refresh, logout, me } from "../controllers/auth";
+import { register, login, refresh, logout, me, verifyOtp } from "../controllers/auth";
 import { module1BrokerLogin, module2BrokerLogin } from "../controllers/brokerAuth";
 import { authenticate } from "../middleware/auth";
 
@@ -15,11 +15,12 @@ const authRateLimiter = rateLimit({
 });
 
 // Application auth
-router.post("/register", authRateLimiter, register);
-router.post("/login",    authRateLimiter, login);
-router.post("/refresh",  refresh);
-router.post("/logout",   authenticate, logout);
-router.get("/me",        authenticate, me);
+router.post("/register",    authRateLimiter, register);
+router.post("/login",       authRateLimiter, login);
+router.post("/verify-otp",  authRateLimiter, verifyOtp);
+router.post("/refresh",     refresh);
+router.post("/logout",      authenticate, logout);
+router.get("/me",           authenticate, me);
 
 // Broker auth — standalone (no app JWT required, rate-limited)
 router.post("/module1-broker-login", authRateLimiter, module1BrokerLogin);

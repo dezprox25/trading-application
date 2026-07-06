@@ -180,7 +180,7 @@ export const resolveOptionStrikeToken = async (
     if (error?.response?.status === 401) {
       console.warn("[AetramMD] Session expired (401) during instrument lookup.");
       clearAetramSession();
-      broadcastBrokerStatus("session-expired", "Broker session expired. Please login again.");
+      broadcastBrokerStatus("session-expired", "Broker session expired. Please login again.", "module2");
     } else {
       console.error(`[AetramMD] Instrument lookup error for ${strikeSymbol}:`, error?.message || error);
     }
@@ -218,7 +218,7 @@ export const subscribeToInstruments = async (
     if (error?.response?.status === 401) {
       console.warn("[AetramMD] Session expired (401) during subscription.");
       clearAetramSession();
-      broadcastBrokerStatus("session-expired", "Broker session expired. Please login again.");
+      broadcastBrokerStatus("session-expired", "Broker session expired. Please login again.", "module2");
     } else {
       console.error("[AetramMD] Subscription request failed:", error?.message || error);
     }
@@ -253,6 +253,8 @@ const handleOiTick = async (tick: any) => {
 /**
  * Establish WebSocket / Socket.IO connection.
  * Disconnects any existing socket before creating a new one.
+ * Returns true if the socket connected within the 12-second timeout,
+ * false if the initial attempt timed out (reconnection still runs in background).
  */
 export const connectToAetramWebSocket = async (): Promise<boolean> => {
   if (!sessionToken || !userID) {
@@ -280,6 +282,9 @@ export const connectToAetramWebSocket = async (): Promise<boolean> => {
 
   console.log(`[AetramMD] Connecting Socket.IO client to ${host}...`);
 
+  // Use polling first so the connection can be established through proxies and
+  // load-balancers that may not support direct WebSocket upgrades. Once the
+  // handshake succeeds over polling, Socket.IO upgrades to WebSocket automatically.
   socket = io(host, {
     path: "/apibinarymarketdata/socket.io",
     query: {
@@ -288,16 +293,17 @@ export const connectToAetramWebSocket = async (): Promise<boolean> => {
       apiType: "MARKETDATA",
       publishFormat: "JSON",
     },
-    transports: ["websocket"],
+    transports: ["polling", "websocket"],
     reconnection: true,
-    reconnectionDelay: 2000,
-    reconnectionAttempts: Infinity,
+    reconnectionDelay: 3000,
+    reconnectionAttempts: 10,
   });
 
+  // Persistent connect handler — fires on initial connect AND every reconnect.
   socket.on("connect", async () => {
     socketConnected = true;
     console.log("[AetramMD] Socket connected.");
-    broadcastBrokerStatus("live");
+    broadcastBrokerStatus("live", undefined, "module2");
     if (_onReconnectFn) {
       try { await _onReconnectFn(); } catch (err: any) {
         console.error("[AetramMD] Reconnect callback error:", err?.message || err);
@@ -308,7 +314,7 @@ export const connectToAetramWebSocket = async (): Promise<boolean> => {
   socket.on("connect_error", (error: Error) => {
     socketConnected = false;
     console.error("[AetramMD] Socket connection error:", error.message);
-    broadcastBrokerStatus("reconnecting", "Lost connection to broker. Reconnecting...");
+    broadcastBrokerStatus("reconnecting", "Lost connection to broker. Reconnecting...", "module2");
   });
 
   socket.on("1512-json-full", handleLtpTick);
@@ -319,10 +325,30 @@ export const connectToAetramWebSocket = async (): Promise<boolean> => {
   socket.on("disconnect", (reason: string) => {
     socketConnected = false;
     console.warn(`[AetramMD] Socket disconnected: ${reason}`);
-    broadcastBrokerStatus("broker-disconnected", "Lost connection to broker. Reconnecting...");
+    if (reason !== "io client disconnect") {
+      // Only broadcast disconnected for unintentional disconnects — not when we
+      // call socket.disconnect() ourselves (e.g. on re-login).
+      broadcastBrokerStatus("broker-disconnected", "Lost connection to broker. Reconnecting...", "module2");
+    }
   });
 
-  return true;
+  // Wait up to 12 seconds for the initial connection to be established.
+  // The persistent handlers above remain active for the lifetime of the socket.
+  const connected = await new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => {
+      console.warn("[AetramMD] Initial connection timed out — socket reconnection running in background.");
+      resolve(false);
+    }, 12000);
+
+    socket!.once("connect", () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+    // connect_error is handled by the persistent handler above.
+    // The timer will resolve(false) after 12 seconds if no connection is made.
+  });
+
+  return connected;
 };
 
 /**

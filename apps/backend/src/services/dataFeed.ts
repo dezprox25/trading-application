@@ -1,13 +1,41 @@
-import redis from "../config/redis";
+import { bufferSet, bufferSetex } from "./redisWriteBuffer";
 import { aggregateOHLC } from "./ohlcAggregator";
 import { Tick } from "@stock/shared";
 import { ingestModule1OiTick, setModule1OiDataSource, resetModule1OiMaps } from "./module1OiService";
 import { recordTickReceived } from "./monitoringService";
-import { startZebuMarketDataFeedWithCredentials, setRuntimeInstrumentTokens } from "./zebuMarketDataClient";
-import { broadcastBrokerStatus } from "./socketService";
-import { refreshInstrumentTokens } from "./instrumentTokenService";
+import {
+  startZebuMarketDataFeedWithCredentials, setRuntimeInstrumentTokens,
+  parseInstrumentEnv, ZebuInstrument,
+} from "./zebuMarketDataClient";
+import { broadcastBrokerStatus, resetMarketReady } from "./socketService";
+import { refreshInstrumentTokens, recomputeOptionBandFromLivePrice } from "./instrumentTokenService";
 
-let zebuClient: { close: () => void } | null = null;
+let zebuClient: { close: () => void; subscribeTokens?: (instruments: ZebuInstrument[]) => void } | null = null;
+
+// True once the ATM band used at connect time was seeded from a real Redis price rather
+// than the hardcoded fallback (see instrumentTokenService.ts). When false, the very first
+// genuine NIFTY-SPOT/NIFTY-FUT tick this session triggers a one-time ATM-band recompute +
+// runtime subscribe, so the user's actual strikes get picked up without a reconnect.
+let atmIsReliableAtConnect = true;
+let atmBandRecomputed = false;
+
+/**
+ * Subscribes additional option tokens on the live Zebu connection. Used by the on-demand
+ * `subscribe:options` socket handler and the first-tick ATM-band recompute below. No-op
+ * (logged) if there's no active connection yet — the request is simply not actionable until
+ * a broker session exists.
+ */
+export const subscribeOptionTokens = (tokens: { exchange: string; token: string; symbol: string }[]) => {
+  if (tokens.length === 0) return;
+  if (!zebuClient?.subscribeTokens) {
+    console.warn(`[DataFeed] subscribeOptionTokens called with no active feed connection — dropped: ${tokens.map(t => t.symbol).join(", ")}`);
+    return;
+  }
+  const instruments: ZebuInstrument[] = tokens.map(t => ({
+    key: `${t.exchange}|${t.token}`, exchange: t.exchange, token: t.token, symbol: t.symbol,
+  }));
+  zebuClient.subscribeTokens(instruments);
+};
 
 type TickCallback = (tick: Tick) => void;
 let onTickReceived: TickCallback | null = null;
@@ -53,13 +81,13 @@ const handleFeedDisconnect = (reason: string, gen: number) => {
 
   if (!storedUserId || !storedSessionToken) {
     console.warn("[DataFeed] No stored credentials — cannot reconnect.");
-    broadcastBrokerStatus("broker-disconnected", reason);
+    broadcastBrokerStatus("broker-disconnected", reason, "module1");
     return;
   }
 
   if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
     console.warn(`[DataFeed] Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached. Stopping.`);
-    broadcastBrokerStatus("broker-disconnected", "Max reconnection attempts exceeded");
+    broadcastBrokerStatus("broker-disconnected", "Max reconnection attempts exceeded", "module1");
     storedUserId = null;
     storedSessionToken = null;
     return;
@@ -68,7 +96,7 @@ const handleFeedDisconnect = (reason: string, gen: number) => {
   const delay = RECONNECT_BASE_DELAY_MS * Math.pow(2, reconnectAttempts);
   reconnectAttempts++;
   console.log(`[DataFeed] Reconnecting in ${delay}ms (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})…`);
-  broadcastBrokerStatus("reconnecting", `Attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}`);
+  broadcastBrokerStatus("reconnecting", `Attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}`, "module1");
 
   reconnectTimer = setTimeout(async () => {
     if (!storedUserId || !storedSessionToken) return;
@@ -87,7 +115,7 @@ const handleSessionExpired = (gen: number) => {
   clearReconnectTimer();
   setModule1OiDataSource("SIMULATOR");
   console.warn("[DataFeed] Broker session expired — user must re-authenticate.");
-  broadcastBrokerStatus("session-expired", "Broker session expired. Please reconnect.");
+  broadcastBrokerStatus("session-expired", "Broker session expired. Please reconnect.", "module1");
 };
 
 /**
@@ -112,6 +140,15 @@ export const startDataFeedWithCredentials = async (userId: string, sessionToken:
   sessionExpired = false;
   reconnectAttempts = 0;
 
+  // Clear stale market_ready flag from any previous session. Without this a
+  // newly connected frontend socket receives a replay that sets marketDataReady=true
+  // before any real ticks exist, triggering auto-generate against empty OHLC.
+  resetMarketReady();
+
+  // Reset the ATM-band recompute latch for this connection — see declaration above.
+  atmIsReliableAtConnect = true;
+  atmBandRecomputed = false;
+
   // Always refresh instrument tokens before connecting (handles weekly/monthly expiry)
   console.log("[DataFeed] Refreshing instrument tokens from NFO master...");
   const freshTokens = await refreshInstrumentTokens().catch(() => null);
@@ -120,6 +157,10 @@ export const startDataFeedWithCredentials = async (userId: string, sessionToken:
     // Purge any stale in-memory OI from warmup (may reference expired contracts whose
     // Redis keys had no TTL). New values arrive from live ticks within seconds.
     resetModule1OiMaps();
+    atmIsReliableAtConnect = freshTokens.atmIsReliable;
+    if (!atmIsReliableAtConnect) {
+      console.warn("[DataFeed] ATM band was seeded from a stale fallback at connect time — will recompute from the first real spot/futures tick.");
+    }
     console.log(`[DataFeed] Tokens refreshed — futures expiry: ${freshTokens.futExpiry} | option expiry: ${freshTokens.nearestOptionExpiry}`);
   } else {
     console.warn("[DataFeed] NFO token refresh failed — using .env tokens (check network / NFO URL).");
@@ -141,7 +182,7 @@ export const startDataFeedWithCredentials = async (userId: string, sessionToken:
       // Called when the Zebu WebSocket actually connects and the handshake is sent.
       // Only broadcast "live" at this point — not prematurely.
       console.log("[DataFeed] Zebu WS open — broadcasting live status");
-      broadcastBrokerStatus("live");
+      broadcastBrokerStatus("live", undefined, "module1");
     },
   );
 };
@@ -162,12 +203,14 @@ export const stopDataFeed = () => {
     zebuClient = null;
   }
   setModule1OiDataSource("SIMULATOR");
+  resetMarketReady();
 };
 
 // ── Tick processing ───────────────────────────────────────────────────────────
 
 let _totalTickCount = 0;
 let _firstTickLogged = false;
+let _lastTradingDateWritten = "";
 
 export const processIncomingTick = async (tick: Tick) => {
   const { symbol, ltp, oi } = tick;
@@ -185,18 +228,48 @@ export const processIncomingTick = async (tick: Tick) => {
 
   recordTickReceived();
 
-  await redis.set(`ltp:${symbol}`, ltp.toString());
+  // Phase 6: coalesced, non-blocking Redis writes — the buffer flushes the latest
+  // value per key in one pipelined request every 500ms instead of issuing 2-3
+  // awaited REST calls per tick (the Phase 5 OOM root cause).
+  bufferSet(`ltp:${symbol}`, ltp.toString());
 
   if (oi !== undefined) {
     // 25-hour TTL ensures keys expire overnight so next-day warmup never loads stale OI
-    await redis.setex(`oi:${symbol}`, 90000, oi.toString());
-    // Keep the trading-date marker current so OiService warmup guard stays accurate
-    await redis.set("oi:trading_date", new Date().toISOString().slice(0, 10));
+    bufferSetex(`oi:${symbol}`, 90000, oi.toString());
+    // Keep the trading-date marker current so OiService warmup guard stays accurate.
+    // Same-value rewrites are deduped here — it only actually changes once per day.
+    const tradingDate = new Date().toISOString().slice(0, 10);
+    if (tradingDate !== _lastTradingDateWritten) {
+      _lastTradingDateWritten = tradingDate;
+      bufferSet("oi:trading_date", tradingDate);
+    }
   }
 
   ingestModule1OiTick(tick);
 
-  if (symbol.endsWith("-FUT") || symbol.includes("FUT")) {
+  // Aggregate OHLC bars for futures, NIFTY-SPOT index, and option premiums.
+  // Option symbols: e.g. NIFTY03JUL26C26200 / NIFTY03JUL26P26200
+  const isFut  = symbol.endsWith("-FUT") || symbol.includes("FUT");
+  const isSpot = symbol === "NIFTY-SPOT";
+  const isOpt  = symbol.startsWith("NIFTY") && /[CP]\d+$/.test(symbol);
+
+  // One-time ATM-band recompute: if the option strikes were selected off a stale fallback
+  // at connect time (Redis empty on cold start), the first genuine spot/futures price this
+  // session tells us the REAL ATM — recompute the band and subscribe those strikes now,
+  // instead of waiting for the user to reconnect. See instrumentTokenService.ts.
+  if (!atmBandRecomputed && !atmIsReliableAtConnect && (isSpot || isFut) && ltp > 0) {
+    atmBandRecomputed = true; // set before the async call so a burst of ticks can't double-fire
+    const band = recomputeOptionBandFromLivePrice(ltp);
+    if (band && (band.ceTokens.length > 0 || band.peTokens.length > 0)) {
+      const instruments = parseInstrumentEnv([...band.ceTokens, ...band.peTokens].join(","));
+      console.log(`[DataFeed] ATM band recomputed from ${symbol}=${ltp} — subscribing ${instruments.length} option token(s).`);
+      subscribeOptionTokens(instruments.map(i => ({ exchange: i.exchange, token: i.token, symbol: i.symbol })));
+    } else {
+      console.warn(`[DataFeed] ATM band recompute from ${symbol}=${ltp} produced no tokens — NFO master may not be cached yet.`);
+    }
+  }
+
+  if (isFut || isSpot || isOpt) {
     await aggregateOHLC(tick,   1,   "1m");
     await aggregateOHLC(tick,   2,   "2m");
     await aggregateOHLC(tick,   3,   "3m");

@@ -4,6 +4,7 @@ import { api } from "../utils/api";
 import { LoginSchema } from "@stock/shared";
 
 const GREEN = "#047857";
+const OTP_ENABLED = import.meta.env.VITE_APP_OTP_ENABLED === "true";
 
 export const Auth: React.FC = () => {
   const setAuth = useStore((s) => s.setAuth);
@@ -15,6 +16,13 @@ export const Auth: React.FC = () => {
   const [serverError, setServerError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+
+  // OTP step state
+  const [otpStep, setOtpStep]         = useState(false);
+  const [loginToken, setLoginToken]   = useState("");
+  const [otp, setOtp]                 = useState("");
+  const [otpError, setOtpError]       = useState("");
+  const [otpLoading, setOtpLoading]   = useState(false);
 
   const handleLogin = useCallback(
     async (e: React.FormEvent) => {
@@ -36,6 +44,15 @@ export const Auth: React.FC = () => {
       setIsLoading(true);
       try {
         const response = await api.post("/auth/login", { username, password }, { skipAuth: true });
+
+        // C-3: if backend signals OTP required (and frontend flag enabled) → show OTP step
+        if (OTP_ENABLED && response.otpRequired && response.loginToken) {
+          setLoginToken(response.loginToken);
+          setOtpStep(true);
+          setIsLoading(false);
+          return;
+        }
+
         setIsSuccess(true);
         setTimeout(() => setAuth(response.user, response.accessToken), 800);
       } catch (err: any) {
@@ -44,6 +61,29 @@ export const Auth: React.FC = () => {
       }
     },
     [username, password, setAuth]
+  );
+
+  const handleVerifyOtp = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      setOtpError("");
+
+      if (!otp.trim()) {
+        setOtpError("Please enter the OTP.");
+        return;
+      }
+
+      setOtpLoading(true);
+      try {
+        const response = await api.post("/auth/verify-otp", { loginToken, otp }, { skipAuth: true });
+        setIsSuccess(true);
+        setTimeout(() => setAuth(response.user, response.accessToken), 800);
+      } catch (err: any) {
+        setOtpLoading(false);
+        setOtpError(err?.message || "Invalid OTP. Please try again.");
+      }
+    },
+    [otp, loginToken, setAuth]
   );
 
   return (
@@ -117,7 +157,6 @@ export const Auth: React.FC = () => {
             overflow: "hidden",
           }}
         >
-          {/* Accent bar */}
           <div style={{ height: 4, background: `linear-gradient(90deg, ${GREEN}, #10b981)` }} />
 
           <div style={{ padding: "40px 40px 36px" }}>
@@ -141,18 +180,6 @@ export const Auth: React.FC = () => {
                 </p>
               </div>
             </div>
-
-            {/* Heading */}
-            {!isSuccess && (
-              <div style={{ marginBottom: 24 }}>
-                <div style={{ fontSize: 17, fontWeight: 800, color: "#0f172a", letterSpacing: "-0.01em", marginBottom: 4 }}>
-                  Application Sign In
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 500, color: "#64748b" }}>
-                  Enter your credentials to access the dashboard.
-                </div>
-              </div>
-            )}
 
             {/* ── SUCCESS ── */}
             {isSuccess ? (
@@ -178,83 +205,150 @@ export const Auth: React.FC = () => {
                 </p>
               </div>
 
+            ) : otpStep ? (
+              /* ── OTP STEP (C-3) ── */
+              <>
+                <div style={{ marginBottom: 24 }}>
+                  <div style={{ fontSize: 17, fontWeight: 800, color: "#0f172a", letterSpacing: "-0.01em", marginBottom: 4 }}>
+                    Verification Code
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: "#64748b" }}>
+                    Enter the one-time password to complete sign-in.
+                  </div>
+                </div>
+
+                <form onSubmit={handleVerifyOtp} noValidate style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+                  <div>
+                    <label style={{
+                      display: "block", fontSize: 11, fontWeight: 600, color: "#64748b",
+                      textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6,
+                    }}>
+                      OTP
+                    </label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={otp}
+                      onChange={(e) => setOtp(e.target.value)}
+                      placeholder="Enter OTP"
+                      autoComplete="one-time-code"
+                      disabled={otpLoading}
+                      className={`auth-input${otpError ? " err" : ""}`}
+                      autoFocus
+                    />
+                    {otpError && (
+                      <p style={{ margin: "6px 0 0", fontSize: 12, fontWeight: 500, color: "#ef4444" }}>
+                        {otpError}
+                      </p>
+                    )}
+                  </div>
+
+                  <button type="submit" disabled={otpLoading} className="auth-btn">
+                    {otpLoading && <span className="auth-spinner" />}
+                    {otpLoading ? "Verifying…" : "Verify OTP"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => { setOtpStep(false); setOtp(""); setOtpError(""); }}
+                    style={{
+                      background: "none", border: "none", cursor: "pointer",
+                      fontSize: 13, fontWeight: 500, color: "#64748b", padding: 0,
+                    }}
+                  >
+                    ← Back to sign in
+                  </button>
+                </form>
+              </>
+
             ) : (
               /* ── SIGN IN FORM ── */
-              <form onSubmit={handleLogin} noValidate style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-
-                <div>
-                  <label style={{
-                    display: "block", fontSize: 11, fontWeight: 600, color: "#64748b",
-                    textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6,
-                  }}>
-                    Username
-                  </label>
-                  <input
-                    type="text"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    placeholder="Enter username"
-                    autoComplete="username"
-                    disabled={isLoading}
-                    className={`auth-input${errors.username ? " err" : ""}`}
-                  />
-                  {errors.username && (
-                    <p style={{ margin: "6px 0 0", fontSize: 12, fontWeight: 500, color: "#ef4444" }}>
-                      {errors.username}
-                    </p>
-                  )}
+              <>
+                <div style={{ marginBottom: 24 }}>
+                  <div style={{ fontSize: 17, fontWeight: 800, color: "#0f172a", letterSpacing: "-0.01em", marginBottom: 4 }}>
+                    Application Sign In
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: "#64748b" }}>
+                    Enter your credentials to access the dashboard.
+                  </div>
                 </div>
 
-                <div>
-                  <label style={{
-                    display: "block", fontSize: 11, fontWeight: 600, color: "#64748b",
-                    textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6,
-                  }}>
-                    Password
-                  </label>
-                  <div className="auth-pw-wrap">
+                <form onSubmit={handleLogin} noValidate style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+
+                  <div>
+                    <label style={{
+                      display: "block", fontSize: 11, fontWeight: 600, color: "#64748b",
+                      textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6,
+                    }}>
+                      Username
+                    </label>
                     <input
-                      type={showPassword ? "text" : "password"}
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="Enter password"
-                      autoComplete="current-password"
+                      type="text"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      placeholder="Enter username"
+                      autoComplete="username"
                       disabled={isLoading}
-                      className={`auth-input${errors.password ? " err" : ""}`}
+                      className={`auth-input${errors.username ? " err" : ""}`}
                     />
-                    <button
-                      type="button"
-                      className="auth-pw-toggle"
-                      onClick={() => setShowPassword((v) => !v)}
-                      tabIndex={-1}
-                    >
-                      {showPassword ? "Hide" : "Show"}
-                    </button>
+                    {errors.username && (
+                      <p style={{ margin: "6px 0 0", fontSize: 12, fontWeight: 500, color: "#ef4444" }}>
+                        {errors.username}
+                      </p>
+                    )}
                   </div>
-                  {errors.password && (
-                    <p style={{ margin: "6px 0 0", fontSize: 12, fontWeight: 500, color: "#ef4444" }}>
-                      {errors.password}
-                    </p>
+
+                  <div>
+                    <label style={{
+                      display: "block", fontSize: 11, fontWeight: 600, color: "#64748b",
+                      textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6,
+                    }}>
+                      Password
+                    </label>
+                    <div className="auth-pw-wrap">
+                      <input
+                        type={showPassword ? "text" : "password"}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="Enter password"
+                        autoComplete="current-password"
+                        disabled={isLoading}
+                        className={`auth-input${errors.password ? " err" : ""}`}
+                      />
+                      <button
+                        type="button"
+                        className="auth-pw-toggle"
+                        onClick={() => setShowPassword((v) => !v)}
+                        tabIndex={-1}
+                      >
+                        {showPassword ? "Hide" : "Show"}
+                      </button>
+                    </div>
+                    {errors.password && (
+                      <p style={{ margin: "6px 0 0", fontSize: 12, fontWeight: 500, color: "#ef4444" }}>
+                        {errors.password}
+                      </p>
+                    )}
+                  </div>
+
+                  {serverError && (
+                    <div style={{
+                      padding: "12px 14px", borderRadius: 8,
+                      background: "rgba(239,68,68,0.06)",
+                      border: "1.5px solid rgba(239,68,68,0.2)",
+                      fontSize: 13, fontWeight: 500, color: "#dc2626",
+                    }}>
+                      {serverError}
+                    </div>
                   )}
-                </div>
 
-                {serverError && (
-                  <div style={{
-                    padding: "12px 14px", borderRadius: 8,
-                    background: "rgba(239,68,68,0.06)",
-                    border: "1.5px solid rgba(239,68,68,0.2)",
-                    fontSize: 13, fontWeight: 500, color: "#dc2626",
-                  }}>
-                    {serverError}
-                  </div>
-                )}
+                  <button type="submit" disabled={isLoading} className="auth-btn">
+                    {isLoading && <span className="auth-spinner" />}
+                    {isLoading ? "Signing in…" : "Sign In"}
+                  </button>
 
-                <button type="submit" disabled={isLoading} className="auth-btn">
-                  {isLoading && <span className="auth-spinner" />}
-                  {isLoading ? "Signing in…" : "Sign In"}
-                </button>
-
-              </form>
+                </form>
+              </>
             )}
 
             <p style={{

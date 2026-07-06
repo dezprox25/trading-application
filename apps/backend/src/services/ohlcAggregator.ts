@@ -148,13 +148,115 @@ export const aggregateOHLC = async (tick: Tick, timeframeMinutes: number, timefr
   }
 
   activeCandles[symbol][timeframeStr] = candle;
+
   return candle;
 };
 
 const finalizedCandlesCache: Record<string, Record<string, Candle[]>> = {};
 
+// ── Phase 6: persistence moved off the tick hot path ─────────────────────────
+//
+// finaliseCandle used to await a Mongo upsert + deleteMany per candle, inside
+// the tick-processing chain. At each 1m boundary that meant a burst of hundreds
+// of concurrent Mongo ops (84 symbols × upsert + prune + 3 pivot inserts) racing
+// with the Upstash flood — see PHASE5_VALIDATION_REPORT.md §9. Candles are now
+// queued and drained by a single serialized worker: one bulkWrite per drain,
+// session pruning at most once per (symbol,timeframe) per session, and the
+// pivot callback still fires once per finalized candle (serially, so Mongo
+// concurrency stays bounded). Bar values and finalize triggers are unchanged.
+
+const persistQueue: Candle[] = [];
+let draining = false;
+// Tracks the session-open ms already pruned per "symbol|timeframe" so the
+// deleteMany cleanup runs once per pair per session instead of per candle.
+const prunedSessions = new Map<string, number>();
+let _persistErrCount = 0;
+let _persistErrLastLog = 0;
+
+const sessionOpenForCandle = (openTimeMs: number): number => {
+  const sessionOpen = new Date(openTimeMs);
+  sessionOpen.setUTCHours(3, 45, 0, 0); // 09:15 IST
+  if (sessionOpen.getTime() > openTimeMs) {
+    sessionOpen.setUTCDate(sessionOpen.getUTCDate() - 1);
+  }
+  return sessionOpen.getTime();
+};
+
+const drainPersistQueue = async () => {
+  if (draining) return;
+  draining = true;
+  try {
+    while (persistQueue.length > 0) {
+      const batch = persistQueue.splice(0, persistQueue.length);
+
+      // 1. One bulk upsert for the whole batch (same doc shape/filter as the
+      //    previous per-candle findOneAndUpdate upsert).
+      try {
+        await FuturesOHLC.bulkWrite(
+          batch.map(c => ({
+            updateOne: {
+              filter: { symbol: c.symbol, timeframe: c.timeframe, bar_time: new Date(c.openTime) },
+              update: {
+                $set: {
+                  bar_open: c.open, bar_high: c.high, bar_low: c.low,
+                  bar_close: c.close, volume: c.volume,
+                },
+              },
+              upsert: true,
+            },
+          })),
+          { ordered: false }
+        );
+        console.log(`[OHLC] Persisted ${batch.length} finalized candle(s) in one bulk write.`);
+      } catch (error: any) {
+        _persistErrCount++;
+        const now = Date.now();
+        if (now - _persistErrLastLog > 30_000) {
+          _persistErrLastLog = now;
+          console.error(`[OHLC] Bulk persist failed (${_persistErrCount} failure(s) so far, in-memory cache unaffected): ${error?.message || error}`);
+        }
+      }
+
+      // 2. Session pruning — once per (symbol,timeframe) per session day.
+      for (const c of batch) {
+        const key = `${c.symbol}|${c.timeframe}`;
+        const sessionOpenMs = sessionOpenForCandle(c.openTime);
+        if (prunedSessions.get(key) === sessionOpenMs) continue;
+        prunedSessions.set(key, sessionOpenMs);
+        try {
+          await FuturesOHLC.deleteMany({
+            symbol: c.symbol,
+            timeframe: c.timeframe,
+            bar_time: { $lt: new Date(sessionOpenMs) },
+          });
+        } catch { /* retried next session; cache-side filtering already excludes old bars */ }
+      }
+
+      // 3. Pivot recalculation per finalized candle — unchanged semantics,
+      //    now serialized so Mongo insert concurrency stays bounded.
+      if (onCandleFinalized) {
+        for (const c of batch) {
+          try {
+            await onCandleFinalized(c);
+          } catch (err: any) {
+            _persistErrCount++;
+            const now = Date.now();
+            if (now - _persistErrLastLog > 30_000) {
+              _persistErrLastLog = now;
+              console.error(`[OHLC] onCandleFinalized failed (${_persistErrCount} failure(s) so far): ${err?.message || err}`);
+            }
+          }
+        }
+      }
+    }
+  } finally {
+    draining = false;
+  }
+};
+
 /**
- * Saves finalized candle to MongoDB and triggers callback
+ * Records a finalized candle in the in-memory cache (synchronously — readers see
+ * it immediately) and queues it for background persistence + pivot recalc.
  */
 const finaliseCandle = async (candle: Candle) => {
   const { symbol, timeframe } = candle;
@@ -172,48 +274,9 @@ const finaliseCandle = async (candle: Candle) => {
     }
   }
 
-  try {
-    await FuturesOHLC.findOneAndUpdate(
-      {
-        symbol: candle.symbol,
-        timeframe: candle.timeframe,
-        bar_time: new Date(candle.openTime),
-      },
-      {
-        bar_open: candle.open,
-        bar_high: candle.high,
-        bar_low: candle.low,
-        bar_close: candle.close,
-        volume: candle.volume,
-      },
-      { upsert: true, new: true }
-    );
-
-    console.log(`[OHLC] Finalized/Updated ${candle.timeframe} candle for ${candle.symbol} at ${new Date(candle.openTime).toISOString()}`);
-
-    // Prune candles from previous trading sessions (before today's 09:15 IST = 03:45 UTC)
-    const sessionOpen = new Date(candle.openTime);
-    sessionOpen.setUTCHours(3, 45, 0, 0); // 09:15 IST
-    if (sessionOpen.getTime() > candle.openTime) {
-      sessionOpen.setUTCDate(sessionOpen.getUTCDate() - 1);
-    }
-    await FuturesOHLC.deleteMany({
-      symbol: candle.symbol,
-      timeframe: candle.timeframe,
-      bar_time: { $lt: sessionOpen },
-    });
-  } catch (error) {
-    console.error("Failed to finalize candle in database:", error);
-  }
-
-  // Trigger callback even if DB save fails
-  if (onCandleFinalized) {
-    try {
-      await onCandleFinalized(candle);
-    } catch (err) {
-      console.error("Error in onCandleFinalized callback:", err);
-    }
-  }
+  persistQueue.push(candle);
+  // Fire-and-forget: the worker single-flights, so concurrent calls coalesce.
+  void drainPersistQueue();
 };
 
 /**

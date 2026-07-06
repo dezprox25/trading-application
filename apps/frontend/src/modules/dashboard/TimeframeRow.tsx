@@ -4,68 +4,96 @@ import { useDashStore } from "./store";
 const TFS_MIN = ["1m", "2m", "3m", "5m", "10m", "15m", "30m", "45m"];
 const TFS_HR  = ["1h", "2h", "3h", "4h"];
 
+// Ordered list of all toggleable column IDs — matches Worksheet ALL_COLS order (v2 31-col spec).
 const ALL_COL_IDS = [
-  "date","time",
-  "ce-o","ce-h","ce-l","ce-c","call-pp",
-  "pe-o","pe-h","pe-l","pe-c","put-pp",
-  "future","spot","rating",
-  "mma-c","mma-p","tla-c","tla-p",
-  "smc","fib","rsi",
+  // Date & Time (1 frozen)
+  "datetime",
+  // Call (6)
+  "ce-o", "ce-h", "ce-l", "ce-c", "mma-c", "tla-c",
+  // Put (6)
+  "pe-o", "pe-h", "pe-l", "pe-c", "mma-p", "tla-p",
+  // Ranking (1)
+  "ranking",
+  // Future (6)
+  "fut-o", "fut-h", "fut-l", "fut-c", "fut-mma", "fut-tla",
+  // Spot (6)
+  "spot-o", "spot-h", "spot-l", "spot-c", "spot-mma", "spot-tla",
+  // Indicators (5)
+  "smc", "fib", "rsi", "ema", "vwap",
 ];
 
 const ALL_COL_LABELS: Record<string, string> = {
-  date:"Date", time:"Time",
-  "ce-o":"CE Open","ce-h":"CE High","ce-l":"CE Low","ce-c":"CE Close","call-pp":"Call PP",
-  "pe-o":"PE Open","pe-h":"PE High","pe-l":"PE Low","pe-c":"PE Close","put-pp":"Put PP",
-  future:"Future", spot:"Spot", rating:"Rating",
-  "mma-c":"MMA Call","mma-p":"MMA Put","tla-c":"TLA Call","tla-p":"TLA Put",
-  smc:"SMC", fib:"Fib", rsi:"RSI(14)",
+  datetime: "Date & Time",
+  "ce-o": "Call Open",  "ce-h": "Call High", "ce-l": "Call Low",  "ce-c": "Call Close",
+  "mma-c": "Call MMA",  "tla-c": "Call TLA",
+  "pe-o": "Put Open",   "pe-h": "Put High",  "pe-l": "Put Low",   "pe-c": "Put Close",
+  "mma-p": "Put MMA",   "tla-p": "Put TLA",
+  ranking: "Ranking",
+  "fut-o": "Fut Open",  "fut-h": "Fut High", "fut-l": "Fut Low",  "fut-c": "Fut Close",
+  "fut-mma": "Fut MMA", "fut-tla": "Fut TLA",
+  "spot-o": "Spot Open","spot-h": "Spot High","spot-l": "Spot Low","spot-c": "Spot Close",
+  "spot-mma": "Spot MMA","spot-tla": "Spot TLA",
+  smc: "SMC", fib: "FIB", rsi: "RSI", ema: "EMA", vwap: "VWAP",
 };
 
-// Candle interval options available inside Custom mode
+// Group label for each column ID — used to render dividers in the panel.
+const COL_GROUP_LABEL: Record<string, string> = {
+  datetime: "Date & Time",
+  "ce-o": "Call", "ce-h": "Call", "ce-l": "Call", "ce-c": "Call",
+  "mma-c": "Call", "tla-c": "Call",
+  "pe-o": "Put",  "pe-h": "Put",  "pe-l": "Put",  "pe-c": "Put",
+  "mma-p": "Put", "tla-p": "Put",
+  ranking: "Ranking",
+  "fut-o": "Future", "fut-h": "Future", "fut-l": "Future", "fut-c": "Future",
+  "fut-mma": "Future", "fut-tla": "Future",
+  "spot-o": "Spot", "spot-h": "Spot", "spot-l": "Spot", "spot-c": "Spot",
+  "spot-mma": "Spot", "spot-tla": "Spot",
+  smc: "Indicators", fib: "Indicators", rsi: "Indicators", ema: "Indicators", vwap: "Indicators",
+};
+
 const CUSTOM_CANDLE_TFS = ["1m", "2m", "3m", "5m", "10m", "15m", "30m", "45m", "1h", "2h", "3h", "4h"];
 
-// Convert a local datetime-local string (YYYY-MM-DDTHH:mm) to a UTC ISO string.
-// The browser datetime-local input is in local time; backend expects UTC.
 function localToUtcIso(localDt: string): string {
   if (!localDt) return "";
   return new Date(localDt).toISOString();
 }
 
-// Returns today's date string in YYYY-MM-DD format (local time).
 function todayStr(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-// Returns the IST market open time string for a date, as a datetime-local value.
-// 9:15 AM IST = 03:45 UTC, but datetime-local needs LOCAL time — so just hardcode 09:15 as a
-// convenience default; the user can adjust it.
-function marketOpenDefault(date: string): string {
-  return `${date}T09:15`;
-}
-
-function marketCloseDefault(date: string): string {
-  return `${date}T15:30`;
-}
+function marketOpenDefault(date: string): string { return `${date}T09:15`; }
+function marketCloseDefault(date: string): string { return `${date}T15:30`; }
 
 export function TimeframeRow() {
   const {
     timeframe, setTimeframe, customRange, setCustomRange,
     feedStatus, hiddenCols, toggleColumn,
+    colOrder, setColOrder,
   } = useDashStore();
 
   const [colsOpen, setColsOpen] = useState(false);
   const popRef = useRef<HTMLDivElement>(null);
 
-  // Custom range panel local state
+  // Local drag-reorder state
+  const dragIdRef   = useRef<string | null>(null);
+  const [dragOver, setDragOver] = useState<string | null>(null);
+
+  // Ordered list for display in the panel: apply colOrder then append any not in order
+  const orderedIds = colOrder.length > 0
+    ? [
+        ...colOrder.filter(id => ALL_COL_IDS.includes(id)),
+        ...ALL_COL_IDS.filter(id => !colOrder.includes(id)),
+      ]
+    : ALL_COL_IDS;
+
   const today = todayStr();
   const [fromDt,    setFromDt]    = useState(marketOpenDefault(today));
   const [toDt,      setToDt]      = useState(marketCloseDefault(today));
   const [candleTf,  setCandleTf]  = useState("5m");
   const [rangeError, setRangeError] = useState<string | null>(null);
 
-  // Close column popover when clicking outside
   useEffect(() => {
     if (!colsOpen) return;
     const handler = (e: MouseEvent) => {
@@ -106,26 +134,50 @@ export function TimeframeRow() {
 
   function handleApplyCustomRange() {
     setRangeError(null);
-    if (!fromDt || !toDt) {
-      setRangeError("Please fill in both start and end date/time.");
-      return;
-    }
+    if (!fromDt || !toDt) { setRangeError("Please fill in both start and end date/time."); return; }
     const from = new Date(fromDt);
     const to   = new Date(toDt);
-    if (isNaN(from.getTime()) || isNaN(to.getTime())) {
-      setRangeError("Invalid date/time.");
-      return;
-    }
-    if (from >= to) {
-      setRangeError("Start must be before end.");
-      return;
-    }
+    if (isNaN(from.getTime()) || isNaN(to.getTime())) { setRangeError("Invalid date/time."); return; }
+    if (from >= to) { setRangeError("Start must be before end."); return; }
     setCustomRange({ from: localToUtcIso(fromDt), to: localToUtcIso(toDt), candleTf });
   }
 
   function handleClearCustomRange() {
     setCustomRange(null);
     setTimeframe("5m");
+  }
+
+  // ── Drag handlers for column reorder ────────────────────────────────────
+
+  function handleDragStart(id: string) {
+    dragIdRef.current = id;
+  }
+
+  function handleDragOver(e: React.DragEvent, id: string) {
+    e.preventDefault();
+    setDragOver(id);
+  }
+
+  function handleDrop(targetId: string) {
+    const sourceId = dragIdRef.current;
+    if (!sourceId || sourceId === targetId) {
+      dragIdRef.current = null;
+      setDragOver(null);
+      return;
+    }
+    const newOrder = [...orderedIds];
+    const fromIdx  = newOrder.indexOf(sourceId);
+    const toIdx    = newOrder.indexOf(targetId);
+    newOrder.splice(fromIdx, 1);
+    newOrder.splice(toIdx, 0, sourceId);
+    setColOrder(newOrder);
+    dragIdRef.current = null;
+    setDragOver(null);
+  }
+
+  function handleDragEnd() {
+    dragIdRef.current = null;
+    setDragOver(null);
   }
 
   const inputStyle: React.CSSProperties = {
@@ -145,7 +197,7 @@ export function TimeframeRow() {
   return (
     <div style={{ borderBottom: "1px solid #BDC4CF", flexShrink: 0 }}>
 
-      {/* ── Main pill row ───────────────────────────────────────────────── */}
+      {/* ── Main pill row ─────────────────────────────────────────────────── */}
       <div style={{
         display: "flex", alignItems: "center", gap: 4,
         padding: "5px 12px",
@@ -153,7 +205,6 @@ export function TimeframeRow() {
         flexWrap: "wrap",
       }}>
 
-        {/* Minute pills */}
         {TFS_MIN.map(tf => (
           <button
             key={tf}
@@ -164,10 +215,8 @@ export function TimeframeRow() {
           </button>
         ))}
 
-        {/* Divider */}
         <div style={{ width: 1, height: 18, background: "#BDC4CF", margin: "0 4px" }} />
 
-        {/* Hour pills */}
         {TFS_HR.map(tf => (
           <button
             key={tf}
@@ -178,10 +227,8 @@ export function TimeframeRow() {
           </button>
         ))}
 
-        {/* Divider */}
         <div style={{ width: 1, height: 18, background: "#BDC4CF", margin: "0 4px" }} />
 
-        {/* Custom button */}
         <button
           style={pillStyle(timeframe === "custom")}
           onClick={() => setTimeframe("custom")}
@@ -189,7 +236,6 @@ export function TimeframeRow() {
           📅 Custom
         </button>
 
-        {/* Spacer */}
         <div style={{ flex: 1 }} />
 
         {/* Feed status indicator */}
@@ -222,41 +268,87 @@ export function TimeframeRow() {
               position: "absolute", right: 0, top: "calc(100% + 4px)",
               background: "#fff", border: "1px solid #BDC4CF",
               borderRadius: 4, boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
-              zIndex: 100, minWidth: 180, padding: "8px 0",
-              maxHeight: 360, overflowY: "auto",
+              zIndex: 100, minWidth: 200, padding: "8px 0",
+              maxHeight: 400, overflowY: "auto",
             }}>
               <div style={{
                 padding: "4px 12px 8px", fontSize: 9, fontWeight: 700,
                 color: "#5B6B7F", textTransform: "uppercase",
                 letterSpacing: "0.1em", borderBottom: "1px solid #EBF3FA",
               }}>
-                Show / Hide Columns
+                Show / Hide · Drag to Reorder
               </div>
-              {ALL_COL_IDS.map(id => (
-                <label
-                  key={id}
+              {(() => {
+                let lastGroup = "";
+                return orderedIds.map(id => {
+                  const groupLabel = COL_GROUP_LABEL[id] ?? "";
+                  const showDivider = groupLabel !== lastGroup;
+                  if (showDivider) lastGroup = groupLabel;
+                  return (
+                    <div key={id}>
+                      {showDivider && (
+                        <div style={{
+                          padding: "5px 12px 2px",
+                          fontSize: 9, fontWeight: 700,
+                          color: "#8A93A3", textTransform: "uppercase",
+                          letterSpacing: "0.1em",
+                          borderTop: "1px solid #EBF3FA",
+                          marginTop: 2,
+                        }}>
+                          {groupLabel}
+                        </div>
+                      )}
+                      <label
+                        draggable
+                        onDragStart={() => handleDragStart(id)}
+                        onDragOver={e => handleDragOver(e, id)}
+                        onDrop={() => handleDrop(id)}
+                        onDragEnd={handleDragEnd}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 8,
+                          padding: "4px 12px", cursor: "grab",
+                          fontSize: 12, color: "#1A2533",
+                          background: dragOver === id
+                            ? "#EBF3FA"
+                            : hiddenCols.includes(id) ? "#FBF7F0" : "transparent",
+                          borderTop: dragOver === id ? "2px solid #2E75B6" : "2px solid transparent",
+                          transition: "background 0.1s",
+                        }}
+                      >
+                        <span style={{ fontSize: 10, color: "#BDC4CF", lineHeight: 1, userSelect: "none" }}>⠿</span>
+                        <input
+                          type="checkbox"
+                          checked={!hiddenCols.includes(id)}
+                          onChange={() => toggleColumn(id)}
+                          onClick={e => e.stopPropagation()}
+                          style={{ accentColor: "#2E75B6" }}
+                        />
+                        {ALL_COL_LABELS[id] ?? id}
+                      </label>
+                    </div>
+                  );
+                });
+              })()}
+              {colOrder.length > 0 && (
+                <button
+                  onClick={() => setColOrder([])}
                   style={{
-                    display: "flex", alignItems: "center", gap: 8,
-                    padding: "4px 12px", cursor: "pointer",
-                    fontSize: 12, color: "#1A2533",
-                    background: hiddenCols.includes(id) ? "#FBF7F0" : "transparent",
+                    display: "block", width: "calc(100% - 24px)", margin: "8px 12px 4px",
+                    fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
+                    fontSize: 11, fontWeight: 600, padding: "3px 0",
+                    border: "1px solid #BDC4CF", borderRadius: 3,
+                    background: "#fff", color: "#5B6B7F", cursor: "pointer",
                   }}
                 >
-                  <input
-                    type="checkbox"
-                    checked={!hiddenCols.includes(id)}
-                    onChange={() => toggleColumn(id)}
-                    style={{ accentColor: "#2E75B6" }}
-                  />
-                  {ALL_COL_LABELS[id] ?? id}
-                </label>
-              ))}
+                  Reset order
+                </button>
+              )}
             </div>
           )}
         </div>
       </div>
 
-      {/* ── Custom date range panel (shown only when Custom is selected) ── */}
+      {/* ── Custom date range panel ──────────────────────────────────────── */}
       {timeframe === "custom" && (
         <div style={{
           display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10,
@@ -264,40 +356,19 @@ export function TimeframeRow() {
           background: "#F3F6FA",
           borderTop: "1px solid #BDC4CF",
         }}>
-
-          {/* Candle interval inside custom */}
           <span style={labelStyle}>Interval</span>
-          <select
-            value={candleTf}
-            onChange={e => setCandleTf(e.target.value)}
-            style={{ ...inputStyle, cursor: "pointer" }}
-          >
-            {CUSTOM_CANDLE_TFS.map(tf => (
-              <option key={tf} value={tf}>{tf}</option>
-            ))}
+          <select value={candleTf} onChange={e => setCandleTf(e.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+            {CUSTOM_CANDLE_TFS.map(tf => <option key={tf} value={tf}>{tf}</option>)}
           </select>
 
           <div style={{ width: 1, height: 18, background: "#BDC4CF" }} />
 
-          {/* Start datetime */}
           <span style={labelStyle}>From</span>
-          <input
-            type="datetime-local"
-            value={fromDt}
-            onChange={e => setFromDt(e.target.value)}
-            style={inputStyle}
-          />
+          <input type="datetime-local" value={fromDt} onChange={e => setFromDt(e.target.value)} style={inputStyle} />
 
-          {/* End datetime */}
           <span style={labelStyle}>To</span>
-          <input
-            type="datetime-local"
-            value={toDt}
-            onChange={e => setToDt(e.target.value)}
-            style={inputStyle}
-          />
+          <input type="datetime-local" value={toDt} onChange={e => setToDt(e.target.value)} style={inputStyle} />
 
-          {/* Apply button */}
           <button
             onClick={handleApplyCustomRange}
             style={{
@@ -311,7 +382,6 @@ export function TimeframeRow() {
             Apply
           </button>
 
-          {/* Clear / back to live */}
           <button
             onClick={handleClearCustomRange}
             style={{
@@ -325,7 +395,6 @@ export function TimeframeRow() {
             ✕ Clear
           </button>
 
-          {/* Active range summary */}
           {customRange && (
             <span style={{ fontSize: 11, color: "#2E75B6", fontWeight: 600 }}>
               {new Date(customRange.from).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "short", timeStyle: "short" })}
@@ -335,7 +404,6 @@ export function TimeframeRow() {
             </span>
           )}
 
-          {/* Validation error */}
           {rangeError && (
             <span style={{ fontSize: 11, color: "#DC2626", fontWeight: 600 }}>{rangeError}</span>
           )}

@@ -7,6 +7,7 @@ import { api, API_BASE } from "./utils/api";
 import { Auth } from "./components/Auth";
 import { ModuleSelection } from "./components/ModuleSelection";
 import ModuleWorkspace from "./components/ModuleWorkspace";
+import { DocsPage } from "./modules/docs";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
 const GREEN = "#16a34a";
@@ -209,8 +210,10 @@ function ModuleSidebar({
 
         {/* Nav links */}
         <nav style={{ flex: 1, padding: "0 12px", display: "flex", flexDirection: "column", gap: 3 }}>
-          {navItem("/dashboard/module-1", "Module 1", "OI Analytics",    "M1", false)}
-          {navItem("/dashboard/module-2", "Module 2", "Strike Tracker",  "M2", false)}
+          {navItem("/dashboard/module-1", "Module 1", "OI Analytics",    "M1",  false)}
+          {navItem("/dashboard/module-2", "Module 2", "Strike Tracker",  "M2",  false)}
+          <div style={{ height: 1, background: "#e2e8f0", margin: "6px 2px" }} />
+          {navItem("/dashboard/docs",     "📖 Documentation", "Platform Guide", "DOC", false)}
         </nav>
 
         {/* Module connection status */}
@@ -366,6 +369,7 @@ function App() {
           <Route path="home" element={<ModuleSelection />} />
           <Route path="module-1" element={<ModuleWorkspace moduleId="module1" />} />
           <Route path="module-2" element={<ModuleWorkspace moduleId="module2" />} />
+          <Route path="docs" element={<DocsPage />} />
         </Route>
 
         {/* ── Catch-all ─────────────────────────────────────────────────── */}

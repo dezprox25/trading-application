@@ -3,12 +3,12 @@ import { useQuery } from "@tanstack/react-query";
 import { useDashStore } from "./store";
 import { useStore } from "../../store/useStore";
 import {
-  fetchExchanges, fetchInstruments, fetchSymbols, fetchStrikes,
+  fetchExchanges, fetchInstruments, fetchContractMonths, fetchExpiries, fetchStrikes,
+  DEFAULT_EXCHANGE,
 } from "../../data/liveApi";
+import { formatContractMonth, formatExpiryDisplay } from "../../data/models";
 
 // ── Live price hook ───────────────────────────────────────────────────────────
-// Reads directly from the socket tick cache (useStore.prices).
-// Populates as soon as the first tick arrives after login — no Generate needed.
 
 function useLivePrice(symbol: string): { ltp: number | null; dir: "up" | "down" | null } {
   const ltp = useStore((s) => s.prices[symbol]?.ltp ?? null);
@@ -20,34 +20,12 @@ function useLivePrice(symbol: string): { ltp: number | null; dir: "up" | "down" 
     if (prevRef.current !== null) {
       if (ltp > prevRef.current) setDir("up");
       else if (ltp < prevRef.current) setDir("down");
-      // Equal value: keep existing arrow — no state update
     }
     prevRef.current = ltp;
   }, [ltp]);
 
   return { ltp, dir };
 }
-
-// ── Expiry date helpers ───────────────────────────────────────────────────────
-
-function getNextThursdays(count: number): string[] {
-  const result: string[] = [];
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  const day = d.getDay(); // 0=Sun … 4=Thu
-  const daysToThursday = day <= 4 ? 4 - day : 4 - day + 7;
-  d.setDate(d.getDate() + daysToThursday);
-  for (let i = 0; i < count; i++) {
-    const dd  = String(d.getDate()).padStart(2, "0");
-    const mmm = d.toLocaleString("en-US", { month: "short" }).toUpperCase();
-    const yy  = String(d.getFullYear()).slice(-2);
-    result.push(`${dd} ${mmm} ${yy}`);
-    d.setDate(d.getDate() + 7);
-  }
-  return result;
-}
-
-const EXPIRY_DATES = getNextThursdays(7);
 
 // ── Shared styles ─────────────────────────────────────────────────────────────
 
@@ -89,6 +67,38 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+/** Dependent dropdown: disabled until its parent is selected, shows loading and
+ *  empty states, and never renders broker symbols/tokens — display labels only. */
+function DepSelect({
+  value, onChange, disabled, loading, options, placeholder = "Select…",
+  minWidth,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  disabled: boolean;
+  loading: boolean;
+  options: { value: string; label: string }[];
+  placeholder?: string;
+  minWidth?: number;
+}) {
+  const empty = !loading && !disabled && options.length === 0;
+  return (
+    <select
+      style={{ ...SEL, ...(minWidth ? { minWidth } : {}), opacity: disabled ? 0.5 : 1 }}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={disabled || loading || empty}
+    >
+      <option value="">
+        {loading ? "Loading…" : disabled ? "—" : empty ? "No data" : placeholder}
+      </option>
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>{o.label}</option>
+      ))}
+    </select>
+  );
+}
+
 function DirArrow({ dir }: { dir: "up" | "down" | null }) {
   if (dir === "up")   return <span style={{ color: "#16a34a", fontSize: 10, lineHeight: 1 }}>▲</span>;
   if (dir === "down") return <span style={{ color: "#dc2626", fontSize: 10, lineHeight: 1 }}>▼</span>;
@@ -127,20 +137,20 @@ function LivePrice({ label, value, dir }: { label: string; value: number | null;
 
 export function ConfigRow() {
   const {
-    exchange, instrument, symbol, type, callStrike, putStrike, strike,
+    exchange, instrument, contractMonth, type, callStrike, putStrike,
+    expiryDate,
     isGenerated,
-    setExchange, setInstrument, setSymbol, setType,
-    setCallStrike, setPutStrike, setStrike,
+    setExchange, setInstrument, setContractMonth, setType,
+    setCallStrike, setPutStrike,
+    setExpiryDate,
     generate, reset,
     configCollapsed, toggleConfigCollapsed,
   } = useDashStore();
 
-  // Live Spot/Future prices — sourced directly from socket tick cache,
-  // available immediately after login without clicking Generate.
   const { ltp: spotLtp,   dir: spotDir }   = useLivePrice("NIFTY-SPOT");
   const { ltp: futureLtp, dir: futureDir } = useLivePrice("NIFTY-FUT");
 
-  const [expiryDate, setExpiryDate] = useState<string>(EXPIRY_DATES[0] ?? "");
+  // ── Dependent data queries (Exchange → Instrument → Month → Expiry → Strike) ─
 
   const { data: exchanges = [], isLoading: loadEx } = useQuery({
     queryKey: ["exchanges"],
@@ -155,35 +165,71 @@ export function ConfigRow() {
     staleTime: Infinity,
   });
 
-  const { data: symbols = [], isLoading: loadSy } = useQuery({
-    queryKey: ["symbols", instrument],
-    queryFn: () => fetchSymbols(instrument),
+  const { data: months = [], isLoading: loadMo } = useQuery({
+    queryKey: ["contract-months", exchange, instrument],
+    queryFn: () => fetchContractMonths(exchange, instrument),
     enabled: !!instrument,
     staleTime: Infinity,
   });
 
-  const { data: strikes = [], isLoading: loadSt } = useQuery({
-    queryKey: ["strikes", symbol],
-    queryFn: () => fetchStrikes(symbol),
-    enabled: !!symbol,
+  const { data: expiries = [], isLoading: loadExp } = useQuery({
+    queryKey: ["expiries", exchange, instrument, contractMonth],
+    queryFn: () => fetchExpiries(exchange, instrument, contractMonth),
+    enabled: !!contractMonth,
     staleTime: Infinity,
   });
+
+  const { data: strikes = [], isLoading: loadSt } = useQuery({
+    queryKey: ["strikes", instrument, expiryDate],
+    queryFn: () => fetchStrikes(instrument, expiryDate),
+    enabled: !!instrument && !!expiryDate,
+    staleTime: Infinity,
+  });
+
+  // ── Defaults + preserve-valid-selection guards ────────────────────────────
+  // When a parent changes, a still-valid child selection is kept; an invalid
+  // one is cleared (which cascades through the store resets).
+
+  useEffect(() => {
+    if (!exchange && exchanges.length > 0) {
+      const def = exchanges.find((e) => e.code === DEFAULT_EXCHANGE) ?? exchanges[0];
+      setExchange(def.code);
+    }
+  }, [exchange, exchanges, setExchange]);
+
+  useEffect(() => {
+    if (instrument && !loadIn && exchange && !instruments.some((i) => i.id === instrument)) {
+      setInstrument("");
+    }
+  }, [instrument, instruments, loadIn, exchange, setInstrument]);
+
+  useEffect(() => {
+    if (contractMonth && !loadMo && instrument && !months.some((m) => m.id === contractMonth)) {
+      setContractMonth("");
+    }
+  }, [contractMonth, months, loadMo, instrument, setContractMonth]);
+
+  useEffect(() => {
+    if (expiryDate && !loadExp && contractMonth && !expiries.some((e) => e.id === expiryDate)) {
+      setExpiryDate("");
+    }
+  }, [expiryDate, expiries, loadExp, contractMonth, setExpiryDate]);
+
+  useEffect(() => {
+    if (loadSt || !expiryDate) return;
+    if (callStrike !== null && !strikes.some((s) => s.value === callStrike)) setCallStrike(null);
+    if (putStrike  !== null && !strikes.some((s) => s.value === putStrike))  setPutStrike(null);
+  }, [strikes, loadSt, expiryDate, callStrike, putStrike, setCallStrike, setPutStrike]);
 
   const includesCall = type === "Call" || type === "Call+Put";
   const includesPut  = type === "Put"  || type === "Call+Put";
 
   const canGenerate =
-    !!exchange && !!instrument && !!symbol && strike !== null &&
+    !!exchange && !!instrument && !!contractMonth && !!expiryDate &&
     (!includesCall || callStrike !== null) &&
     (!includesPut  || putStrike  !== null);
 
   // ── Auto-generate on data readiness ───────────────────────────────────────
-  // Fires once when all conditions are simultaneously true:
-  //   ✓ Config complete (exchange / instrument / symbol / strikes all selected)
-  //   ✓ Market data confirmed ready (backend emitted market_ready after first tick)
-  //   ✓ Not already generated
-  // The ref prevents double-firing; it resets whenever config becomes incomplete
-  // (user changed a field), allowing re-trigger after the new config is filled in.
 
   const marketDataReady   = useStore((s) => s.marketDataReady);
   const autoGeneratedRef  = useRef(false);
@@ -212,6 +258,14 @@ export function ConfigRow() {
     const p2 = (n: number | null) =>
       n != null ? n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
 
+    const monthLabel  = months.find((m) => m.id === contractMonth);
+    const summary = [
+      exchange,
+      instrument,
+      monthLabel ? formatContractMonth(monthLabel) : null,
+      expiryDate ? formatExpiryDisplay(expiryDate) : null,
+    ].filter(Boolean).join(" › ");
+
     return (
       <div
         style={{
@@ -230,7 +284,7 @@ export function ConfigRow() {
         </span>
         <span style={{ color: "#BDC4CF" }}>|</span>
         <span style={{ fontSize: 11, fontWeight: 700, color: "#5B6B7F" }}>
-          {exchange} › {instrument} › {symbol}
+          {summary}
         </span>
         <span style={{ marginLeft: "auto", fontSize: 10, color: "#5B6B7F" }}>▼ Expand config</span>
       </div>
@@ -238,6 +292,8 @@ export function ConfigRow() {
   }
 
   // ── Expanded state ────────────────────────────────────────────────────────
+
+  const strikeOptions = strikes.map((s) => ({ value: String(s.value), label: String(s.value) }));
 
   return (
     <div style={{
@@ -251,105 +307,56 @@ export function ConfigRow() {
       <LivePrice label="Spot"   value={spotLtp}   dir={spotDir} />
       <LivePrice label="Future" value={futureLtp} dir={futureDir} />
 
-      {/* Divider */}
       <div style={{ width: 1, height: 36, background: "#BDC4CF", alignSelf: "center", margin: "0 2px" }} />
-
-      {/* ── Config dropdowns ─────────────────────────────────────────────── */}
 
       {/* Exchange */}
       <Field label="Exchange">
-        <select
-          style={SEL}
+        <DepSelect
           value={exchange}
-          onChange={e => setExchange(e.target.value)}
-          disabled={loadEx}
-        >
-          <option value="">{loadEx ? "Loading…" : "Select…"}</option>
-          {exchanges.map(ex => <option key={ex} value={ex}>{ex}</option>)}
-        </select>
+          onChange={setExchange}
+          disabled={false}
+          loading={loadEx}
+          options={exchanges.map((e) => ({ value: e.code, label: e.code }))}
+          minWidth={90}
+        />
       </Field>
 
-      {/* Instrument */}
+      {/* Instrument (underlying) */}
       <Field label="Instrument">
-        <select
-          style={{ ...SEL, opacity: !exchange ? 0.5 : 1 }}
+        <DepSelect
           value={instrument}
-          onChange={e => setInstrument(e.target.value)}
-          disabled={!exchange || loadIn}
-        >
-          <option value="">{loadIn ? "Loading…" : !exchange ? "—" : "Select…"}</option>
-          {instruments.map(ins => <option key={ins} value={ins}>{ins}</option>)}
-        </select>
+          onChange={setInstrument}
+          disabled={!exchange}
+          loading={loadIn}
+          options={instruments.map((i) => ({ value: i.id, label: i.symbol }))}
+        />
       </Field>
 
-      {/* Symbol */}
-      <Field label="Symbol">
-        <select
-          style={{ ...SEL, opacity: !instrument ? 0.5 : 1 }}
-          value={symbol}
-          onChange={e => setSymbol(e.target.value)}
-          disabled={!instrument || loadSy}
-        >
-          <option value="">{loadSy ? "Loading…" : !instrument ? "—" : "Select…"}</option>
-          {symbols.map(sym => <option key={sym} value={sym}>{sym}</option>)}
-        </select>
+      {/* Contract Month */}
+      <Field label="Contract Month">
+        <DepSelect
+          value={contractMonth}
+          onChange={setContractMonth}
+          disabled={!instrument}
+          loading={loadMo}
+          options={months.map((m) => ({ value: m.id, label: formatContractMonth(m) }))}
+          minWidth={100}
+        />
       </Field>
 
-      {/* Expiry Date */}
+      {/* Expiry Date — internal value is ISO "YYYY-MM-DD"; display "DD Mon YYYY". */}
       <Field label="Expiry Date">
-        <select
-          style={{ ...SEL, minWidth: 100 }}
+        <DepSelect
           value={expiryDate}
-          onChange={e => setExpiryDate(e.target.value)}
-        >
-          {EXPIRY_DATES.map(d => <option key={d} value={d}>{d}</option>)}
-        </select>
+          onChange={setExpiryDate}
+          disabled={!contractMonth}
+          loading={loadExp}
+          options={expiries.map((e) => ({ value: e.id, label: e.expiry }))}
+          minWidth={110}
+        />
       </Field>
 
-      {/* Strike */}
-      <Field label="Strike">
-        <select
-          style={{ ...SEL, opacity: !symbol ? 0.5 : 1 }}
-          value={strike ?? ""}
-          onChange={e => setStrike(e.target.value ? +e.target.value : null)}
-          disabled={!symbol || loadSt}
-        >
-          <option value="">{loadSt ? "Loading…" : !symbol ? "—" : "Select…"}</option>
-          {strikes.map(st => <option key={st} value={st}>{st}</option>)}
-        </select>
-      </Field>
-
-      {/* Call strike */}
-      {includesCall && (
-        <Field label="Call Strike">
-          <select
-            style={{ ...SEL, opacity: !symbol ? 0.5 : 1 }}
-            value={callStrike ?? ""}
-            onChange={e => setCallStrike(e.target.value ? +e.target.value : null)}
-            disabled={!symbol || loadSt}
-          >
-            <option value="">{loadSt ? "Loading…" : "Select…"}</option>
-            {strikes.map(st => <option key={st} value={st}>{st}</option>)}
-          </select>
-        </Field>
-      )}
-
-      {/* Put strike */}
-      {includesPut && (
-        <Field label="Put Strike">
-          <select
-            style={{ ...SEL, opacity: !symbol ? 0.5 : 1 }}
-            value={putStrike ?? ""}
-            onChange={e => setPutStrike(e.target.value ? +e.target.value : null)}
-            disabled={!symbol || loadSt}
-          >
-            <option value="">{loadSt ? "Loading…" : "Select…"}</option>
-            {strikes.map(st => <option key={st} value={st}>{st}</option>)}
-          </select>
-        </Field>
-      )}
-
-      {/* Type — segmented toggle */}
+      {/* Option Type */}
       <Field label="Type">
         <div style={{
           display: "flex", height: 26,
@@ -372,13 +379,40 @@ export function ConfigRow() {
                 lineHeight: "26px",
               }}
             >
-              {opt === "Call+Put" ? "All" : opt}
+              {opt === "Call+Put" ? "Call + Put" : opt}
             </button>
           ))}
         </div>
       </Field>
 
-      {/* Spacer */}
+      {/* Call strike */}
+      {includesCall && (
+        <Field label="Call Strike">
+          <DepSelect
+            value={callStrike !== null ? String(callStrike) : ""}
+            onChange={(v) => setCallStrike(v ? +v : null)}
+            disabled={!expiryDate}
+            loading={loadSt}
+            options={strikeOptions}
+            minWidth={90}
+          />
+        </Field>
+      )}
+
+      {/* Put strike */}
+      {includesPut && (
+        <Field label="Put Strike">
+          <DepSelect
+            value={putStrike !== null ? String(putStrike) : ""}
+            onChange={(v) => setPutStrike(v ? +v : null)}
+            disabled={!expiryDate}
+            loading={loadSt}
+            options={strikeOptions}
+            minWidth={90}
+          />
+        </Field>
+      )}
+
       <div style={{ flex: 1 }} />
 
       {/* Reset + Generate + Collapse */}

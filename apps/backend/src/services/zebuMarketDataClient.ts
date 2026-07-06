@@ -23,7 +23,7 @@ export const setRuntimeInstrumentTokens = (
   console.log(`[Zebu] Runtime tokens updated — FUT: ${futToken ? "set" : "null"} | CE: ${ceTokens.length} | PE: ${peTokens.length}`);
 };
 
-interface ZebuInstrument {
+export interface ZebuInstrument {
   key: string;
   exchange: string;
   token: string;
@@ -32,6 +32,9 @@ interface ZebuInstrument {
 
 interface ZebuClient {
   close: () => void;
+  // Subscribes additional instruments on an already-open connection (Noren allows
+  // incremental "t":"t" subscribe frames). Only present on the credentials-based client.
+  subscribeTokens?: (instruments: ZebuInstrument[]) => void;
 }
 
 const isPlaceholder = (value?: string) =>
@@ -54,7 +57,7 @@ const sanitizeFeedUrl = (url: string) => {
   }
 };
 
-const parseInstrumentEnv = (value?: string): ZebuInstrument[] => {
+export const parseInstrumentEnv = (value?: string): ZebuInstrument[] => {
   if (!value || isPlaceholder(value)) return [];
 
   return value
@@ -122,6 +125,14 @@ const buildInstrumentMap = (instruments: ZebuInstrument[]) => {
   return symbolByKey;
 };
 
+// Zebu/Noren "tf" (touchline feed) messages are DELTA updates: t, e, and tk are always
+// present, but every other field (lp, oi, v, ...) is included only when it CHANGED since
+// the last message for that token. A delta that changes OI/volume without price is a
+// perfectly valid, common message — it must not be discarded just because it lacks lp.
+// We carry forward the last known price per symbol so such deltas still produce a usable
+// Tick (OI/volume update) instead of being dropped and logged as "unrecognized".
+const lastKnownLtp = new Map<string, number>();
+
 const toTick = (payload: any, symbolByKey: Map<string, string>): Tick | null => {
   const exchange = payload.e || payload.exch || payload.exchange;
   const token = payload.tk || payload.token || payload.instrumentToken;
@@ -129,12 +140,24 @@ const toTick = (payload: any, symbolByKey: Map<string, string>): Tick | null => 
   const symbol = mappedSymbol || payload.tsym || payload.tradingSymbol || payload.symbol;
   const rawLtp = payload.lp ?? payload.ltp ?? payload.lastPrice ?? payload.last_price ?? payload.price;
   const rawOi = payload.oi ?? payload.openInterest ?? payload.open_interest;
-  const ltp = Number(rawLtp);
 
-  if (!symbol || Number.isNaN(ltp)) return null;
+  if (!symbol) return null;
+
+  const symbolKey = String(symbol);
+  let ltp = Number(rawLtp);
+
+  if (Number.isNaN(ltp)) {
+    // No price in this delta (e.g. OI-only or volume-only update). Fall back to the last
+    // known price for this symbol so the tick still carries a valid ltp downstream.
+    const carried = lastKnownLtp.get(symbolKey);
+    if (carried === undefined) return null; // No price ever seen yet for this symbol — nothing to report.
+    ltp = carried;
+  } else {
+    lastKnownLtp.set(symbolKey, ltp);
+  }
 
   return {
-    symbol: String(symbol),
+    symbol: symbolKey,
     ltp,
     timestamp: payload.ft ? new Date(Number(payload.ft) * 1000) : new Date(),
     volume: payload.v ? Number(payload.v) : payload.volume ? Number(payload.volume) : 0,
@@ -261,6 +284,41 @@ export const startZebuMarketDataFeedWithCredentials = (
   let liveConnected = false;
   let subscriptionSent = false;
 
+  // ── Runtime (post-connect) subscription support ────────────────────────────
+  // Lets the rest of the app (on-demand option requests, ATM-band recompute once a real
+  // price arrives) add tokens to an already-open connection instead of requiring a
+  // reconnect. Noren accepts additional "t":"t" frames at any point after the initial
+  // subscribe — each just adds to what the connection already receives.
+  const subscribedKeys = new Set<string>(instruments.map((i) => i.key));
+  let pendingExtra: ZebuInstrument[] = [];
+
+  const sendSubscribe = (toSend: ZebuInstrument[], label: string) => {
+    if (toSend.length === 0) return;
+    const keys = toSend.map((i) => i.key).join("#");
+    ws.send(JSON.stringify({ t: "t", k: keys }));
+    console.log(`[Feed:SUB] ${label} — ${toSend.length} instrument(s): ${keys.substring(0, 200)}${keys.length > 200 ? "…" : ""}`);
+  };
+
+  const subscribeTokens = (newInstruments: ZebuInstrument[]) => {
+    const fresh = newInstruments.filter((i) => !subscribedKeys.has(i.key));
+    if (fresh.length === 0) return;
+
+    for (const inst of fresh) {
+      subscribedKeys.add(inst.key);
+      symbolByKey.set(inst.key, inst.symbol);
+      symbolByKey.set(inst.token, inst.symbol);
+    }
+
+    if (subscriptionSent && ws.readyState === WebSocket.OPEN) {
+      sendSubscribe(fresh, "Runtime subscribe");
+    } else {
+      // Connection not authenticated / initial subscribe not sent yet — queue and flush
+      // once the ck-ack handler sends the initial batch (see below).
+      pendingExtra.push(...fresh);
+      console.log(`[Feed:SUB] Queued ${fresh.length} instrument(s) for subscribe once connected: ${fresh.map((i) => i.symbol).join(", ")}`);
+    }
+  };
+
   // Per-minute message statistics (all message types, not just ticks)
   let msgCountThisMinute = 0;
   let totalMsgCount = 0;
@@ -301,7 +359,8 @@ export const startZebuMarketDataFeedWithCredentials = (
     ws.send(JSON.stringify(connectMsg));
     liveConnected = true;
     onDataSource("LIVE_MARKET_API");
-    onConnected?.();
+    // onConnected is intentionally NOT called here. It is called after the
+    // Zebu ck ack confirms the session is accepted and subscription is sent.
   });
 
   ws.on("message", async (raw) => {
@@ -309,15 +368,11 @@ export const startZebuMarketDataFeedWithCredentials = (
     msgCountThisMinute++;
     totalMsgCount++;
 
-    // Log every raw message — truncate only if very long
-    const preview = rawStr.length > 300 ? rawStr.substring(0, 300) + `…(+${rawStr.length - 300}b)` : rawStr;
-    console.log(`[Feed:RAW] #${totalMsgCount} (${rawStr.length}b): ${preview}`);
-
     let payload: any;
     try {
       payload = JSON.parse(rawStr);
     } catch {
-      console.warn(`[Feed:RAW] Non-JSON message received: ${preview}`);
+      console.warn(`[Feed:RAW] Non-JSON message received: ${rawStr.substring(0, 300)}`);
       return;
     }
 
@@ -334,6 +389,15 @@ export const startZebuMarketDataFeedWithCredentials = (
             subscriptionSent = true;
             ws.send(JSON.stringify({ t: "t", k: subscribeKeys }));
             console.log(`[Feed:SUB] Subscription sent — ${instruments.length} instruments: ${subscribeKeys.substring(0, 120)}${subscribeKeys.length > 120 ? "…" : ""}`);
+            // Flush any tokens that were requested (on-demand option resolve, ATM recompute)
+            // before the connection finished authenticating.
+            if (pendingExtra.length > 0) {
+              sendSubscribe(pendingExtra, "Flushing queued subscribe");
+              pendingExtra = [];
+            }
+            // Connection is authenticated and subscription is in-flight. Signal live
+            // to the frontend now so the dashboard transitions out of "connecting".
+            onConnected?.();
           } else if (!subscribeKeys) {
             console.error("[Feed:SUB] No subscribe keys — no instruments configured in .env");
           }
@@ -349,13 +413,30 @@ export const startZebuMarketDataFeedWithCredentials = (
         continue;
       }
 
-      // ── Subscription acknowledgement ───────────────────────────────────────
+      // ── Subscription acknowledgement / initial touchline snapshot ────────────
+      // Zebu sends t:"tk" as the FIRST price snapshot for each subscribed
+      // instrument after a t:"t" subscribe. It carries lp, oi, ft etc. — NOT
+      // an s:"OK" acknowledgement field. The only s field in the protocol is on
+      // t:"ck" (connection ack). Processing tk as if s:"OK" were required caused
+      // ws.close() on every valid snapshot → the Live→Reconnecting reconnect loop.
       if (t === "tk") {
-        const accepted = record.s === "OK" || record.s === "Ok";
-        if (accepted) {
-          console.log(`[Feed:ACK] Subscription acknowledged — instruments confirmed by Zebu: ${JSON.stringify(record).substring(0, 300)}`);
+        const isExplicitRejection = record.s === "Not_Ok" || record.s === "Not_OK";
+        if (isExplicitRejection) {
+          // Zebu explicitly rejected this specific token (expired contract, bad token etc.)
+          // Log and skip — do NOT close the WS. Other instruments still deliver ticks.
+          console.error(`[Feed:ACK] Token rejected by Zebu — tk="${record.tk ?? "(none)"}" emsg="${record.emsg ?? "(none)"}" — skipping (feed stays open for other instruments).`);
         } else {
-          console.error(`[Feed:ACK] Subscription REJECTED by Zebu — s="${record.s}" emsg="${record.emsg ?? "(none)"}" | Full: ${JSON.stringify(record)}`);
+          // Normal case: process as initial price snapshot (same path as t:"tf" ticks)
+          const tick = toTick(record, symbolByKey);
+          if (tick) {
+            tickCount++;
+            lastPayload = tick;
+            await onTick(tick);
+            console.log(`[Feed:SNAP] Initial snapshot — ${tick.symbol} ltp=${tick.ltp} oi=${tick.oi ?? "—"}`);
+          } else {
+            // Pre-market or no LTP yet — instrument confirmed but price pending
+            console.log(`[Feed:SNAP] tk received (no price yet) — tk="${record.tk || "(none)"}" e="${record.e || "(none)"}" ts="${record.ts || "(none)"}"`);
+          }
         }
         continue;
       }
@@ -379,8 +460,19 @@ export const startZebuMarketDataFeedWithCredentials = (
         lastPayload = tick;
         await onTick(tick);
       } else {
-        // Log unrecognized frames so we can see what Zebu is actually sending
-        console.log(`[Feed:SKIP] Unrecognized record (t="${t ?? "(none)"}"): ${JSON.stringify(record).substring(0, 200)}`);
+        const exchange = record.e || record.exch || record.exchange;
+        const token = record.tk || record.token || record.instrumentToken;
+        const resolvedSymbol = symbolByKey.get(`${exchange}|${token}`) || symbolByKey.get(String(token));
+        if (resolvedSymbol) {
+          // Token is a known subscribed instrument, but this delta carries neither a
+          // price nor any previously-seen price to carry forward — i.e. an OI/volume
+          // update that arrived before the instrument's first trade of the day.
+          console.log(`[Feed:OI-ONLY] ${resolvedSymbol} — delta with no price yet (pre-first-trade): ${JSON.stringify(record).substring(0, 200)}`);
+        } else {
+          // Truly unmapped token — not one of our subscribed instruments, or the
+          // exchange|token → symbol mapping is stale (e.g. after an expiry rollover).
+          console.log(`[Feed:SKIP] Unrecognized record (t="${t ?? "(none)"}") e="${exchange ?? "(none)"}" tk="${token ?? "(none)"}": ${JSON.stringify(record).substring(0, 200)}`);
+        }
       }
     }
   });
@@ -406,6 +498,7 @@ export const startZebuMarketDataFeedWithCredentials = (
     close: () => {
       clearInterval(statsInterval);
       ws.close();
-    }
+    },
+    subscribeTokens,
   };
 };

@@ -62,6 +62,17 @@ export const login = async (req: Request, res: Response) => {
         return res.status(401).json({ error: "Invalid username or password." });
       }
 
+      // OTP step — issue a short-lived pending token instead of full session tokens
+      if (process.env.APP_OTP_ENABLED === "true") {
+        const secret = process.env.JWT_SECRET || "supersecretjwtkeyforstockdashboardintraday2026";
+        const loginToken = jwt.sign(
+          { sub: ENV_USER_ID, type: "otp-pending", username: envUser.username, name: envUser.name },
+          secret,
+          { expiresIn: "5m" }
+        );
+        return res.status(200).json({ otpRequired: true, loginToken });
+      }
+
       const accessToken  = generateAccessToken(ENV_USER_ID);
       const refreshToken = generateRefreshToken(ENV_USER_ID);
 
@@ -96,8 +107,21 @@ export const login = async (req: Request, res: Response) => {
       return res.status(401).json({ error: "Invalid username or password." });
     }
 
-    const accessToken  = generateAccessToken(user._id.toString());
-    const refreshToken = generateRefreshToken(user._id.toString());
+    const userId = user._id.toString();
+
+    // OTP step for DB users
+    if (process.env.APP_OTP_ENABLED === "true") {
+      const secret = process.env.JWT_SECRET || "supersecretjwtkeyforstockdashboardintraday2026";
+      const loginToken = jwt.sign(
+        { sub: userId, type: "otp-pending", username: user.username, name: user.name || user.username },
+        secret,
+        { expiresIn: "5m" }
+      );
+      return res.status(200).json({ otpRequired: true, loginToken });
+    }
+
+    const accessToken  = generateAccessToken(userId);
+    const refreshToken = generateRefreshToken(userId);
 
     res.cookie("refresh", refreshToken, {
       httpOnly: true,
@@ -112,6 +136,59 @@ export const login = async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error("Login Error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
+// POST /auth/verify-otp — second step when APP_OTP_ENABLED=true
+export const verifyOtp = async (req: Request, res: Response) => {
+  try {
+    const { loginToken, otp } = req.body;
+    if (!loginToken || !otp) {
+      return res.status(400).json({ error: "loginToken and otp are required." });
+    }
+
+    const expectedOtp = process.env.APP_LOGIN_OTP;
+    if (!expectedOtp) {
+      return res.status(503).json({ error: "OTP is not configured on the server. Set APP_LOGIN_OTP in .env." });
+    }
+
+    if (String(otp).trim() !== String(expectedOtp).trim()) {
+      return res.status(401).json({ error: "Invalid OTP." });
+    }
+
+    const secret = process.env.JWT_SECRET || "supersecretjwtkeyforstockdashboardintraday2026";
+    let decoded: any;
+    try {
+      decoded = jwt.verify(loginToken, secret);
+    } catch {
+      return res.status(401).json({ error: "OTP session expired. Please sign in again." });
+    }
+
+    if (decoded.type !== "otp-pending") {
+      return res.status(401).json({ error: "Invalid token type." });
+    }
+
+    const userId   = decoded.sub as string;
+    const username = decoded.username as string;
+    const name     = decoded.name as string;
+
+    const accessToken  = generateAccessToken(userId);
+    const refreshToken = generateRefreshToken(userId);
+
+    res.cookie("refresh", refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    return res.status(200).json({
+      accessToken,
+      user: { id: userId, username, name },
+    });
+  } catch (error) {
+    console.error("VerifyOtp Error:", error);
     return res.status(500).json({ error: "Internal Server Error" });
   }
 };

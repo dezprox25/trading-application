@@ -4,6 +4,7 @@ import { useStore } from "../store/useStore";
 import { useDashStore } from "../modules/dashboard/store";
 import { Tick, Module2Cell, Module2StrikeState } from "@stock/shared";
 import type { Module1OiMetrics, Module1IndicatorState } from "../store/useStore";
+import { formatExpiryForBroker } from "../data/models";
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_URL || "";
 
@@ -28,7 +29,23 @@ export const useSocket = () => {
   const activeSessionId    = useStore((s) => s.activeSession?.sessionId);
   const module1IndicatorRoom = useStore((s) => s.module1IndicatorRoom);
 
-  const prevIndicatorRoomRef = useRef<string | null>(null);
+  const prevIndicatorRoomRef  = useRef<string | null>(null);
+  const prevOptionSymsRef     = useRef<string[]>([]);
+
+  // Derive CE/PE option symbols from dash config whenever isGenerated.
+  const dashIsGenerated  = useDashStore((s) => s.isGenerated);
+  const dashInstrument   = useDashStore((s) => s.instrument);
+  const dashExpiryDate   = useDashStore((s) => s.expiryDate);
+  const dashCallStrike   = useDashStore((s) => s.callStrike);
+  const dashPutStrike    = useDashStore((s) => s.putStrike);
+  const dashType         = useDashStore((s) => s.type);
+
+  const expiryFmt        = formatExpiryForBroker(dashExpiryDate);
+  const liveOptionSymbols: string[] = dashIsGenerated && expiryFmt ? [
+    ...(dashType !== "Put"  && dashCallStrike ? [`${dashInstrument}${expiryFmt}C${dashCallStrike}`] : []),
+    ...(dashType !== "Call" && dashPutStrike  ? [`${dashInstrument}${expiryFmt}P${dashPutStrike}`]  : []),
+  ] : [];
+  const liveOptionSymbolsKey = liveOptionSymbols.join(",");
 
   // ── Connect / disconnect on auth state change ──────────────────────────────
   useEffect(() => {
@@ -66,6 +83,22 @@ export const useSocket = () => {
       // Re-subscribe to all active rooms on reconnect
       socket.emit("join:symbol", selectedSymbol);
       if (activeSessionId) socket.emit("join:tracker", activeSessionId);
+
+      // Re-request on-demand option token subscription too — a reconnect means the
+      // backend's broker connection may have restarted, so its runtime CE/PE subscriptions
+      // need to be re-established, not just the frontend's socket room membership.
+      const dashCfg = useDashStore.getState();
+      if (dashCfg.isGenerated && dashCfg.expiryDate && (dashCfg.callStrike || dashCfg.putStrike)) {
+        const exFmt = formatExpiryForBroker(dashCfg.expiryDate);
+        socket.emit("subscribe:options", {
+          instrument: dashCfg.instrument,
+          expiry: exFmt,
+          callStrike: dashCfg.type !== "Put" ? dashCfg.callStrike : null,
+          putStrike: dashCfg.type !== "Call" ? dashCfg.putStrike : null,
+          type: dashCfg.type,
+        });
+        console.log("[Socket] subscribe:options re-sent on (re)connect");
+      }
 
       const room = module1IndicatorRoom;
       if (room) {
@@ -126,18 +159,23 @@ export const useSocket = () => {
       }
     );
 
-    // Broker connection status from backend
-    socket.on("broker_status", (data: { status: string; detail?: string }) => {
-      console.log("[Socket] broker_status:", data.status, data.detail || "");
+    // Broker connection status from backend.
+    // moduleId tells us which broker sent the event so we only update the
+    // correct module. Without this guard, AETRAM reconnect loops overwrote
+    // Module 1's dashboard feed status continuously, causing "API Error".
+    socket.on("broker_status", (data: { status: string; moduleId?: string; detail?: string }) => {
+      const mod = data.moduleId || "module1"; // legacy events default to module1
+      console.log(`[Socket] broker_status[${mod}]:`, data.status, data.detail || "");
 
-      // Update Module 2 broker status in store
-      const { setModule2BrokerStatus } = useStore.getState();
-      const s = data.status as "live" | "broker-disconnected" | "session-expired" | "reconnecting";
-      setModule2BrokerStatus(s === "live" ? null : s);
+      // Module 2 (AETRAM) broker status
+      if (mod === "module2") {
+        const { setModule2BrokerStatus } = useStore.getState();
+        const s = data.status as "live" | "broker-disconnected" | "session-expired" | "reconnecting";
+        setModule2BrokerStatus(s === "live" ? null : s);
+        return; // Do NOT touch Module 1 dashboard status
+      }
 
-      // Update Module 1 dashboard feed status.
-      // Always propagate so the status indicator is accurate regardless of
-      // whether Generate has been clicked.
+      // Module 1 (Zebu) broker status → update dashboard feed status
       const dash = useDashStore.getState();
       switch (data.status) {
         case "live":
@@ -208,6 +246,37 @@ export const useSocket = () => {
 
     prevIndicatorRoomRef.current = next;
   }, [module1IndicatorRoom]);
+
+  // ── Join / leave live option symbol rooms (CE / PE premium feed) ──────────
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!socket?.connected) return;
+
+    const prev = prevOptionSymsRef.current;
+    const next = liveOptionSymbols;
+
+    prev.filter(s => !next.includes(s)).forEach(s => socket.emit("leave:symbol", s));
+    next.filter(s => !prev.includes(s)).forEach(s => {
+      socket.emit("join:symbol", s);
+      console.log(`[Socket] Subscribed to option room: ${s}`);
+    });
+
+    // Ask the backend to resolve + subscribe these exact strikes on the live broker
+    // connection, independent of whatever ATM band it picked at connect time. This is
+    // the frontend half of the "Call/Put OHLC empty" fix — see REPORT_MODULE1_DATAPATH.md.
+    if (next.length > 0) {
+      socket.emit("subscribe:options", {
+        instrument: dashInstrument,
+        expiry: expiryFmt,
+        callStrike: dashType !== "Put" ? dashCallStrike : null,
+        putStrike: dashType !== "Call" ? dashPutStrike : null,
+        type: dashType,
+      });
+      console.log(`[Socket] subscribe:options requested — ${next.join(", ")}`);
+    }
+
+    prevOptionSymsRef.current = next;
+  }, [liveOptionSymbolsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Join / leave Module 2 tracker session room ────────────────────────────
   useEffect(() => {
