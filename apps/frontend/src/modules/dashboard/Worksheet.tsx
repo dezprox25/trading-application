@@ -191,14 +191,17 @@ const p2 = (n: number | null | undefined): string =>
     ? "—"
     : n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// 12-hour display with AM/PM (e.g. "07 Jul, 1:04 PM"). Display-only — the
+// row's millisecond timestamp stays the source of truth for ordering and
+// candle boundaries. ICU emits lowercase "am/pm"; the spec wants uppercase.
 const fmtDateTime = (ms: number) => {
   const d = new Date(ms);
   const opts: Intl.DateTimeFormatOptions = {
     day: "2-digit", month: "short",
-    hour: "2-digit", minute: "2-digit",
-    hour12: false, timeZone: "Asia/Kolkata",
+    hour: "numeric", minute: "2-digit",
+    hour12: true, timeZone: "Asia/Kolkata",
   };
-  return d.toLocaleString("en-IN", opts);
+  return d.toLocaleString("en-IN", opts).replace(/\s?(am|pm)$/i, (m) => m.toUpperCase());
 };
 
 // ── Cell value resolver ───────────────────────────────────────────────────────

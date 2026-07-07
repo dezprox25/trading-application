@@ -255,9 +255,9 @@ export const SECTIONS: Section[] = [
                 name: "Date & Time",
                 tint: "neutral",
                 description:
-                  "The starting time of the candle, shown in Indian Standard Time (e.g. “06 Jul 10:35”). This column is frozen on the left so it stays visible while you scroll sideways.",
+                  "The starting time of the candle, shown in Indian Standard Time in 12-hour format with AM/PM (e.g. “06 Jul, 10:35 AM” or “06 Jul, 1:05 PM”). This column is frozen on the left so it stays visible while you scroll sideways.",
                 howToRead:
-                  "Tells you exactly which slice of the trading day the row describes. On a 5m timeframe, “10:35” covers 10:35:00 to 10:39:59.",
+                  "Tells you exactly which slice of the trading day the row describes. On a 5m timeframe, “10:35 AM” covers 10:35:00 to 10:39:59.",
               },
               {
                 id: "ce-ohlc",
