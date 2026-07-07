@@ -87,7 +87,7 @@ export const SECTIONS: Section[] = [
           },
           {
             n: 3,
-            text: "Make your selection in the header, left to right: Exchange → Instrument → Contract Month → Expiry Date → Type → Call Strike / Put Strike. Each choice unlocks the next one.",
+            text: "Make your selection in the header, left to right: Instrument → Symbol → Expiry Date → Type → Call Strike / Put Strike. Each choice unlocks the next one.",
           },
           {
             n: 4,
@@ -132,15 +132,14 @@ export const SECTIONS: Section[] = [
           {
             type: "para",
             content:
-              "The six selection fields form a chain — each one depends on the one before it. If you change a field higher up the chain, everything after it clears automatically, so you can never end up with a mismatched combination.",
+              "The selection fields form a chain — each one depends on the one before it. If you change a field higher up the chain, everything after it clears automatically, so you can never end up with a mismatched combination.",
           },
           {
             type: "bullets",
             items: [
-              "Exchange — where the contracts trade. NFO (the NSE derivatives segment) is pre-selected for you.",
-              "Instrument — the index you want to trade options on, e.g. NIFTY. Note: live prices currently stream for NIFTY only.",
-              "Contract Month — narrows the expiry list to one calendar month. The current month plus the next three are offered.",
-              "Expiry Date — the exact settlement date of the option. For NIFTY the choices are the Tuesdays of the selected month (the official weekly expiry day); dates already in the past are hidden.",
+              "Instrument — the instrument type you want to trade, e.g. Index Options. “Index Options” is pre-selected for you.",
+              "Symbol — the underlying you want to trade, e.g. NIFTY. Note: live prices currently stream for NIFTY only.",
+              "Expiry Date — the exact settlement date of the option, nearest date pre-selected. For NIFTY the choices are the Tuesdays (the official weekly expiry day); dates already in the past are hidden. Hidden entirely for instruments that don't settle (Cash Index, Equity).",
               "Type — which option sides you want: “Call + Put” (both, the default), “Call” only, or “Put” only. Choosing one side hides the other side's columns entirely.",
               "Call Strike / Put Strike — the strike price of each option. The dropdown offers 11 strikes: the one closest to the current market level (called “at the money”) plus five above and five below, in 50-point steps.",
             ],

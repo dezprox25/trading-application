@@ -106,10 +106,21 @@ export function tlaFromMMA(barMMA: number, barHigh: number): number {
 
 // ── Ranking ───────────────────────────────────────────────────────────────────
 // Compares Call MMA vs Put MMA only (Future/Spot not included).
-// TODO confirm tie behaviour — defaulting to Call MMA on tie (diff ≥ 0 → call).
+// Tie (diff = 0) goes to Call MMA — confirmed by client.
+// If only one side has data (NaN = missing option bar), the available side wins
+// outright; if both are missing, returns 0 so the result is always a finite
+// number — never NaN / undefined / null / Infinity.
 export function computeRanking(callMMA: number, putMMA: number): { value: number; winner: "call" | "put" } {
-  if (callMMA - putMMA >= 0) return { value: callMMA, winner: "call" };
-  return { value: putMMA, winner: "put" };
+  const callValid = Number.isFinite(callMMA);
+  const putValid  = Number.isFinite(putMMA);
+  if (callValid && putValid) {
+    return callMMA - putMMA >= 0
+      ? { value: callMMA, winner: "call" }
+      : { value: putMMA, winner: "put" };
+  }
+  if (callValid) return { value: callMMA, winner: "call" };
+  if (putValid)  return { value: putMMA,  winner: "put"  };
+  return { value: 0, winner: "call" };
 }
 
 // ── EMA ───────────────────────────────────────────────────────────────────────

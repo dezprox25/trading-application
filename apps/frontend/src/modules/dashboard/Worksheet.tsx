@@ -163,7 +163,16 @@ function getCellStyle(colId: string, row: DashboardRow): CellColor {
 // ── Formatting ────────────────────────────────────────────────────────────────
 
 const p0 = (n: number | null | undefined): string =>
-  n == null || !Number.isFinite(n) ? "—" : Math.floor(n).toLocaleString("en-IN");
+  n == null || !Number.isFinite(n) ? "—" : Math.round(n).toLocaleString("en-IN");
+
+// Option premiums move in ₹0.05 ticks — sub-rupee precision is real market
+// signal. A deep-OTM expiry-day put trading 1.35→1.50 must render as
+// 1.35/1.50, not as a constant "1" (Math.floor destroyed all variation and
+// made the PUT side look frozen). Used for Call/Put OHLC, MMA, TLA, Ranking.
+const p2 = (n: number | null | undefined): string =>
+  n == null || !Number.isFinite(n)
+    ? "—"
+    : n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const fmtDateTime = (ms: number) => {
   const d = new Date(ms);
@@ -182,22 +191,22 @@ function getCellValue(row: DashboardRow, colId: string): string {
   switch (colId) {
     // Date & Time (single frozen column)
     case "datetime":  return fmtDateTime(row.t);
-    // Call OHLC
-    case "ce-o":      return p0(row.call.o);
-    case "ce-h":      return p0(row.call.h);
-    case "ce-l":      return p0(row.call.l);
-    case "ce-c":      return p0(row.call.c);
-    case "mma-c":     return p0(row.callMMA);
-    case "tla-c":     return p0(row.callTLA);
-    // Put OHLC
-    case "pe-o":      return p0(row.put.o);
-    case "pe-h":      return p0(row.put.h);
-    case "pe-l":      return p0(row.put.l);
-    case "pe-c":      return p0(row.put.c);
-    case "mma-p":     return p0(row.putMMA);
-    case "tla-p":     return p0(row.putTLA);
-    // Ranking (coloured by rankingWinner via getCellStyle)
-    case "ranking":   return p0(row.ranking);
+    // Call OHLC (option premiums — 2-decimal precision, see p2)
+    case "ce-o":      return p2(row.call.o);
+    case "ce-h":      return p2(row.call.h);
+    case "ce-l":      return p2(row.call.l);
+    case "ce-c":      return p2(row.call.c);
+    case "mma-c":     return p2(row.callMMA);
+    case "tla-c":     return p2(row.callTLA);
+    // Put OHLC (option premiums — 2-decimal precision, see p2)
+    case "pe-o":      return p2(row.put.o);
+    case "pe-h":      return p2(row.put.h);
+    case "pe-l":      return p2(row.put.l);
+    case "pe-c":      return p2(row.put.c);
+    case "mma-p":     return p2(row.putMMA);
+    case "tla-p":     return p2(row.putTLA);
+    // Ranking (compares option MMAs — same precision; coloured via getCellStyle)
+    case "ranking":   return p2(row.ranking);
     // Future OHLC + indicators
     case "fut-o":     return p0(row.future.o);
     case "fut-h":     return p0(row.future.h);

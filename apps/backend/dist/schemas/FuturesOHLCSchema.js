@@ -29,15 +29,22 @@ exports.FuturesOHLCSchema = new mongoose_1.Schema({
         type: Number,
         required: true,
     },
+    // NOTE: no path-level index here — bar_time is indexed by the TTL index
+    // below (a plain bar_time_1 index would conflict with it) and by the unique
+    // compound index.
     bar_time: {
         type: Date,
         required: true,
-        index: true,
     },
     volume: {
         type: Number,
         default: 0,
     },
 });
-// Index to query the latest candles for pivot calculation
-exports.FuturesOHLCSchema.index({ symbol: 1, timeframe: 1, bar_time: -1 });
+// One candle per (symbol, timeframe, bar_time) — enforced at the DB level so
+// racing upserts can never insert duplicates. Also serves the latest-candles
+// query for pivot calculation (replaces the old non-unique bar_time:-1 index).
+exports.FuturesOHLCSchema.index({ symbol: 1, timeframe: 1, bar_time: 1 }, { unique: true });
+// TTL index: MongoDB auto-deletes candles older than 25 hours (90000 seconds).
+// This ensures previous-day bars are purged automatically without a cron job.
+exports.FuturesOHLCSchema.index({ bar_time: 1 }, { expireAfterSeconds: 90000 });

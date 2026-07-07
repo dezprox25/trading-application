@@ -218,7 +218,7 @@ function InfoBar() {
 
 export function Dashboard() {
   const {
-    isGenerated, contractMonth, instrument, timeframe, customRange,
+    isGenerated, instrument, timeframe, customRange,
     expiryDate, callStrike, putStrike, type,
     rows, appendRow, clearRows,
     setFeedStatus, feedStatus,
@@ -471,7 +471,7 @@ export function Dashboard() {
     init();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isGenerated, instrument, contractMonth, timeframe, customRange, retryKey, generateKey, expiryDate, callStrike, putStrike, type]);
+  }, [isGenerated, instrument, timeframe, customRange, retryKey, generateKey, expiryDate, callStrike, putStrike, type]);
 
   // Effect 2: 500ms live OI polling — builds and updates the active bar.
   useEffect(() => {
@@ -538,12 +538,14 @@ export function Dashboard() {
           }
           vwapStateRef.current.cumTP += (pb.spotH + pb.spotL + pb.spotC) / 3;
           vwapStateRef.current.count++;
-          // Guard NaN: if option tick never arrived this bar, skip rather than poison history
-          if (!isNaN(pb.callC)) {
-            prevRsiCloses.current = [...prevRsiCloses.current, pb.callC].slice(-50);
+          // RSI closes and session high/low track the FUTURE series only —
+          // option premiums must never feed either (history seeds them from
+          // futCloses/fut H-L above, so live continuation must match).
+          if (!isNaN(pb.futC)) {
+            prevRsiCloses.current = [...prevRsiCloses.current, pb.futC].slice(-50);
           }
-          if (!isNaN(pb.callH)) swHighRef.current = Math.max(swHighRef.current, pb.callH);
-          if (!isNaN(pb.callL)) swLowRef.current  = Math.min(swLowRef.current,  pb.callL);
+          if (!isNaN(pb.futH)) swHighRef.current = Math.max(swHighRef.current, pb.futH);
+          if (!isNaN(pb.futL)) swLowRef.current  = Math.min(swLowRef.current,  pb.futL);
         }
 
         if (dash.rows.length === 0) {
@@ -568,13 +570,19 @@ export function Dashboard() {
         const futBar:  OHLCBar = futFresh  ? { t: windowStart, o: futLtp, h: futLtp, l: futLtp, c: futLtp } : MISSING_BAR(windowStart);
         const spotBar: OHLCBar = spotFresh ? { t: windowStart, o: sLtp,   h: sLtp,   l: sLtp,   c: sLtp   } : MISSING_BAR(windowStart);
 
+        // Session high/low = FUTURE series only, including the forming bar —
+        // same semantics as the historical builder (never Call/Put values).
+        const sessHigh = Math.max(swHighRef.current, futLtp);
+        const sessLow  = Math.min(swLowRef.current,  futLtp);
+
         const cMMA = mmaBar(callBar);  const cTLA = tlaFromMMA(cMMA, callBar.h);
         const pMMA = mmaBar(putBar);   const pTLA = tlaFromMMA(pMMA, putBar.h);
         const fMMA = mmaBar(futBar);   const fTLA = tlaFromMMA(fMMA, futBar.h);
         const sMMA = mmaBar(spotBar);  const sTLA = tlaFromMMA(sMMA, spotBar.h);
         const { value: rankVal, winner: rankWin } = computeRanking(cMMA, pMMA);
 
-        const rsiSer = computeRsiSeries([...prevRsiCloses.current, callBar.c]);
+        // RSI is always computed from Future closes — never option premiums.
+        const rsiSer = computeRsiSeries([...prevRsiCloses.current, futLtp]);
         const rsi    = rsiSer[rsiSer.length - 1] ?? null;
         const k2     = 2 / (20 + 1);
         const ema    = prevEmaRef.current !== null ? sLtp * k2 + prevEmaRef.current * (1 - k2) : null;
@@ -590,8 +598,8 @@ export function Dashboard() {
           spotMMA:   sMMA, spotTLA:   sTLA,
           ranking: rankVal, rankingWinner: rankWin,
           oiMatrix: { ...oi },
-          smc: smcNearest(futLtp, swHighRef.current, swLowRef.current, swHighRef.current, swLowRef.current),
-          fib: nearestFibLabel(futLtp, swHighRef.current, swLowRef.current) ?? "—",
+          smc: smcNearest(futLtp, sessHigh, sessLow, sessHigh, sessLow),
+          fib: nearestFibLabel(futLtp, sessHigh, sessLow) ?? "—",
           rsi, ema, vwap,
         });
 
@@ -628,13 +636,19 @@ export function Dashboard() {
         const futBar:  OHLCBar = futFresh  ? { t: b.windowStart, o: b.futO,  h: b.futH,  l: b.futL,  c: b.futC  } : MISSING_BAR(b.windowStart);
         const spotBar: OHLCBar = spotFresh ? { t: b.windowStart, o: b.spotO, h: b.spotH, l: b.spotL, c: b.spotC } : MISSING_BAR(b.windowStart);
 
+        // Session high/low = FUTURE series only, including the forming bar —
+        // same semantics as the historical builder (never Call/Put values).
+        const sessHigh = Math.max(swHighRef.current, b.futH);
+        const sessLow  = Math.min(swLowRef.current,  b.futL);
+
         const cMMA = mmaBar(callBar);  const cTLA = tlaFromMMA(cMMA, callBar.h);
         const pMMA = mmaBar(putBar);   const pTLA = tlaFromMMA(pMMA, putBar.h);
         const fMMA = mmaBar(futBar);   const fTLA = tlaFromMMA(fMMA, futBar.h);
         const sMMA = mmaBar(spotBar);  const sTLA = tlaFromMMA(sMMA, spotBar.h);
         const { value: rankVal, winner: rankWin } = computeRanking(cMMA, pMMA);
 
-        const rsiSer = computeRsiSeries([...prevRsiCloses.current, callBar.c]);
+        // RSI is always computed from Future closes — never option premiums.
+        const rsiSer = computeRsiSeries([...prevRsiCloses.current, futLtp]);
         const rsi    = rsiSer[rsiSer.length - 1] ?? null;
         const k2     = 2 / (20 + 1);
         const ema    = prevEmaRef.current !== null ? sLtp * k2 + prevEmaRef.current * (1 - k2) : null;
@@ -649,8 +663,8 @@ export function Dashboard() {
           spotMMA:   sMMA, spotTLA:   sTLA,
           ranking: rankVal, rankingWinner: rankWin,
           oiMatrix: { ...oi },
-          smc: smcNearest(futLtp, swHighRef.current, swLowRef.current, swHighRef.current, swLowRef.current),
-          fib: nearestFibLabel(futLtp, swHighRef.current, swLowRef.current) ?? "—",
+          smc: smcNearest(futLtp, sessHigh, sessLow, sessHigh, sessLow),
+          fib: nearestFibLabel(futLtp, sessHigh, sessLow) ?? "—",
           rsi, ema, vwap,
         });
 

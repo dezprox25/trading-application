@@ -72,6 +72,8 @@ const initTrackerEngine = async () => {
     catch (error) {
         console.error("[TrackerEngine] Failed to restore sessions on startup:", error);
     }
+    // Register reconnect callback so subscriptions are restored on WebSocket reconnect
+    (0, aetramMarketDataService_1.setOnAetramReconnect)(() => (0, exports.syncAetramSubscriptions)());
     // Schedule the minute boundary checker
     scheduleNextMinuteBoundary();
 };

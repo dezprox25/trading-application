@@ -2,11 +2,9 @@ import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useDashStore } from "./store";
 import { useStore } from "../../store/useStore";
-import {
-  fetchExchanges, fetchInstruments, fetchContractMonths, fetchExpiries, fetchStrikes,
-  DEFAULT_EXCHANGE,
-} from "../../data/liveApi";
-import { formatContractMonth, formatExpiryDisplay } from "../../data/models";
+import { fetchSymbolExpiries, fetchStrikes } from "../../data/liveApi";
+import { formatExpiryDisplay } from "../../data/models";
+import { INSTRUMENT_TYPES, tradingConfig, requiresExpiry } from "../../data/tradingConfig";
 
 // ── Live price hook ───────────────────────────────────────────────────────────
 
@@ -137,10 +135,10 @@ function LivePrice({ label, value, dir }: { label: string; value: number | null;
 
 export function ConfigRow() {
   const {
-    exchange, instrument, contractMonth, type, callStrike, putStrike,
+    instrumentType, instrument, type, callStrike, putStrike,
     expiryDate,
     isGenerated,
-    setExchange, setInstrument, setContractMonth, setType,
+    setInstrumentType, setInstrument, setType,
     setCallStrike, setPutStrike,
     setExpiryDate,
     generate, reset,
@@ -150,32 +148,16 @@ export function ConfigRow() {
   const { ltp: spotLtp,   dir: spotDir }   = useLivePrice("NIFTY-SPOT");
   const { ltp: futureLtp, dir: futureDir } = useLivePrice("NIFTY-FUT");
 
-  // ── Dependent data queries (Exchange → Instrument → Month → Expiry → Strike) ─
+  const needsExpiry = requiresExpiry(instrumentType);
 
-  const { data: exchanges = [], isLoading: loadEx } = useQuery({
-    queryKey: ["exchanges"],
-    queryFn: fetchExchanges,
-    staleTime: Infinity,
-  });
+  // ── Dependent data (Instrument type → Symbol → Expiry → Strike) ──────────────
 
-  const { data: instruments = [], isLoading: loadIn } = useQuery({
-    queryKey: ["instruments", exchange],
-    queryFn: () => fetchInstruments(exchange),
-    enabled: !!exchange,
-    staleTime: Infinity,
-  });
-
-  const { data: months = [], isLoading: loadMo } = useQuery({
-    queryKey: ["contract-months", exchange, instrument],
-    queryFn: () => fetchContractMonths(exchange, instrument),
-    enabled: !!instrument,
-    staleTime: Infinity,
-  });
+  const symbols = tradingConfig[instrumentType]?.symbols ?? [];
 
   const { data: expiries = [], isLoading: loadExp } = useQuery({
-    queryKey: ["expiries", exchange, instrument, contractMonth],
-    queryFn: () => fetchExpiries(exchange, instrument, contractMonth),
-    enabled: !!contractMonth,
+    queryKey: ["expiries", instrument],
+    queryFn: () => fetchSymbolExpiries(instrument),
+    enabled: !!instrument && needsExpiry,
     staleTime: Infinity,
   });
 
@@ -191,29 +173,22 @@ export function ConfigRow() {
   // one is cleared (which cascades through the store resets).
 
   useEffect(() => {
-    if (!exchange && exchanges.length > 0) {
-      const def = exchanges.find((e) => e.code === DEFAULT_EXCHANGE) ?? exchanges[0];
-      setExchange(def.code);
-    }
-  }, [exchange, exchanges, setExchange]);
-
-  useEffect(() => {
-    if (instrument && !loadIn && exchange && !instruments.some((i) => i.id === instrument)) {
+    if (instrument && !symbols.includes(instrument)) {
       setInstrument("");
     }
-  }, [instrument, instruments, loadIn, exchange, setInstrument]);
+  }, [instrument, symbols, setInstrument]);
+
+  // Nearest expiry is auto-selected whenever the current one is missing/invalid.
+  useEffect(() => {
+    if (!needsExpiry || loadExp || expiries.length === 0) return;
+    if (!expiryDate || !expiries.some((e) => e.id === expiryDate)) {
+      setExpiryDate(expiries[0].id);
+    }
+  }, [needsExpiry, expiries, loadExp, expiryDate, setExpiryDate]);
 
   useEffect(() => {
-    if (contractMonth && !loadMo && instrument && !months.some((m) => m.id === contractMonth)) {
-      setContractMonth("");
-    }
-  }, [contractMonth, months, loadMo, instrument, setContractMonth]);
-
-  useEffect(() => {
-    if (expiryDate && !loadExp && contractMonth && !expiries.some((e) => e.id === expiryDate)) {
-      setExpiryDate("");
-    }
-  }, [expiryDate, expiries, loadExp, contractMonth, setExpiryDate]);
+    if (!needsExpiry && expiryDate) setExpiryDate("");
+  }, [needsExpiry, expiryDate, setExpiryDate]);
 
   useEffect(() => {
     if (loadSt || !expiryDate) return;
@@ -225,7 +200,7 @@ export function ConfigRow() {
   const includesPut  = type === "Put"  || type === "Call+Put";
 
   const canGenerate =
-    !!exchange && !!instrument && !!contractMonth && !!expiryDate &&
+    !!instrumentType && !!instrument && (!needsExpiry || !!expiryDate) &&
     (!includesCall || callStrike !== null) &&
     (!includesPut  || putStrike  !== null);
 
@@ -258,12 +233,10 @@ export function ConfigRow() {
     const p2 = (n: number | null) =>
       n != null ? n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
 
-    const monthLabel  = months.find((m) => m.id === contractMonth);
     const summary = [
-      exchange,
+      instrumentType,
       instrument,
-      monthLabel ? formatContractMonth(monthLabel) : null,
-      expiryDate ? formatExpiryDisplay(expiryDate) : null,
+      needsExpiry && expiryDate ? formatExpiryDisplay(expiryDate) : null,
     ].filter(Boolean).join(" › ");
 
     return (
@@ -309,52 +282,43 @@ export function ConfigRow() {
 
       <div style={{ width: 1, height: 36, background: "#BDC4CF", alignSelf: "center", margin: "0 2px" }} />
 
-      {/* Exchange */}
-      <Field label="Exchange">
+      {/* Instrument (type) */}
+      <Field label="Instrument">
         <DepSelect
-          value={exchange}
-          onChange={setExchange}
+          value={instrumentType}
+          onChange={setInstrumentType}
           disabled={false}
-          loading={loadEx}
-          options={exchanges.map((e) => ({ value: e.code, label: e.code }))}
-          minWidth={90}
+          loading={false}
+          options={INSTRUMENT_TYPES}
+          minWidth={130}
         />
       </Field>
 
-      {/* Instrument (underlying) */}
-      <Field label="Instrument">
+      {/* Symbol (underlying) */}
+      <Field label="Symbol">
         <DepSelect
           value={instrument}
           onChange={setInstrument}
-          disabled={!exchange}
-          loading={loadIn}
-          options={instruments.map((i) => ({ value: i.id, label: i.symbol }))}
+          disabled={false}
+          loading={false}
+          options={symbols.map((s) => ({ value: s, label: s }))}
         />
       </Field>
 
-      {/* Contract Month */}
-      <Field label="Contract Month">
-        <DepSelect
-          value={contractMonth}
-          onChange={setContractMonth}
-          disabled={!instrument}
-          loading={loadMo}
-          options={months.map((m) => ({ value: m.id, label: formatContractMonth(m) }))}
-          minWidth={100}
-        />
-      </Field>
-
-      {/* Expiry Date — internal value is ISO "YYYY-MM-DD"; display "DD Mon YYYY". */}
-      <Field label="Expiry Date">
-        <DepSelect
-          value={expiryDate}
-          onChange={setExpiryDate}
-          disabled={!contractMonth}
-          loading={loadExp}
-          options={expiries.map((e) => ({ value: e.id, label: e.expiry }))}
-          minWidth={110}
-        />
-      </Field>
+      {/* Expiry Date — internal value is ISO "YYYY-MM-DD"; display "DD Mon YYYY".
+          Hidden entirely for instrument types that don't settle (Cash Index, Equity). */}
+      {needsExpiry && (
+        <Field label="Expiry Date">
+          <DepSelect
+            value={expiryDate}
+            onChange={setExpiryDate}
+            disabled={!instrument}
+            loading={loadExp}
+            options={expiries.map((e) => ({ value: e.id, label: e.expiry }))}
+            minWidth={110}
+          />
+        </Field>
+      )}
 
       {/* Option Type */}
       <Field label="Type">

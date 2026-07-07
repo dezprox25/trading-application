@@ -28,7 +28,7 @@ const JWT_SECRET = resolveSecret("JWT_SECRET", "JWT access token secret");
 exports.JWT_SECRET = JWT_SECRET;
 const JWT_REFRESH_SECRET = resolveSecret("JWT_REFRESH_SECRET", "JWT refresh token secret");
 exports.JWT_REFRESH_SECRET = JWT_REFRESH_SECRET;
-const generateAccessToken = (userId) => jsonwebtoken_1.default.sign({ userId }, JWT_SECRET, { expiresIn: "15m" });
+const generateAccessToken = (userId) => jsonwebtoken_1.default.sign({ userId }, JWT_SECRET, { expiresIn: "8h" });
 exports.generateAccessToken = generateAccessToken;
 const generateRefreshToken = (userId) => jsonwebtoken_1.default.sign({ userId }, JWT_REFRESH_SECRET, { expiresIn: "7d" });
 exports.generateRefreshToken = generateRefreshToken;

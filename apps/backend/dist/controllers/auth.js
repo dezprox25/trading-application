@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.moduleLogin = exports.me = exports.logout = exports.refresh = exports.register = exports.login = void 0;
+exports.moduleLogin = exports.me = exports.logout = exports.refresh = exports.register = exports.verifyOtp = exports.login = void 0;
 const bcrypt_1 = __importDefault(require("bcrypt"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const User_1 = require("../models/User");
@@ -11,6 +11,7 @@ const Watchlist_1 = require("../models/Watchlist");
 const shared_1 = require("@stock/shared");
 const token_1 = require("../utils/token");
 const redis_1 = __importDefault(require("../config/redis"));
+const dataFeed_1 = require("../services/dataFeed");
 // Fixed user ID issued inside JWTs when authenticating via APP_LOGIN_* env vars.
 // Used by refresh and me to bypass the database lookup for this synthetic user.
 const ENV_USER_ID = "__app_env_user__";
@@ -59,6 +60,12 @@ const login = async (req, res) => {
             if (username !== envUser.username || password !== envUser.password) {
                 return res.status(401).json({ error: "Invalid username or password." });
             }
+            // OTP step — issue a short-lived pending token instead of full session tokens
+            if (process.env.APP_OTP_ENABLED === "true") {
+                const secret = process.env.JWT_SECRET || "supersecretjwtkeyforstockdashboardintraday2026";
+                const loginToken = jsonwebtoken_1.default.sign({ sub: ENV_USER_ID, type: "otp-pending", username: envUser.username, name: envUser.name }, secret, { expiresIn: "5m" });
+                return res.status(200).json({ otpRequired: true, loginToken });
+            }
             const accessToken = (0, token_1.generateAccessToken)(ENV_USER_ID);
             const refreshToken = (0, token_1.generateRefreshToken)(ENV_USER_ID);
             res.cookie("refresh", refreshToken, {
@@ -88,8 +95,15 @@ const login = async (req, res) => {
         if (!match || user.status === "inactive") {
             return res.status(401).json({ error: "Invalid username or password." });
         }
-        const accessToken = (0, token_1.generateAccessToken)(user._id.toString());
-        const refreshToken = (0, token_1.generateRefreshToken)(user._id.toString());
+        const userId = user._id.toString();
+        // OTP step for DB users
+        if (process.env.APP_OTP_ENABLED === "true") {
+            const secret = process.env.JWT_SECRET || "supersecretjwtkeyforstockdashboardintraday2026";
+            const loginToken = jsonwebtoken_1.default.sign({ sub: userId, type: "otp-pending", username: user.username, name: user.name || user.username }, secret, { expiresIn: "5m" });
+            return res.status(200).json({ otpRequired: true, loginToken });
+        }
+        const accessToken = (0, token_1.generateAccessToken)(userId);
+        const refreshToken = (0, token_1.generateRefreshToken)(userId);
         res.cookie("refresh", refreshToken, {
             httpOnly: true,
             secure: process.env.NODE_ENV === "production",
@@ -107,6 +121,53 @@ const login = async (req, res) => {
     }
 };
 exports.login = login;
+// POST /auth/verify-otp — second step when APP_OTP_ENABLED=true
+const verifyOtp = async (req, res) => {
+    try {
+        const { loginToken, otp } = req.body;
+        if (!loginToken || !otp) {
+            return res.status(400).json({ error: "loginToken and otp are required." });
+        }
+        const expectedOtp = process.env.APP_LOGIN_OTP;
+        if (!expectedOtp) {
+            return res.status(503).json({ error: "OTP is not configured on the server. Set APP_LOGIN_OTP in .env." });
+        }
+        if (String(otp).trim() !== String(expectedOtp).trim()) {
+            return res.status(401).json({ error: "Invalid OTP." });
+        }
+        const secret = process.env.JWT_SECRET || "supersecretjwtkeyforstockdashboardintraday2026";
+        let decoded;
+        try {
+            decoded = jsonwebtoken_1.default.verify(loginToken, secret);
+        }
+        catch {
+            return res.status(401).json({ error: "OTP session expired. Please sign in again." });
+        }
+        if (decoded.type !== "otp-pending") {
+            return res.status(401).json({ error: "Invalid token type." });
+        }
+        const userId = decoded.sub;
+        const username = decoded.username;
+        const name = decoded.name;
+        const accessToken = (0, token_1.generateAccessToken)(userId);
+        const refreshToken = (0, token_1.generateRefreshToken)(userId);
+        res.cookie("refresh", refreshToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "strict",
+            maxAge: 7 * 24 * 60 * 60 * 1000,
+        });
+        return res.status(200).json({
+            accessToken,
+            user: { id: userId, username, name },
+        });
+    }
+    catch (error) {
+        console.error("VerifyOtp Error:", error);
+        return res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+exports.verifyOtp = verifyOtp;
 // POST /auth/register — disabled when env-var authentication is active
 const register = async (req, res) => {
     if (getEnvUser()) {
@@ -175,6 +236,13 @@ const refresh = async (req, res) => {
                 return res.status(401).json({ error: "Session invalid." });
             }
             const newAccessToken = (0, token_1.generateAccessToken)(ENV_USER_ID);
+            const newRefreshToken = (0, token_1.generateRefreshToken)(ENV_USER_ID);
+            res.cookie("refresh", newRefreshToken, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === "production",
+                sameSite: "strict",
+                maxAge: 7 * 24 * 60 * 60 * 1000,
+            });
             return res.status(200).json({
                 accessToken: newAccessToken,
                 user: { id: ENV_USER_ID, username: envUser.username, name: envUser.name },
@@ -193,6 +261,13 @@ const refresh = async (req, res) => {
             return res.status(401).json({ error: "User is no longer active" });
         }
         const newAccessToken = (0, token_1.generateAccessToken)(user._id.toString());
+        const newRefreshToken = (0, token_1.generateRefreshToken)(user._id.toString());
+        res.cookie("refresh", newRefreshToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "strict",
+            maxAge: 7 * 24 * 60 * 60 * 1000,
+        });
         return res.status(200).json({
             accessToken: newAccessToken,
             user: { id: user._id, username: user.username, name: user.name || user.username },
@@ -221,6 +296,9 @@ const logout = async (req, res) => {
             }
             catch (_) { }
         }
+        // Stop the Zebu data feed so the backend is in a clean state before the
+        // next login. Any pending reconnect timers or stale callbacks are discarded.
+        (0, dataFeed_1.stopDataFeed)();
         res.clearCookie("refresh", {
             httpOnly: true,
             secure: process.env.NODE_ENV === "production",

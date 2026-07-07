@@ -170,7 +170,9 @@ describe("computeRanking with NaN MMA values", () => {
   it("NaN vs NaN does not throw and returns a valid winner string", () => {
     const result = computeRanking(NaN, NaN);
     expect(result.winner === "call" || result.winner === "put").toBe(true);
-    expect(p0(result.value)).toBe("—"); // NaN ranking renders as blank, not as a price
+    // Client rule (Module 1 defect fix): Ranking must always be a valid finite
+    // number — never NaN/undefined/null/Infinity — even when both sides are missing.
+    expect(Number.isFinite(result.value)).toBe(true);
   });
 
   it("NaN call MMA vs real put MMA — put wins", () => {

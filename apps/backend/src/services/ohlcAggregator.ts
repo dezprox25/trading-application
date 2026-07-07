@@ -44,6 +44,13 @@ const startBoundaryChecker = () => {
         if (!candle) continue;
 
         const tfMins = await getTimeframeMinutes(tfStr);
+
+        // Re-check identity after the await: a tick may have finalized and
+        // replaced this candle while getTimeframeMinutes yielded. Without this
+        // check the same candle gets finalized twice and the freshly opened
+        // replacement candle is deleted (boundary double-finalize race).
+        if (activeCandles[symbol]?.[tfStr] !== candle) continue;
+
         const nextBoundary = candle.openTime + tfMins * 60000;
 
         if (now >= nextBoundary) {
@@ -173,6 +180,21 @@ const prunedSessions = new Map<string, number>();
 let _persistErrCount = 0;
 let _persistErrLastLog = 0;
 
+// Single source of truth for the candle upsert op — the initial bulk write and
+// the duplicate-key retry must persist the exact same doc for the same filter.
+const candleToUpsertOp = (c: Candle) => ({
+  updateOne: {
+    filter: { symbol: c.symbol, timeframe: c.timeframe, bar_time: new Date(c.openTime) },
+    update: {
+      $set: {
+        bar_open: c.open, bar_high: c.high, bar_low: c.low,
+        bar_close: c.close, volume: c.volume,
+      },
+    },
+    upsert: true,
+  },
+});
+
 const sessionOpenForCandle = (openTimeMs: number): number => {
   const sessionOpen = new Date(openTimeMs);
   sessionOpen.setUTCHours(3, 45, 0, 0); // 09:15 IST
@@ -192,28 +214,34 @@ const drainPersistQueue = async () => {
       // 1. One bulk upsert for the whole batch (same doc shape/filter as the
       //    previous per-candle findOneAndUpdate upsert).
       try {
-        await FuturesOHLC.bulkWrite(
-          batch.map(c => ({
-            updateOne: {
-              filter: { symbol: c.symbol, timeframe: c.timeframe, bar_time: new Date(c.openTime) },
-              update: {
-                $set: {
-                  bar_open: c.open, bar_high: c.high, bar_low: c.low,
-                  bar_close: c.close, volume: c.volume,
-                },
-              },
-              upsert: true,
-            },
-          })),
-          { ordered: false }
-        );
+        await FuturesOHLC.bulkWrite(batch.map(candleToUpsertOp), { ordered: false });
         console.log(`[OHLC] Persisted ${batch.length} finalized candle(s) in one bulk write.`);
       } catch (error: any) {
-        _persistErrCount++;
-        const now = Date.now();
-        if (now - _persistErrLastLog > 30_000) {
-          _persistErrLastLog = now;
-          console.error(`[OHLC] Bulk persist failed (${_persistErrCount} failure(s) so far, in-memory cache unaffected): ${error?.message || error}`);
+        // E11000 duplicate key: two upserts raced on the same (symbol,
+        // timeframe, bar_time) key and the unique index rejected the loser.
+        // The doc now exists, so re-running the identical op is a plain
+        // update — retry only the duplicate-key ops (unordered bulkWrite
+        // already applied every non-failing op).
+        const writeErrors: any[] = error?.writeErrors ?? [];
+        const dupes = writeErrors.filter((we: any) => we?.code === 11000);
+        let recovered = false;
+        if (dupes.length > 0 && dupes.length === writeErrors.length) {
+          try {
+            await FuturesOHLC.bulkWrite(
+              dupes.map((we: any) => candleToUpsertOp(batch[we.index])),
+              { ordered: false }
+            );
+            console.log(`[OHLC] Re-applied ${dupes.length} candle upsert(s) after duplicate-key race.`);
+            recovered = true;
+          } catch { /* fall through to the failure counter below */ }
+        }
+        if (!recovered) {
+          _persistErrCount++;
+          const now = Date.now();
+          if (now - _persistErrLastLog > 30_000) {
+            _persistErrLastLog = now;
+            console.error(`[OHLC] Bulk persist failed (${_persistErrCount} failure(s) so far, in-memory cache unaffected): ${error?.message || error}`);
+          }
         }
       }
 
@@ -258,7 +286,10 @@ const drainPersistQueue = async () => {
  * Records a finalized candle in the in-memory cache (synchronously — readers see
  * it immediately) and queues it for background persistence + pivot recalc.
  */
-const finaliseCandle = async (candle: Candle) => {
+const finaliseCandle = async (liveCandle: Candle) => {
+  // Snapshot: the live object could still be mutated by a racing tick between
+  // queueing and the background bulk write — cache and persist frozen values.
+  const candle: Candle = { ...liveCandle };
   const { symbol, timeframe } = candle;
   if (!finalizedCandlesCache[symbol]) finalizedCandlesCache[symbol] = {};
   if (!finalizedCandlesCache[symbol][timeframe]) finalizedCandlesCache[symbol][timeframe] = [];

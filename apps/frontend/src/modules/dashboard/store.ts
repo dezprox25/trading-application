@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { DashboardRow } from "../../calc";
 import { useStore } from "../../store/useStore";
+import { DEFAULT_INSTRUMENT_TYPE } from "../../data/tradingConfig";
 
 type PivotMethod = "client" | "classic";
 export type FeedStatus =
@@ -18,11 +19,11 @@ export type FeedStatus =
 
 interface DashboardStore {
   // Config selection — dependent chain:
-  // Exchange → Instrument → Contract Month → Expiry Date → Strikes
-  exchange: string;
+  // Instrument (type) → Symbol → Expiry Date → Strikes
+  /** Instrument type, e.g. "OPTIDX" — see ../../data/tradingConfig.ts */
+  instrumentType: string;
+  /** Underlying symbol, e.g. "NIFTY" */
   instrument: string;
-  /** Contract month id "YYYY-MM" (display label lives in the fetched ContractMonth model) */
-  contractMonth: string;
   type: "Call" | "Put" | "Call+Put";
   callStrike: number | null;
   putStrike:  number | null;
@@ -50,9 +51,8 @@ interface DashboardStore {
   colOrder:   string[];
 
   // Actions
-  setExchange(v: string): void;
+  setInstrumentType(v: string): void;
   setInstrument(v: string): void;
-  setContractMonth(v: string): void;
   setType(v: "Call" | "Put" | "Call+Put"): void;
   setCallStrike(v: number | null): void;
   setPutStrike(v: number | null): void;
@@ -92,7 +92,7 @@ const scopedKey = (base: string) => {
 };
 
 export const useDashStore = create<DashboardStore>((set, get) => ({
-  exchange: "", instrument: "", contractMonth: "",
+  instrumentType: DEFAULT_INSTRUMENT_TYPE, instrument: "",
   type: "Call+Put",
   callStrike: null, putStrike: null,
   expiryDate: "",
@@ -105,10 +105,9 @@ export const useDashStore = create<DashboardStore>((set, get) => ({
   colOrder: [],
 
   // Changing a parent selection resets every dependent selection below it.
-  setExchange:      (v) => set({ exchange: v, instrument: "", contractMonth: "", expiryDate: "", callStrike: null, putStrike: null }),
-  setInstrument:    (v) => set({ instrument: v, contractMonth: "", expiryDate: "", callStrike: null, putStrike: null }),
-  setContractMonth: (v) => set({ contractMonth: v, expiryDate: "", callStrike: null, putStrike: null }),
-  setType:          (v) => set({ type: v }),
+  setInstrumentType: (v) => set({ instrumentType: v, instrument: "", expiryDate: "", callStrike: null, putStrike: null }),
+  setInstrument:     (v) => set({ instrument: v, expiryDate: "", callStrike: null, putStrike: null }),
+  setType:           (v) => set({ type: v }),
   setCallStrike:    (v) => set({ callStrike: v }),
   setPutStrike:     (v) => set({ putStrike: v }),
   // Expiry change reloads strikes (ConfigRow prunes selections no longer valid)

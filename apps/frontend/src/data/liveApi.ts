@@ -1,35 +1,13 @@
 import { api } from "../utils/api";
-import type { Exchange, Instrument, ContractMonth, Expiry, Strike } from "./models";
+import type { Expiry, Strike } from "./models";
 
 // ── Static catalog ─────────────────────────────────────────────────────────────
 //
-// Exchange / instrument / contract-month / expiry lists are served from this
-// catalog until the OpenAlgo/Zebu Instruments API is connected. Each fetch*
-// function keeps the exact signature and return model it will have once it
-// proxies the real API, so swapping the implementation requires no UI changes.
-
-const EXCHANGES: Exchange[] = [
-  { code: "NFO", name: "NSE Futures & Options" },
-  { code: "NSE", name: "National Stock Exchange" },
-  { code: "BSE", name: "Bombay Stock Exchange" },
-  { code: "MCX", name: "Multi Commodity Exchange" },
-  { code: "CDS", name: "Currency Derivatives" },
-];
-
-export const DEFAULT_EXCHANGE = "NFO";
-
-const INSTRUMENTS: Record<string, Instrument[]> = {
-  NFO: [
-    { id: "NIFTY",      symbol: "NIFTY",      name: "Nifty 50" },
-    { id: "BANKNIFTY",  symbol: "BANKNIFTY",  name: "Nifty Bank" },
-    { id: "FINNIFTY",   symbol: "FINNIFTY",   name: "Nifty Financial Services" },
-    { id: "MIDCPNIFTY", symbol: "MIDCPNIFTY", name: "Nifty Midcap Select" },
-    { id: "SENSEX",     symbol: "SENSEX",     name: "BSE Sensex" },
-    { id: "BANKEX",     symbol: "BANKEX",     name: "BSE Bankex" },
-  ],
-  // Populated dynamically once the Instruments API is connected.
-  NSE: [], BSE: [], MCX: [], CDS: [],
-};
+// Expiry / strike lists are served from this catalog until the OpenAlgo/Zebu
+// Instruments API is connected. Each fetch* function keeps the exact signature
+// and return model it will have once it proxies the real API, so swapping the
+// implementation requires no UI changes. Instrument-type/symbol lists live in
+// ../data/tradingConfig.ts (data-driven, no fetch needed).
 
 /** Weekly-expiry weekday per underlying (real F&O calendar: NSE weeklies expire
  *  Tuesday, BSE weeklies Thursday; non-weekly underlyings get monthly only).
@@ -49,68 +27,55 @@ const INDEX_MAP: Record<string, string> = {
   SENSEX: "SENSEX", BANKEX: "BANKEX",
 };
 
-const MONTHS_UPPER = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 const MONTHS_TITLE = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
 
 // ── Fetch functions (async to match the future API shape) ─────────────────────
 
-export const fetchExchanges = async (): Promise<Exchange[]> => EXCHANGES;
+const toExpiry = (d: Date): Expiry => ({
+  id: `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`,
+  expiry: `${pad2(d.getDate())} ${MONTHS_TITLE[d.getMonth()]} ${d.getFullYear()}`,
+});
 
-export const fetchInstruments = async (exchange: string): Promise<Instrument[]> =>
-  INSTRUMENTS[exchange] ?? [];
-
-/** Next `count` contract months starting from the current month. */
-export const fetchContractMonths = async (
-  _exchange: string,
-  instrument: string,
-  count = 4,
-): Promise<ContractMonth[]> => {
-  if (!instrument) return [];
-  const now = new Date();
-  const result: ContractMonth[] = [];
-  for (let i = 0; i < count; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
-    result.push({
-      id: `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`,
-      month: MONTHS_UPPER[d.getMonth()],
-      year: d.getFullYear(),
-    });
-  }
-  return result;
+/** Last occurrence of `weekday` within the month containing `monthStart`. */
+const lastWeekdayOfMonth = (monthStart: Date, weekday: number): Date => {
+  const nextMonth = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
+  const d = new Date(nextMonth.getTime() - 24 * 60 * 60 * 1000); // last day of month
+  const diff = (d.getDay() - weekday + 7) % 7;
+  d.setDate(d.getDate() - diff);
+  return d;
 };
 
-/** Expiries within the selected contract month ("YYYY-MM"), future dates only. */
-export const fetchExpiries = async (
-  _exchange: string,
+/** Next `count` future expiries for the selected symbol, nearest first. */
+export const fetchSymbolExpiries = async (
   instrument: string,
-  contractMonthId: string,
+  count = 6,
 ): Promise<Expiry[]> => {
-  const m = /^(\d{4})-(\d{2})$/.exec(contractMonthId);
   const rule = EXPIRY_RULES[instrument];
-  if (!m || !rule) return [];
+  if (!instrument || !rule) return [];
 
-  const year = Number(m[1]);
-  const month = Number(m[2]) - 1; // 0-based
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  // Collect every matching weekday in the month
-  const dates: Date[] = [];
-  const d = new Date(year, month, 1);
-  while (d.getMonth() === month) {
-    if (d.getDay() === rule.weekday) dates.push(new Date(d));
-    d.setDate(d.getDate() + 1);
+  const results: Expiry[] = [];
+
+  if (rule.weekly) {
+    const d = new Date(today);
+    while (results.length < count) {
+      if (d.getDay() === rule.weekday && d >= today) results.push(toExpiry(d));
+      d.setDate(d.getDate() + 1);
+    }
+  } else {
+    let monthCursor = new Date(today.getFullYear(), today.getMonth(), 1);
+    while (results.length < count) {
+      const last = lastWeekdayOfMonth(monthCursor, rule.weekday);
+      if (last >= today) results.push(toExpiry(last));
+      monthCursor = new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 1);
+    }
   }
 
-  const candidates = rule.weekly ? dates : dates.slice(-1); // monthly = last weekday
-  return candidates
-    .filter(dt => dt >= today)
-    .map(dt => ({
-      id: `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`,
-      expiry: `${pad2(dt.getDate())} ${MONTHS_TITLE[dt.getMonth()]} ${dt.getFullYear()}`,
-    }));
+  return results;
 };
 
 // ── Live strikes from the real option-chain endpoint ─────────────────────────

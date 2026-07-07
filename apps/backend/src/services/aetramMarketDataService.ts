@@ -2,9 +2,16 @@ import axios from "axios";
 import { io, Socket } from "socket.io-client";
 import redis from "../config/redis";
 import { broadcastBrokerStatus } from "./socketService";
+import {
+  loginMarketData,
+  getMarketDataToken,
+  getMarketDataUser,
+  isMarketDataAuthenticated,
+  markMarketDataSessionExpired,
+} from "./marketDataSessionService";
 
-let sessionToken: string | null = null;
-let userID: string | null = null;
+// Session state (token, userID, expiry) lives in marketDataSessionService —
+// this service only owns the market-data transport (REST lookups + WebSocket).
 let socket: Socket | null = null;
 let socketConnected = false;
 let _onReconnectFn: (() => Promise<void>) | null = null;
@@ -14,8 +21,7 @@ export const setOnAetramReconnect = (fn: () => Promise<void>) => {
 };
 
 export const clearAetramSession = () => {
-  sessionToken = null;
-  userID = null;
+  markMarketDataSessionExpired();
   socketConnected = false;
 };
 
@@ -29,7 +35,7 @@ export const isAetramConnected = (): "CONNECTED" | "ERROR" | "WAITING_FOR_CONFIG
     return "WAITING_FOR_CONFIGURATION";
   }
 
-  if (sessionToken && socketConnected) {
+  if (isMarketDataAuthenticated() && socketConnected) {
     return "CONNECTED";
   }
 
@@ -61,57 +67,28 @@ const parseDateToYMD = (val: string | Date | number): string => {
  * Standard HTTP headers for Aetram requests
  */
 const getHeaders = () => {
-  if (!sessionToken) return { "Content-Type": "application/json" };
+  const token = getMarketDataToken();
+  if (!token) return { "Content-Type": "application/json" };
   return {
     "Content-Type": "application/json",
-    "authorization": sessionToken,
+    "authorization": token,
   };
 };
 
 /**
- * Perform login to Aetram MarketData API
+ * Perform login to Aetram MarketData API using configured env credentials
  */
 export const loginToAetram = async (): Promise<boolean> => {
   const apiKey = getApiKey();
   const apiSecret = getApiSecret();
-  const authUrl = getAuthUrl();
 
-  if (isPlaceholder(apiKey) || isPlaceholder(apiSecret) || !authUrl) {
+  if (isPlaceholder(apiKey) || isPlaceholder(apiSecret)) {
     console.warn("[AetramMD] Missing or placeholder credentials in env. Skipping Aetram live login.");
     return false;
   }
 
-  try {
-    console.log("[AetramMD] Logging in to Aetram MarketData API...");
-    const response = await axios.post(
-      authUrl,
-      {
-        secretKey: apiSecret,
-        appKey: apiKey,
-        source: "WEBAPI",
-      },
-      {
-        headers: { "Content-Type": "application/json" },
-        timeout: 15000,
-      }
-    );
-
-    if (response.data && response.data.code === "success" && response.data.result) {
-      sessionToken = response.data.result.token;
-      userID = response.data.result.userID;
-      console.log(`[AetramMD] Login successful. User ID: ${userID}`);
-      return true;
-    } else {
-      console.error("[AetramMD] Login failed. Response:", response.data);
-      return false;
-    }
-  } catch (error: any) {
-    console.error("[AetramMD] Login request exception:", error?.message || error);
-    if (error.response?.data) {
-      console.error("[AetramMD] Login request error response body:", JSON.stringify(error.response.data, null, 2));
-    }
-    return false;
-  }
+  const result = await loginMarketData();
+  return result.ok;
 };
 
 /**
@@ -128,7 +105,7 @@ export const resolveOptionStrikeToken = async (
   }
 
   const baseUrl = getBaseUrl();
-  if (!baseUrl || !sessionToken) return null;
+  if (!baseUrl || !getMarketDataToken()) return null;
 
   // Extract strike price and option type from strikeSymbol (e.g. "NIFTY22100CE")
   const match = strikeSymbol.match(/(\d+)(CE|PE)$/);
@@ -195,7 +172,7 @@ export const subscribeToInstruments = async (
   instruments: Array<{ segment: number; token: string }>
 ) => {
   const baseUrl = getBaseUrl();
-  if (!baseUrl || !sessionToken || instruments.length === 0) return;
+  if (!baseUrl || !getMarketDataToken() || instruments.length === 0) return;
 
   try {
     const payload = {
@@ -257,6 +234,8 @@ const handleOiTick = async (tick: any) => {
  * false if the initial attempt timed out (reconnection still runs in background).
  */
 export const connectToAetramWebSocket = async (): Promise<boolean> => {
+  const sessionToken = getMarketDataToken();
+  const userID = getMarketDataUser();
   if (!sessionToken || !userID) {
     console.warn("[AetramMD] No active session. Cannot connect socket.");
     return false;
@@ -375,7 +354,7 @@ const computeUpcomingThursdays = (count: number): string[] => {
 export const getAetramExpiryDates = async (indexSymbol: string): Promise<string[]> => {
   const baseUrl = getBaseUrl();
 
-  if (baseUrl && sessionToken) {
+  if (baseUrl && getMarketDataToken()) {
     try {
       const name = indexSymbol.replace(/50$/i, "").replace(/FIFTY$/i, "").toUpperCase();
       const url = `${baseUrl}/instruments/expiry?exchangeSegment=2&series=OPT&name=${encodeURIComponent(name)}`;
@@ -406,30 +385,8 @@ export const getAetramExpiryDates = async (indexSymbol: string): Promise<string[
  * Called by module2BrokerLogin controller — never called on server startup.
  */
 export const loginToAetramWithCredentials = async (appKey: string, secretKey: string): Promise<boolean> => {
-  const authUrl = getAuthUrl();
-  if (!authUrl) {
-    console.warn("[AetramMD] AETRAM_MARKETDATA_AUTH_URL not configured.");
-    return false;
-  }
-  try {
-    console.log("[AetramMD] Logging in with user-provided credentials...");
-    const response = await axios.post(
-      authUrl,
-      { secretKey, appKey, source: "WEBAPI" },
-      { headers: { "Content-Type": "application/json" }, timeout: 15000 }
-    );
-    if (response.data?.code === "success" && response.data?.result) {
-      sessionToken = response.data.result.token;
-      userID       = response.data.result.userID;
-      console.log(`[AetramMD] Authenticated. User ID: ${userID}`);
-      return true;
-    }
-    console.error("[AetramMD] Auth rejected:", response.data);
-    return false;
-  } catch (error: any) {
-    console.error("[AetramMD] Auth exception:", error?.message || error);
-    return false;
-  }
+  const result = await loginMarketData(appKey, secretKey);
+  return result.ok;
 };
 
 /**

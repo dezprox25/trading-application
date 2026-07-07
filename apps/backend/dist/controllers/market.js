@@ -13,6 +13,16 @@ const pivotService_1 = require("../services/pivotService");
 const module1OiService_1 = require("../services/module1OiService");
 const zebuMarketDataClient_1 = require("../services/zebuMarketDataClient");
 const aetramMarketDataService_1 = require("../services/aetramMarketDataService");
+// Returns the start of the current NSE trading session in UTC.
+// NSE opens at 09:15 IST = 03:45 UTC. If it's currently before 03:45 UTC,
+// the active session is from the previous calendar day.
+const getTodaySessionOpenUTC = () => {
+    const now = new Date();
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 3, 45, 0, 0));
+    if (now.getTime() < d.getTime())
+        d.setUTCDate(d.getUTCDate() - 1);
+    return d;
+};
 // Local in-memory watchlists store for when MongoDB is offline
 const inMemoryWatchlists = new Map();
 // Seed default watchlists for guest users
@@ -134,14 +144,15 @@ exports.getFuturesData = getFuturesData;
 // Get completed OHLC candles from Database
 const getOHLCBars = async (req, res) => {
     const { symbol, tf } = req.params;
-    const limit = req.query.limit ? parseInt(req.query.limit) : 15;
-    const fetchLimit = limit + 1;
+    const limit = req.query.limit ? parseInt(req.query.limit) : 400;
+    const fetchLimit = limit;
     let bars = [];
-    // Step 1: Try MongoDB for finalized candles
+    // Step 1: Try MongoDB for finalized candles — scoped to today's session only
     try {
-        const dbBars = await FuturesOHLC_1.FuturesOHLC.find({ symbol, timeframe: tf })
+        const sessionOpen = getTodaySessionOpenUTC();
+        const dbBars = await FuturesOHLC_1.FuturesOHLC.find({ symbol, timeframe: tf, bar_time: { $gte: sessionOpen } })
             .sort({ bar_time: -1 })
-            .limit(fetchLimit * 3);
+            .limit(fetchLimit);
         const seenTimes = new Set();
         const uniqueBars = [];
         for (const b of dbBars) {

@@ -16,6 +16,7 @@ const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
 const startupCheck_1 = require("./utils/startupCheck");
 const db_1 = require("./config/db");
+const FuturesOHLC_1 = require("./models/FuturesOHLC");
 const redis_1 = __importDefault(require("./config/redis"));
 const auth_1 = __importDefault(require("./routes/auth"));
 const market_1 = __importDefault(require("./routes/market"));
@@ -97,6 +98,9 @@ app.use("/api/auth", auth_1.default);
 app.use("/api", market_1.default);
 app.use("/api/module2", tracker_1.default);
 app.use("/api/module2", module2_1.default);
+// Dual mount (same pattern as /auth ↔ /api/auth) so Module 2 auth endpoints are
+// reachable at both /module2/auth/* and /api/module2/auth/*.
+app.use("/module2", module2_1.default);
 // Health Check Endpoint
 app.get("/health", async (_req, res) => {
     const mongoStatus = mongooseConnectionStatus();
@@ -152,6 +156,14 @@ const startServer = async () => {
         await (0, db_1.connectDB)();
         dbReady = true;
         console.log("[Server] MongoDB connected.");
+        try {
+            // Dedupe legacy candles + build the unique (symbol, timeframe, bar_time)
+            // index before any live tick can persist a candle.
+            await (0, FuturesOHLC_1.ensureUniqueCandleIndex)();
+        }
+        catch (error) {
+            console.error("[Server] Candle index sync failed (will retry on next restart):", error?.message || error);
+        }
     }
     catch (error) {
         console.error("[Server] MongoDB connection failed:", error?.message || error);

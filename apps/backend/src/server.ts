@@ -13,6 +13,7 @@ dotenv.config();
 import { runStartupCheck } from "./utils/startupCheck";
 
 import { connectDB } from "./config/db";
+import { ensureUniqueCandleIndex } from "./models/FuturesOHLC";
 import redis from "./config/redis";
 import authRouter from "./routes/auth";
 import marketRouter from "./routes/market";
@@ -109,6 +110,9 @@ app.use("/api/auth", authRouter);
 app.use("/api", marketRouter);
 app.use("/api/module2", trackerRouter);
 app.use("/api/module2", module2Router);
+// Dual mount (same pattern as /auth ↔ /api/auth) so Module 2 auth endpoints are
+// reachable at both /module2/auth/* and /api/module2/auth/*.
+app.use("/module2", module2Router);
 
 // Health Check Endpoint
 app.get("/health", async (_req, res) => {
@@ -182,6 +186,13 @@ const startServer = async () => {
     await connectDB();
     dbReady = true;
     console.log("[Server] MongoDB connected.");
+    try {
+      // Dedupe legacy candles + build the unique (symbol, timeframe, bar_time)
+      // index before any live tick can persist a candle.
+      await ensureUniqueCandleIndex();
+    } catch (error: any) {
+      console.error("[Server] Candle index sync failed (will retry on next restart):", error?.message || error);
+    }
   } catch (error: any) {
     console.error("[Server] MongoDB connection failed:", error?.message || error);
     if (process.env.NODE_ENV === "production") {

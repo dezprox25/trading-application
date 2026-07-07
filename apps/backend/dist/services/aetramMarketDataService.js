@@ -3,14 +3,26 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.initAetramMarketDataService = exports.loginToAetramWithCredentials = exports.connectToAetramWebSocket = exports.subscribeToInstruments = exports.resolveOptionStrikeToken = exports.loginToAetram = exports.isAetramConnected = void 0;
+exports.initAetramMarketDataService = exports.loginToAetramWithCredentials = exports.getAetramExpiryDates = exports.connectToAetramWebSocket = exports.subscribeToInstruments = exports.resolveOptionStrikeToken = exports.loginToAetram = exports.isAetramConnected = exports.clearAetramSession = exports.setOnAetramReconnect = void 0;
 const axios_1 = __importDefault(require("axios"));
 const socket_io_client_1 = require("socket.io-client");
 const redis_1 = __importDefault(require("../config/redis"));
-let sessionToken = null;
-let userID = null;
+const socketService_1 = require("./socketService");
+const marketDataSessionService_1 = require("./marketDataSessionService");
+// Session state (token, userID, expiry) lives in marketDataSessionService —
+// this service only owns the market-data transport (REST lookups + WebSocket).
 let socket = null;
 let socketConnected = false;
+let _onReconnectFn = null;
+const setOnAetramReconnect = (fn) => {
+    _onReconnectFn = fn;
+};
+exports.setOnAetramReconnect = setOnAetramReconnect;
+const clearAetramSession = () => {
+    (0, marketDataSessionService_1.markMarketDataSessionExpired)();
+    socketConnected = false;
+};
+exports.clearAetramSession = clearAetramSession;
 const isAetramConnected = () => {
     const apiKey = getApiKey();
     const apiSecret = getApiSecret();
@@ -19,7 +31,7 @@ const isAetramConnected = () => {
     if (isPlaceholder(apiKey) || isPlaceholder(apiSecret) || !authUrl || !baseUrl) {
         return "WAITING_FOR_CONFIGURATION";
     }
-    if (sessionToken && socketConnected) {
+    if ((0, marketDataSessionService_1.isMarketDataAuthenticated)() && socketConnected) {
         return "CONNECTED";
     }
     return "ERROR";
@@ -46,52 +58,26 @@ const parseDateToYMD = (val) => {
  * Standard HTTP headers for Aetram requests
  */
 const getHeaders = () => {
-    if (!sessionToken)
+    const token = (0, marketDataSessionService_1.getMarketDataToken)();
+    if (!token)
         return { "Content-Type": "application/json" };
     return {
         "Content-Type": "application/json",
-        "authorization": sessionToken,
+        "authorization": token,
     };
 };
 /**
- * Perform login to Aetram MarketData API
+ * Perform login to Aetram MarketData API using configured env credentials
  */
 const loginToAetram = async () => {
     const apiKey = getApiKey();
     const apiSecret = getApiSecret();
-    const authUrl = getAuthUrl();
-    if (isPlaceholder(apiKey) || isPlaceholder(apiSecret) || !authUrl) {
+    if (isPlaceholder(apiKey) || isPlaceholder(apiSecret)) {
         console.warn("[AetramMD] Missing or placeholder credentials in env. Skipping Aetram live login.");
         return false;
     }
-    try {
-        console.log("[AetramMD] Logging in to Aetram MarketData API...");
-        const response = await axios_1.default.post(authUrl, {
-            secretKey: apiSecret,
-            appKey: apiKey,
-            source: "WEBAPI",
-        }, {
-            headers: { "Content-Type": "application/json" },
-            timeout: 15000,
-        });
-        if (response.data && response.data.code === "success" && response.data.result) {
-            sessionToken = response.data.result.token;
-            userID = response.data.result.userID;
-            console.log(`[AetramMD] Login successful. User ID: ${userID}`);
-            return true;
-        }
-        else {
-            console.error("[AetramMD] Login failed. Response:", response.data);
-            return false;
-        }
-    }
-    catch (error) {
-        console.error("[AetramMD] Login request exception:", error?.message || error);
-        if (error.response?.data) {
-            console.error("[AetramMD] Login request error response body:", JSON.stringify(error.response.data, null, 2));
-        }
-        return false;
-    }
+    const result = await (0, marketDataSessionService_1.loginMarketData)();
+    return result.ok;
 };
 exports.loginToAetram = loginToAetram;
 /**
@@ -103,7 +89,7 @@ const resolveOptionStrikeToken = async (index, expiryDate, strikeSymbol) => {
         return symbolToTokenMap.get(strikeSymbol);
     }
     const baseUrl = getBaseUrl();
-    if (!baseUrl || !sessionToken)
+    if (!baseUrl || !(0, marketDataSessionService_1.getMarketDataToken)())
         return null;
     // Extract strike price and option type from strikeSymbol (e.g. "NIFTY22100CE")
     const match = strikeSymbol.match(/(\d+)(CE|PE)$/);
@@ -144,7 +130,14 @@ const resolveOptionStrikeToken = async (index, expiryDate, strikeSymbol) => {
         return null;
     }
     catch (error) {
-        console.error(`[AetramMD] Instrument lookup error for ${strikeSymbol}:`, error?.message || error);
+        if (error?.response?.status === 401) {
+            console.warn("[AetramMD] Session expired (401) during instrument lookup.");
+            (0, exports.clearAetramSession)();
+            (0, socketService_1.broadcastBrokerStatus)("session-expired", "Broker session expired. Please login again.", "module2");
+        }
+        else {
+            console.error(`[AetramMD] Instrument lookup error for ${strikeSymbol}:`, error?.message || error);
+        }
         return null;
     }
 };
@@ -154,7 +147,7 @@ exports.resolveOptionStrikeToken = resolveOptionStrikeToken;
  */
 const subscribeToInstruments = async (instruments) => {
     const baseUrl = getBaseUrl();
-    if (!baseUrl || !sessionToken || instruments.length === 0)
+    if (!baseUrl || !(0, marketDataSessionService_1.getMarketDataToken)() || instruments.length === 0)
         return;
     try {
         const payload = {
@@ -173,7 +166,14 @@ const subscribeToInstruments = async (instruments) => {
         await axios_1.default.post(`${baseUrl}/instruments/subscription`, payloadOI, { headers: getHeaders(), timeout: 10000 });
     }
     catch (error) {
-        console.error("[AetramMD] Subscription request failed:", error?.message || error);
+        if (error?.response?.status === 401) {
+            console.warn("[AetramMD] Session expired (401) during subscription.");
+            (0, exports.clearAetramSession)();
+            (0, socketService_1.broadcastBrokerStatus)("session-expired", "Broker session expired. Please login again.", "module2");
+        }
+        else {
+            console.error("[AetramMD] Subscription request failed:", error?.message || error);
+        }
     }
 };
 exports.subscribeToInstruments = subscribeToInstruments;
@@ -201,14 +201,25 @@ const handleOiTick = async (tick) => {
     }
 };
 /**
- * Establish WebSocket / Socket.IO connection
+ * Establish WebSocket / Socket.IO connection.
+ * Disconnects any existing socket before creating a new one.
+ * Returns true if the socket connected within the 12-second timeout,
+ * false if the initial attempt timed out (reconnection still runs in background).
  */
 const connectToAetramWebSocket = async () => {
+    const sessionToken = (0, marketDataSessionService_1.getMarketDataToken)();
+    const userID = (0, marketDataSessionService_1.getMarketDataUser)();
     if (!sessionToken || !userID) {
         console.warn("[AetramMD] No active session. Cannot connect socket.");
         return false;
     }
-    // Extract base host URL
+    // Disconnect stale socket before creating new one
+    if (socket) {
+        socket.removeAllListeners();
+        socket.disconnect();
+        socket = null;
+        socketConnected = false;
+    }
     const baseUrl = getBaseUrl();
     let host = "";
     try {
@@ -220,6 +231,9 @@ const connectToAetramWebSocket = async () => {
         return false;
     }
     console.log(`[AetramMD] Connecting Socket.IO client to ${host}...`);
+    // Use polling first so the connection can be established through proxies and
+    // load-balancers that may not support direct WebSocket upgrades. Once the
+    // handshake succeeds over polling, Socket.IO upgrades to WebSocket automatically.
     socket = (0, socket_io_client_1.io)(host, {
         path: "/apibinarymarketdata/socket.io",
         query: {
@@ -228,20 +242,30 @@ const connectToAetramWebSocket = async () => {
             apiType: "MARKETDATA",
             publishFormat: "JSON",
         },
-        transports: ["websocket"],
+        transports: ["polling", "websocket"],
         reconnection: true,
-        reconnectionDelay: 1000,
-        reconnectionAttempts: Infinity,
+        reconnectionDelay: 3000,
+        reconnectionAttempts: 10,
     });
-    socket.on("connect", () => {
+    // Persistent connect handler — fires on initial connect AND every reconnect.
+    socket.on("connect", async () => {
         socketConnected = true;
-        console.log("[AetramMD] Socket.IO feed connected successfully.");
+        console.log("[AetramMD] Socket connected.");
+        (0, socketService_1.broadcastBrokerStatus)("live", undefined, "module2");
+        if (_onReconnectFn) {
+            try {
+                await _onReconnectFn();
+            }
+            catch (err) {
+                console.error("[AetramMD] Reconnect callback error:", err?.message || err);
+            }
+        }
     });
     socket.on("connect_error", (error) => {
         socketConnected = false;
-        console.error("[AetramMD] Socket connection error:", error);
+        console.error("[AetramMD] Socket connection error:", error.message);
+        (0, socketService_1.broadcastBrokerStatus)("reconnecting", "Lost connection to broker. Reconnecting...", "module2");
     });
-    // Attach handlers for LTP and OI
     socket.on("1512-json-full", handleLtpTick);
     socket.on("1512-json-partial", handleLtpTick);
     socket.on("1510-json-full", handleOiTick);
@@ -249,36 +273,83 @@ const connectToAetramWebSocket = async () => {
     socket.on("disconnect", (reason) => {
         socketConnected = false;
         console.warn(`[AetramMD] Socket disconnected: ${reason}`);
+        if (reason !== "io client disconnect") {
+            // Only broadcast disconnected for unintentional disconnects — not when we
+            // call socket.disconnect() ourselves (e.g. on re-login).
+            (0, socketService_1.broadcastBrokerStatus)("broker-disconnected", "Lost connection to broker. Reconnecting...", "module2");
+        }
     });
-    return true;
+    // Wait up to 12 seconds for the initial connection to be established.
+    // The persistent handlers above remain active for the lifetime of the socket.
+    const connected = await new Promise((resolve) => {
+        const timer = setTimeout(() => {
+            console.warn("[AetramMD] Initial connection timed out — socket reconnection running in background.");
+            resolve(false);
+        }, 12000);
+        socket.once("connect", () => {
+            clearTimeout(timer);
+            resolve(true);
+        });
+        // connect_error is handled by the persistent handler above.
+        // The timer will resolve(false) after 12 seconds if no connection is made.
+    });
+    return connected;
 };
 exports.connectToAetramWebSocket = connectToAetramWebSocket;
+/**
+ * Compute the next N upcoming Thursdays (NSE weekly expiry pattern, last resort fallback)
+ */
+const computeUpcomingThursdays = (count) => {
+    const result = [];
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    const dayOfWeek = d.getDay();
+    const daysToThursday = (4 - dayOfWeek + 7) % 7;
+    d.setDate(d.getDate() + daysToThursday);
+    for (let i = 0; i < count; i++) {
+        result.push(parseDateToYMD(new Date(d)));
+        d.setDate(d.getDate() + 7);
+    }
+    return result;
+};
+/**
+ * Fetch available expiry dates for options on the given index.
+ * Priority: Aetram API → MOD2_EXPIRY_DATES env → computed Thursdays
+ */
+const getAetramExpiryDates = async (indexSymbol) => {
+    const baseUrl = getBaseUrl();
+    if (baseUrl && (0, marketDataSessionService_1.getMarketDataToken)()) {
+        try {
+            const name = indexSymbol.replace(/50$/i, "").replace(/FIFTY$/i, "").toUpperCase();
+            const url = `${baseUrl}/instruments/expiry?exchangeSegment=2&series=OPT&name=${encodeURIComponent(name)}`;
+            const response = await axios_1.default.get(url, { headers: getHeaders(), timeout: 8000 });
+            if (response.data?.code === "success" && Array.isArray(response.data.result)) {
+                const dates = response.data.result
+                    .map((r) => parseDateToYMD(r.expiryDate || r.expiry || ""))
+                    .filter(Boolean)
+                    .sort();
+                if (dates.length > 0)
+                    return dates;
+            }
+        }
+        catch {
+            // Fall through to config fallback
+        }
+    }
+    const configDates = (process.env.MOD2_EXPIRY_DATES || "").trim();
+    if (configDates) {
+        return configDates.split(",").map((d) => d.trim()).filter(Boolean).sort();
+    }
+    return computeUpcomingThursdays(5);
+};
+exports.getAetramExpiryDates = getAetramExpiryDates;
 /**
  * Login using credentials provided at runtime by the user.
  * Called by module2BrokerLogin controller — never called on server startup.
  */
 const loginToAetramWithCredentials = async (appKey, secretKey) => {
-    const authUrl = getAuthUrl();
-    if (!authUrl) {
-        console.warn("[AetramMD] AETRAM_MARKETDATA_AUTH_URL not configured.");
-        return false;
-    }
-    try {
-        console.log("[AetramMD] Logging in with user-provided credentials...");
-        const response = await axios_1.default.post(authUrl, { secretKey, appKey, source: "WEBAPI" }, { headers: { "Content-Type": "application/json" }, timeout: 15000 });
-        if (response.data?.code === "success" && response.data?.result) {
-            sessionToken = response.data.result.token;
-            userID = response.data.result.userID;
-            console.log(`[AetramMD] Authenticated. User ID: ${userID}`);
-            return true;
-        }
-        console.error("[AetramMD] Auth rejected:", response.data);
-        return false;
-    }
-    catch (error) {
-        console.error("[AetramMD] Auth exception:", error?.message || error);
-        return false;
-    }
+    const result = await (0, marketDataSessionService_1.loginMarketData)(appKey, secretKey);
+    return result.ok;
 };
 exports.loginToAetramWithCredentials = loginToAetramWithCredentials;
 /**
