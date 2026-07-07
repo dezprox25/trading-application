@@ -1,6 +1,6 @@
 import axios from "axios";
 import AdmZip from "adm-zip";
-import redis from "../config/redis";
+import { readLive } from "./redisWriteBuffer";
 
 // BROKER_MASTER_SOURCE_AUDIT.md: the previous plain-.txt URL is a stale, apparently abandoned
 // mirror (Last-Modified was ~9 months old, content stopped updating in 2023). Zebu's actively
@@ -286,8 +286,8 @@ export const refreshInstrumentTokens = async (): Promise<ActiveInstrumentTokens 
     let atmStrike = 25500; // Fallback updated to reflect realistic NIFTY range; overridden below
     let atmSource = "fallback-default";
     try {
-      const spotStr = await redis.get("ltp:NIFTY-SPOT");
-      const futStr  = await redis.get("ltp:NIFTY-FUT");
+      const spotStr = await readLive("ltp:NIFTY-SPOT");
+      const futStr  = await readLive("ltp:NIFTY-FUT");
       const spot = spotStr ? parseFloat(spotStr) : 0;
       const fut  = futStr  ? parseFloat(futStr)  : 0;
       if (spot > 0) {

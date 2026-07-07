@@ -18,6 +18,7 @@ const startupCheck_1 = require("./utils/startupCheck");
 const db_1 = require("./config/db");
 const FuturesOHLC_1 = require("./models/FuturesOHLC");
 const redis_1 = __importDefault(require("./config/redis"));
+const redisWriteBuffer_1 = require("./services/redisWriteBuffer");
 const auth_1 = __importDefault(require("./routes/auth"));
 const market_1 = __importDefault(require("./routes/market"));
 const tracker_1 = __importDefault(require("./routes/tracker"));
@@ -102,16 +103,24 @@ app.use("/api/module2", module2_1.default);
 // reachable at both /module2/auth/* and /api/module2/auth/*.
 app.use("/module2", module2_1.default);
 // Health Check Endpoint
+// Redis PING is throttled to once per 60s: uptime monitors hit /health every
+// 30-60s, and an unthrottled ping burned ~2 commands/min of quota around the
+// clock for a status that cannot meaningfully change faster than this.
+let _redisHealthStatus = "unknown";
+let _redisHealthCheckedAt = 0;
 app.get("/health", async (_req, res) => {
     const mongoStatus = mongooseConnectionStatus();
-    let redisStatus = "disconnected";
-    try {
-        await redis_1.default.ping();
-        redisStatus = "connected";
+    if (Date.now() - _redisHealthCheckedAt > 60_000) {
+        _redisHealthCheckedAt = Date.now();
+        try {
+            await redis_1.default.ping();
+            _redisHealthStatus = "connected";
+        }
+        catch (err) {
+            _redisHealthStatus = "error";
+        }
     }
-    catch (err) {
-        redisStatus = "error";
-    }
+    const redisStatus = _redisHealthStatus;
     const monitoring = await (0, monitoringService_1.getMonitoringStatus)();
     res.json({
         status: monitoring.status === "OK" ? "healthy" : "warning",
@@ -178,6 +187,10 @@ const startServer = async () => {
     try {
         await redis_1.default.ping();
         console.log("[Server] Redis connected.");
+        // One-time hygiene: stamp the 25h TTL on legacy no-TTL market keys so the
+        // pre-existing key space converges to the same daily lifecycle as MongoDB.
+        // Guarded by a marker key — runs once, not on every deploy.
+        void (0, redisWriteBuffer_1.sweepLegacyMarketKeys)().catch(() => { });
     }
     catch (error) {
         if (process.env.NODE_ENV === "production") {

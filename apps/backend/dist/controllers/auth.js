@@ -11,6 +11,7 @@ const Watchlist_1 = require("../models/Watchlist");
 const shared_1 = require("@stock/shared");
 const token_1 = require("../utils/token");
 const redis_1 = __importDefault(require("../config/redis"));
+const auth_1 = require("../middleware/auth");
 const dataFeed_1 = require("../services/dataFeed");
 // Fixed user ID issued inside JWTs when authenticating via APP_LOGIN_* env vars.
 // Used by refresh and me to bypass the database lookup for this synthetic user.
@@ -290,7 +291,10 @@ const logout = async (req, res) => {
                 if (decoded && decoded.exp) {
                     const ttl = Math.max(0, decoded.exp - Math.floor(Date.now() / 1000));
                     if (ttl > 0) {
+                        // Durable blacklist (survives restarts) + in-process cache so the
+                        // auth middleware never needs a per-request Redis read.
                         await redis_1.default.setex(`blacklist:${token}`, ttl, "1");
+                        (0, auth_1.markTokenRevoked)(token, ttl);
                     }
                 }
             }

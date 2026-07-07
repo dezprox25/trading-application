@@ -7,6 +7,7 @@ exports.getModuleStatus = exports.getMarketStatus = exports.isMarketOpenTime = e
 const Watchlist_1 = require("../models/Watchlist");
 const FuturesOHLC_1 = require("../models/FuturesOHLC");
 const redis_1 = __importDefault(require("../config/redis"));
+const redisWriteBuffer_1 = require("../services/redisWriteBuffer");
 const shared_1 = require("@stock/shared");
 const ohlcAggregator_1 = require("../services/ohlcAggregator");
 const pivotService_1 = require("../services/pivotService");
@@ -106,7 +107,7 @@ exports.updateWatchlist = updateWatchlist;
 const getSpotPrice = async (req, res) => {
     try {
         const { symbol } = req.params;
-        const price = await redis_1.default.get(`ltp:${symbol}`);
+        const price = await (0, redisWriteBuffer_1.readLive)(`ltp:${symbol}`);
         if (!price) {
             return res.status(404).json({ error: `Price for symbol ${symbol} not found` });
         }
@@ -127,7 +128,7 @@ const getFuturesData = async (req, res) => {
     try {
         const { symbol } = req.params;
         const timeframe = req.query.timeframe || "5m";
-        const price = await redis_1.default.get(`ltp:${symbol}`);
+        const price = await (0, redisWriteBuffer_1.readLive)(`ltp:${symbol}`);
         const candle = (0, ohlcAggregator_1.getActiveCandle)(symbol, timeframe);
         return res.status(200).json({
             symbol,
@@ -312,7 +313,7 @@ exports.getModule1LatestOi = getModule1LatestOi;
 const getOptionChain = async (req, res) => {
     try {
         const { index } = req.params; // e.g., "NIFTY50"
-        const rawSpot = await redis_1.default.get("ltp:NIFTY-SPOT");
+        const rawSpot = await (0, redisWriteBuffer_1.readLive)("ltp:NIFTY-SPOT");
         const spot = rawSpot ? parseFloat(rawSpot) : 22100.0;
         // Standard strike step for NIFTY is 50 points
         const strikeStep = 50;
@@ -351,8 +352,11 @@ const updateCustomTimeframe = async (req, res) => {
         if (isNaN(minutes) || minutes <= 0) {
             return res.status(400).json({ error: "Invalid timeframe duration" });
         }
-        // Save custom timeframe to Redis
+        // Save custom timeframe: Redis for durability across restarts (user config,
+        // not market data — no TTL), and the in-process mirror so the aggregator's
+        // reads are memory-hits.
         await redis_1.default.set("config:custom_timeframe", timeframe);
+        (0, redisWriteBuffer_1.bufferSet)("config:custom_timeframe", timeframe);
         // Clear old custom timeframe database records so they restart cleanly
         try {
             await FuturesOHLC_1.FuturesOHLC.deleteMany({ timeframe });

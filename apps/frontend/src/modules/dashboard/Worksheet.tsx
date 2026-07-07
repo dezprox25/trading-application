@@ -129,8 +129,25 @@ function ohlcColor(role: "o" | "h" | "l" | "c", bar: OHLCBar): CellColor {
   }
 }
 
-const C_RANK_CALL: CellColor = { bg: "#BFDBFE", textColor: "#1E40AF" }; // blue — call wins
-const C_RANK_PUT:  CellColor = { bg: "#FDE68A", textColor: "#78350F" }; // amber — put wins
+const C_RANK_CALL: CellColor = { bg: "#FFFFFF", textColor: "#1E40AF" }; // white bg, blue text — call wins
+const C_RANK_PUT:  CellColor = { bg: "#FFFFFF", textColor: "#78350F" }; // white bg, amber text — put wins
+
+// ── Ranking direction indicator (UI-only) ─────────────────────────────────────
+// Each Ranking cell is compared against the chronologically PREVIOUS bar's
+// Ranking and rendered with a +/− prefix and green/red emphasis. The number
+// shown is always the actual Ranking value (never the difference), and the
+// underlying calculation/data are untouched — this is pure display.
+const C_RANK_UP_TEXT   = "#16A34A"; // green — higher than previous bar
+const C_RANK_DOWN_TEXT = "#DC2626"; // red — lower than previous bar
+
+type RankDir = "up" | "down" | "flat" | "none";
+
+function rankingDir(curr: number, prev: number | undefined): RankDir {
+  if (prev === undefined || !Number.isFinite(prev) || !Number.isFinite(curr)) return "none";
+  if (curr > prev) return "up";
+  if (curr < prev) return "down";
+  return "flat";
+}
 
 function getCellStyle(colId: string, row: DashboardRow): CellColor {
   switch (colId) {
@@ -604,7 +621,24 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                     && ci >= selRange.c1 && ci <= selRange.c2;
 
                   const cs  = getCellStyle(c.id, row);
-                  const val = getCellValue(row, c.id);
+                  let val = getCellValue(row, c.id);
+                  let textColor  = cs.textColor;
+                  let fontWeight = 400;
+
+                  if (c.id === "ranking") {
+                    // displayRows is newest-first, so the chronologically
+                    // previous bar is the row BELOW (ri + 1). The oldest row
+                    // has no previous bar and renders plain.
+                    const dir = rankingDir(row.ranking, displayRows[ri + 1]?.ranking);
+                    if (dir === "up" || dir === "down") {
+                      textColor  = dir === "up" ? C_RANK_UP_TEXT : C_RANK_DOWN_TEXT;
+                      fontWeight = 600;
+                      // Prefix marks direction vs previous row; the number is
+                      // the actual Ranking value. A negative value keeps its
+                      // own sign (no double prefix) — colour still shows direction.
+                      if (row.ranking >= 0) val = (dir === "up" ? "+" : "-") + val;
+                    }
+                  }
 
                   return (
                     <td
@@ -618,8 +652,8 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                         userSelect: "none",
                         textAlign: (c.align ?? "center") as "left" | "right" | "center",
                         background: isInSel ? "rgba(31,111,235,0.45)" : cs.bg,
-                        color: cs.textColor,
-                        fontWeight: 400,
+                        color: textColor,
+                        fontWeight,
                         outline: isInSel ? "1px solid #1F6FEB" : "none",
                         outlineOffset: "-1px",
                         position: isFrozen ? "sticky" : "relative",

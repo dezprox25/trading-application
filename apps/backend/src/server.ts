@@ -15,6 +15,7 @@ import { runStartupCheck } from "./utils/startupCheck";
 import { connectDB } from "./config/db";
 import { ensureUniqueCandleIndex } from "./models/FuturesOHLC";
 import redis from "./config/redis";
+import { sweepLegacyMarketKeys } from "./services/redisWriteBuffer";
 import authRouter from "./routes/auth";
 import marketRouter from "./routes/market";
 import trackerRouter from "./routes/tracker";
@@ -115,16 +116,24 @@ app.use("/api/module2", module2Router);
 app.use("/module2", module2Router);
 
 // Health Check Endpoint
+// Redis PING is throttled to once per 60s: uptime monitors hit /health every
+// 30-60s, and an unthrottled ping burned ~2 commands/min of quota around the
+// clock for a status that cannot meaningfully change faster than this.
+let _redisHealthStatus = "unknown";
+let _redisHealthCheckedAt = 0;
 app.get("/health", async (_req, res) => {
   const mongoStatus = mongooseConnectionStatus();
-  let redisStatus = "disconnected";
 
-  try {
-    await redis.ping();
-    redisStatus = "connected";
-  } catch (err) {
-    redisStatus = "error";
+  if (Date.now() - _redisHealthCheckedAt > 60_000) {
+    _redisHealthCheckedAt = Date.now();
+    try {
+      await redis.ping();
+      _redisHealthStatus = "connected";
+    } catch (err) {
+      _redisHealthStatus = "error";
+    }
   }
+  const redisStatus = _redisHealthStatus;
 
   const monitoring = await getMonitoringStatus();
 
@@ -207,6 +216,10 @@ const startServer = async () => {
   try {
     await redis.ping();
     console.log("[Server] Redis connected.");
+    // One-time hygiene: stamp the 25h TTL on legacy no-TTL market keys so the
+    // pre-existing key space converges to the same daily lifecycle as MongoDB.
+    // Guarded by a marker key — runs once, not on every deploy.
+    void sweepLegacyMarketKeys().catch(() => {});
   } catch (error) {
     if (process.env.NODE_ENV === "production") {
       // Redis uses an in-memory fallback (see config/redis.ts) — log but continue.

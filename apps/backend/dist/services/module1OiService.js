@@ -1,10 +1,7 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.resetModule1OiMaps = exports.initModule1OiService = exports.getLatestModule1OiMetrics = exports.ingestModule1OiTick = exports.setModule1OiDataSource = void 0;
-const redis_1 = __importDefault(require("../config/redis"));
+const redisWriteBuffer_1 = require("./redisWriteBuffer");
 const PUT_INVERSE = {
     STRONG_BULL: "STRONG_BEAR",
     MILD_BULL: "MILD_BEAR",
@@ -183,7 +180,7 @@ exports.getLatestModule1OiMetrics = getLatestModule1OiMetrics;
  */
 const initModule1OiService = async () => {
     try {
-        const futOiStr = await redis_1.default.get("oi:NIFTY-FUT");
+        const futOiStr = await (0, redisWriteBuffer_1.readLive)("oi:NIFTY-FUT");
         if (futOiStr) {
             const futOi = parseInt(futOiStr);
             if (!isNaN(futOi) && futOi > 0) {

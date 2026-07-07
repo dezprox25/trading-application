@@ -1,7 +1,7 @@
 import { FuturesOHLC } from "../models/FuturesOHLC";
 import { PivotLevels as PivotLevelsModel } from "../models/PivotLevels";
 import { setOnCandleFinalized } from "./ohlcAggregator";
-import redis from "../config/redis";
+import { readLive } from "./redisWriteBuffer";
 import {
   calculateClassicPivot,
   calculateCamarillaPivot,
@@ -168,8 +168,8 @@ export const getPivotLevels = async (
     );
     return computed[method];
   } else {
-    // Fallback: Calculate pivots using the current Redis LTP if DB is offline
-    const rawFutLtp = await redis.get(`ltp:${symbol}`);
+    // Fallback: Calculate pivots using the current cached LTP if DB is offline
+    const rawFutLtp = await readLive(`ltp:${symbol}`);
     const currentPrice = rawFutLtp ? parseFloat(rawFutLtp) : 22100;
     const computed = await recalculatePivots(
       symbol,
@@ -194,9 +194,10 @@ export const evaluateIndicators = async (
   spotSymbol = "NIFTY-SPOT"
 ): Promise<Module1Indicators | null> => {
   try {
-    // 1. Fetch latest prices from Redis cache
-    const rawFutLtp = await redis.get(`ltp:${symbol}`);
-    const rawSpotLtp = await redis.get(`ltp:${spotSymbol}`);
+    // 1. Fetch latest prices — memory-first (this runs up to 2×/sec per active
+    // indicator room; per-eval Redis GETs were pure quota waste).
+    const rawFutLtp = await readLive(`ltp:${symbol}`);
+    const rawSpotLtp = await readLive(`ltp:${spotSymbol}`);
 
     if (!rawFutLtp || !rawSpotLtp) {
       return null;

@@ -1,5 +1,5 @@
 import { Tick } from "@stock/shared";
-import redis from "../config/redis";
+import { readLive } from "./redisWriteBuffer";
 
 type OiSignal = "STRONG_BULL" | "MILD_BULL" | "NEUTRAL" | "MILD_BEAR" | "STRONG_BEAR" | "DIVERGENCE";
 
@@ -217,7 +217,7 @@ export const getLatestModule1OiMetrics = (): Module1OiMetrics => {
  */
 export const initModule1OiService = async () => {
   try {
-    const futOiStr = await redis.get("oi:NIFTY-FUT");
+    const futOiStr = await readLive("oi:NIFTY-FUT");
     if (futOiStr) {
       const futOi = parseInt(futOiStr);
       if (!isNaN(futOi) && futOi > 0) {

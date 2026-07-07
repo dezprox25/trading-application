@@ -3,6 +3,7 @@ import { AuthenticatedRequest } from "../middleware/auth";
 import { Watchlist } from "../models/Watchlist";
 import { FuturesOHLC } from "../models/FuturesOHLC";
 import redis from "../config/redis";
+import { readLive, bufferSet } from "../services/redisWriteBuffer";
 import { WatchlistSchema, Module1ConfigSchema } from "@stock/shared";
 import { getActiveCandle, getCachedOHLCBars } from "../services/ohlcAggregator";
 import { getPivotLevels, evaluateIndicators } from "../services/pivotService";
@@ -113,8 +114,8 @@ export const updateWatchlist = async (req: AuthenticatedRequest, res: Response) 
 export const getSpotPrice = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { symbol } = req.params;
-    const price = await redis.get(`ltp:${symbol}`);
-    
+    const price = await readLive(`ltp:${symbol}`);
+
     if (!price) {
       return res.status(404).json({ error: `Price for symbol ${symbol} not found` });
     }
@@ -136,7 +137,7 @@ export const getFuturesData = async (req: AuthenticatedRequest, res: Response) =
     const { symbol } = req.params;
     const timeframe = (req.query.timeframe as string) || "5m";
 
-    const price = await redis.get(`ltp:${symbol}`);
+    const price = await readLive(`ltp:${symbol}`);
     const candle = getActiveCandle(symbol, timeframe);
 
     return res.status(200).json({
@@ -336,7 +337,7 @@ export const getModule1LatestOi = async (_req: AuthenticatedRequest, res: Respon
 export const getOptionChain = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { index } = req.params; // e.g., "NIFTY50"
-    const rawSpot = await redis.get("ltp:NIFTY-SPOT");
+    const rawSpot = await readLive("ltp:NIFTY-SPOT");
     const spot = rawSpot ? parseFloat(rawSpot) : 22100.0;
 
     // Standard strike step for NIFTY is 50 points
@@ -380,8 +381,11 @@ export const updateCustomTimeframe = async (req: AuthenticatedRequest, res: Resp
       return res.status(400).json({ error: "Invalid timeframe duration" });
     }
 
-    // Save custom timeframe to Redis
+    // Save custom timeframe: Redis for durability across restarts (user config,
+    // not market data — no TTL), and the in-process mirror so the aggregator's
+    // reads are memory-hits.
     await redis.set("config:custom_timeframe", timeframe);
+    bufferSet("config:custom_timeframe", timeframe);
     
     // Clear old custom timeframe database records so they restart cleanly
     try {

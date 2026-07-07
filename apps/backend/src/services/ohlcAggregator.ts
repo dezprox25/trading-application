@@ -1,6 +1,6 @@
 import { FuturesOHLC } from "../models/FuturesOHLC";
 import { Tick, Candle } from "@stock/shared";
-import redis from "../config/redis";
+import { readLive } from "./redisWriteBuffer";
 
 // Local cache for active candles: activeCandles[symbol][timeframe]
 const activeCandles: Record<string, Record<string, Candle>> = {};
@@ -20,7 +20,9 @@ const parseTfMinutes = (tf: string): number => {
 const getTimeframeMinutes = async (tfStr: string): Promise<number> => {
   if (tfStr === "custom") {
     try {
-      const customTf = await redis.get("config:custom_timeframe");
+      // Memory-first: mirror hit after the first read/set; at most one Redis
+      // GET per process (restart warmup), instead of one per boundary check.
+      const customTf = await readLive("config:custom_timeframe");
       if (customTf) {
         const mins = parseTfMinutes(customTf);
         if (mins > 0) return mins;

@@ -1,10 +1,7 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.stopMonitoringLoop = exports.startMonitoringLoop = exports.getMonitoringStatus = exports.recordTickReceived = void 0;
-const redis_1 = __importDefault(require("../config/redis"));
+const redisWriteBuffer_1 = require("./redisWriteBuffer");
 const zebuMarketDataClient_1 = require("./zebuMarketDataClient");
 let lastTickTime = Date.now();
 /**
@@ -20,8 +17,10 @@ exports.recordTickReceived = recordTickReceived;
 const getMonitoringStatus = async () => {
     const now = Date.now();
     const secondsSinceLastTick = (now - lastTickTime) / 1000;
-    const spotLtp = await redis_1.default.get("ltp:NIFTY-SPOT");
-    const futLtp = await redis_1.default.get("ltp:NIFTY-FUT");
+    // Memory-first: this loop runs every 10s — hitting Redis for it cost ~100K
+    // commands/month for values the tick pipeline already holds in-process.
+    const spotLtp = await (0, redisWriteBuffer_1.readLive)("ltp:NIFTY-SPOT");
+    const futLtp = await (0, redisWriteBuffer_1.readLive)("ltp:NIFTY-FUT");
     const alerts = [];
     if ((0, zebuMarketDataClient_1.isZebuLiveConnected)()) {
         if (secondsSinceLastTick > 15) {

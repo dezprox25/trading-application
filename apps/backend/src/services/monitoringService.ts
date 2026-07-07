@@ -1,4 +1,4 @@
-import redis from "../config/redis";
+import { readLive } from "./redisWriteBuffer";
 import { isZebuLiveConnected } from "./zebuMarketDataClient";
 
 let lastTickTime = Date.now();
@@ -17,8 +17,10 @@ export const getMonitoringStatus = async () => {
   const now = Date.now();
   const secondsSinceLastTick = (now - lastTickTime) / 1000;
   
-  const spotLtp = await redis.get("ltp:NIFTY-SPOT");
-  const futLtp = await redis.get("ltp:NIFTY-FUT");
+  // Memory-first: this loop runs every 10s — hitting Redis for it cost ~100K
+  // commands/month for values the tick pipeline already holds in-process.
+  const spotLtp = await readLive("ltp:NIFTY-SPOT");
+  const futLtp = await readLive("ltp:NIFTY-FUT");
   
   const alerts: string[] = [];
   

@@ -6,7 +6,7 @@ import { Watchlist } from "../models/Watchlist";
 import { LoginSchema, RegisterSchema } from "@stock/shared";
 import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from "../utils/token";
 import redis from "../config/redis";
-import { AuthenticatedRequest } from "../middleware/auth";
+import { AuthenticatedRequest, markTokenRevoked } from "../middleware/auth";
 import { stopDataFeed } from "../services/dataFeed";
 
 // Fixed user ID issued inside JWTs when authenticating via APP_LOGIN_* env vars.
@@ -325,7 +325,10 @@ export const logout = async (req: Request, res: Response) => {
         if (decoded && decoded.exp) {
           const ttl = Math.max(0, decoded.exp - Math.floor(Date.now() / 1000));
           if (ttl > 0) {
+            // Durable blacklist (survives restarts) + in-process cache so the
+            // auth middleware never needs a per-request Redis read.
             await redis.setex(`blacklist:${token}`, ttl, "1");
+            markTokenRevoked(token, ttl);
           }
         }
       } catch (_) {}

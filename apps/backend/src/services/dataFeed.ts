@@ -210,7 +210,6 @@ export const stopDataFeed = () => {
 
 let _totalTickCount = 0;
 let _firstTickLogged = false;
-let _lastTradingDateWritten = "";
 
 export const processIncomingTick = async (tick: Tick) => {
   const { symbol, ltp, oi } = tick;
@@ -234,15 +233,10 @@ export const processIncomingTick = async (tick: Tick) => {
   bufferSet(`ltp:${symbol}`, ltp.toString());
 
   if (oi !== undefined) {
-    // 25-hour TTL ensures keys expire overnight so next-day warmup never loads stale OI
+    // 25-hour TTL ensures keys expire overnight so next-day warmup never loads stale OI.
+    // (Only oi:NIFTY-FUT actually reaches Redis — see redisWriteBuffer PERSISTED_KEYS;
+    // option-strike OI lives in the in-memory mirror that all readers consult.)
     bufferSetex(`oi:${symbol}`, 90000, oi.toString());
-    // Keep the trading-date marker current so OiService warmup guard stays accurate.
-    // Same-value rewrites are deduped here — it only actually changes once per day.
-    const tradingDate = new Date().toISOString().slice(0, 10);
-    if (tradingDate !== _lastTradingDateWritten) {
-      _lastTradingDateWritten = tradingDate;
-      bufferSet("oi:trading_date", tradingDate);
-    }
   }
 
   ingestModule1OiTick(tick);

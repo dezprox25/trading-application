@@ -6,7 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.initAetramMarketDataService = exports.loginToAetramWithCredentials = exports.getAetramExpiryDates = exports.connectToAetramWebSocket = exports.subscribeToInstruments = exports.resolveOptionStrikeToken = exports.loginToAetram = exports.isAetramConnected = exports.clearAetramSession = exports.setOnAetramReconnect = void 0;
 const axios_1 = __importDefault(require("axios"));
 const socket_io_client_1 = require("socket.io-client");
-const redis_1 = __importDefault(require("../config/redis"));
+const redisWriteBuffer_1 = require("./redisWriteBuffer");
 const socketService_1 = require("./socketService");
 const marketDataSessionService_1 = require("./marketDataSessionService");
 // Session state (token, userID, expiry) lives in marketDataSessionService —
@@ -178,7 +178,10 @@ const subscribeToInstruments = async (instruments) => {
 };
 exports.subscribeToInstruments = subscribeToInstruments;
 /**
- * Handles incoming ticks and updates Redis
+ * Handles incoming ticks and updates the in-process live store (Module 2's
+ * tracker reads these via readLive — same process, zero Redis commands).
+ * Previously each tick issued a direct Redis SET; per-tick REST calls were a
+ * major contributor to the monthly command quota blowout.
  */
 const handleLtpTick = async (tick) => {
     const token = String(tick.exchangeInstrumentID || tick.ExchangeInstrumentID);
@@ -186,7 +189,7 @@ const handleLtpTick = async (tick) => {
     if (token && ltp !== undefined) {
         const symbol = tokenToSymbolMap.get(token);
         if (symbol) {
-            await redis_1.default.set(`ltp:${symbol}`, ltp.toString());
+            (0, redisWriteBuffer_1.bufferSet)(`ltp:${symbol}`, ltp.toString());
         }
     }
 };
@@ -196,7 +199,7 @@ const handleOiTick = async (tick) => {
     if (token && oi !== undefined) {
         const symbol = tokenToSymbolMap.get(token);
         if (symbol) {
-            await redis_1.default.set(`oi:${symbol}`, oi.toString());
+            (0, redisWriteBuffer_1.bufferSet)(`oi:${symbol}`, oi.toString());
         }
     }
 };

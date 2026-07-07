@@ -137,9 +137,9 @@ export const SECTIONS: Section[] = [
           {
             type: "bullets",
             items: [
-              "Instrument — the instrument type you want to trade, e.g. Index Options. “Index Options” is pre-selected for you.",
+              "Instrument — the instrument type you want to trade, shown as the exchange's own codes: OPTIDX (index options), FUTIDX (index futures), INDEX (cash index), EQ (equity), OPTSTK, FUTSTK, FUTCUR, OPTCUR, FUTCOM, OPTCOM. “OPTIDX” is pre-selected for you.",
               "Symbol — the underlying you want to trade, e.g. NIFTY. Note: live prices currently stream for NIFTY only.",
-              "Expiry Date — the exact settlement date of the option, nearest date pre-selected. For NIFTY the choices are the Tuesdays (the official weekly expiry day); dates already in the past are hidden. Hidden entirely for instruments that don't settle (Cash Index, Equity).",
+              "Expiry Date — the exact settlement date of the option, nearest date pre-selected. For NIFTY the choices are the Tuesdays (the official weekly expiry day); dates already in the past are hidden. Hidden entirely for instruments that don't settle (INDEX, EQ).",
               "Type — which option sides you want: “Call + Put” (both, the default), “Call” only, or “Put” only. Choosing one side hides the other side's columns entirely.",
               "Call Strike / Put Strike — the strike price of each option. The dropdown offers 11 strikes: the one closest to the current market level (called “at the money”) plus five above and five below, in 50-point steps.",
             ],
@@ -325,11 +325,11 @@ export const SECTIONS: Section[] = [
                 name: "Ranking",
                 tint: "neutral",
                 formula:
-                  "Ranking = the HIGHER of (Call MMA, Put MMA)\nIf they are exactly equal, Call wins.\n\nExample: Call MMA = 35.60, Put MMA = 36.64\nRanking = 36.64 → shown as 36, amber (Put wins)",
+                  "Ranking = the HIGHER of (Call MMA, Put MMA)\nIf they are exactly equal, Call wins.\nIf only one side has data (Call-only or Put-only mode,\nor no trades on one side), the available side wins.\n\nExample: Call MMA = 35.60, Put MMA = 36.64\nRanking = 36.64 (Put wins) → shown as +36.64 or -36.64\ndepending on whether it rose or fell vs the previous candle",
                 description:
-                  "The module's core output. For each candle it compares the Call MMA against the Put MMA and shows the winner's value. Nothing else goes into it — no weighting, no history, just the straight comparison of that one candle.",
+                  "The module's core output. For each candle it compares the Call MMA against the Put MMA and shows the winner's value. Nothing else goes into it — no weighting, no history, just the straight comparison of that one candle. If only one side has data, that side's MMA is shown as the Ranking.",
                 howToRead:
-                  "The colour tells you the winner instantly: blue = the Call side is stronger this candle, amber = the Put side is stronger. Scan the column top to bottom to see which side has been dominating.",
+                  "The cell has a white background and its text shows direction against the previous candle: “+” prefix in bold green (#16A34A) = the Ranking is higher than the previous candle's, “−” prefix in bold red (#DC2626) = lower. When the value is unchanged — or on the oldest row, which has nothing to compare against — there is no prefix and the text colour names the winner instead: blue = Call side, amber = Put side. The number is always the actual Ranking value — the prefix shows direction, not the difference.",
               },
               {
                 id: "fut-ohlc",
@@ -445,9 +445,10 @@ export const SECTIONS: Section[] = [
           {
             type: "bullets",
             items: [
-              "Call columns carry a blue tint, Put columns an amber tint — you always know which side you are reading.",
-              "Within each Open/High/Low/Close block: the High cell is green, the Low cell is red, the Open cell is blue, and the Close cell is green when the candle closed higher than it opened (bullish) or red when lower (bearish).",
-              "The Ranking cell is blue when the Call side wins the candle and amber when the Put side wins.",
+              "Call columns carry a blue tint (#EFF6FF), Put columns an amber tint (#FFFBEB) — you always know which side you are reading.",
+              "Within each Open/High/Low/Close block: the High cell is green (#22C55E), the Low cell is red (#EF4444), the Open cell is blue (#3B82F6), and the Close cell is light green (#DCFCE7) when the candle closed higher than it opened (bullish) or light red (#FCA5A5) when lower (bearish).",
+              "The Ranking cell sits on a white background. Its text is bold green (#16A34A) with a “+” prefix when the value is higher than the previous candle, and bold red (#DC2626) with a “−” prefix when lower.",
+              "When the Ranking is unchanged from the previous candle (or on the oldest row), the text instead names the winner: blue (#1E40AF) = Call side won the candle, amber (#78350F) = Put side won.",
             ],
           },
         ],
@@ -478,7 +479,7 @@ export const SECTIONS: Section[] = [
           {
             type: "para",
             content:
-              "All prices in the table are shown as whole numbers with the decimals cut off (74.9 is shown as 74). The full-precision values are used in every calculation — only the display is simplified. Row order is newest first: the live candle is always the top row.",
+              "Option-side columns — Call and Put Open/High/Low/Close, their MMA and TLA, and the Ranking — are shown with two decimal places (e.g. 74.90), because option premiums move in ₹0.05 ticks and the decimals carry real information. Index-level columns — Future, Spot, RSI, EMA and VWAP — are shown as whole numbers, rounded to the nearest (24,474.6 shows as 24,475). The full-precision values are used in every calculation — only the display is simplified. Row order is newest first: the live candle is always the top row.",
           },
           {
             type: "para",
@@ -657,7 +658,7 @@ export const SECTIONS: Section[] = [
           },
           {
             term: "Ranking",
-            def: "The higher of Call MMA vs Put MMA for the candle. Blue = Call side stronger, amber = Put side stronger.",
+            def: "The higher of Call MMA vs Put MMA for the candle (if only one side has data, that side wins). Shown with a green “+” when higher than the previous candle and a red “−” when lower; blue text = Call side stronger, amber = Put side stronger.",
           },
           {
             term: "RSI",
@@ -703,7 +704,7 @@ export const SECTIONS: Section[] = [
           "The “PP” toggle in the title bar is a legacy control from an earlier version of the table and currently has no effect on the 31 columns.",
           "The MMA formula uses a minus sign on Close — (O + H + L − C) ÷ 4 — exactly as written in your specification. Because of this, MMA is roughly half the price and TLA is often negative; both are expected. If you intended a plus sign, tell the team and it is a one-line change.",
           "On a Ranking tie (Call MMA exactly equals Put MMA), Call wins — please confirm this is the rule you want.",
-          "Displayed numbers have their decimals cut off (74.9 shows as 74); the full precision is always used inside the calculations.",
+          "Option-side numbers (Call, Put, MMA, TLA, Ranking) display with two decimals; index-level numbers (Future, Spot, RSI, EMA, VWAP) display rounded to the nearest whole number. The full precision is always used inside the calculations.",
         ],
       },
     ],

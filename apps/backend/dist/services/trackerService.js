@@ -1,12 +1,9 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getSessionData = exports.resumeSession = exports.updateTrackerStrikes = exports.startTrackerSession = exports.initTrackerEngine = exports.syncAetramSubscriptions = exports.activeSessions = void 0;
 const Module2Session_1 = require("../models/Module2Session");
 const Module2StrikeTick_1 = require("../models/Module2StrikeTick");
-const redis_1 = __importDefault(require("../config/redis"));
+const redisWriteBuffer_1 = require("./redisWriteBuffer");
 const socketService_1 = require("./socketService");
 const module2InteractiveDataService_1 = require("./module2InteractiveDataService");
 const aetramMarketDataService_1 = require("./aetramMarketDataService");
@@ -114,8 +111,8 @@ const executeMinuteBoundary = async () => {
         const session = exports.activeSessions[sessionId];
         // 1. Calculate Futures OI Delta
         const futSymbol = getFuturesSymbol(session.indexSymbol);
-        const rawFutPrice = await redis_1.default.get(`ltp:${futSymbol}`);
-        const rawFutOi = await redis_1.default.get(`oi:${futSymbol}`);
+        const rawFutPrice = await (0, redisWriteBuffer_1.readLive)(`ltp:${futSymbol}`);
+        const rawFutOi = await (0, redisWriteBuffer_1.readLive)(`oi:${futSymbol}`);
         let futLtp = rawFutPrice ? parseFloat(rawFutPrice) : 0;
         let futOi = rawFutOi ? Math.floor(parseFloat(rawFutOi)) : 0;
         let futuresOI = session.futuresOI;
@@ -156,9 +153,9 @@ const executeMinuteBoundary = async () => {
         // 2. Process Options Strikes
         for (const strike of session.selectedStrikes) {
             // Fetch latest price & OI from Redis cache
-            const rawPrice = await redis_1.default.get(`ltp:${strike}`);
+            const rawPrice = await (0, redisWriteBuffer_1.readLive)(`ltp:${strike}`);
             let ltp = rawPrice ? Math.floor(parseFloat(rawPrice)) : 0;
-            const rawOi = await redis_1.default.get(`oi:${strike}`);
+            const rawOi = await (0, redisWriteBuffer_1.readLive)(`oi:${strike}`);
             let oi = rawOi ? Math.floor(parseFloat(rawOi)) : 0;
             let strikeState = session.strikes[strike];
             // If strike state doesn't exist, initialize it
@@ -375,9 +372,9 @@ const startTrackerSession = async (userId, sessionType, indexSymbol, expiryDate,
     const dayOpenPrices = {};
     const strikes = {};
     for (const strike of selectedStrikes) {
-        const rawPrice = await redis_1.default.get(`ltp:${strike}`);
+        const rawPrice = await (0, redisWriteBuffer_1.readLive)(`ltp:${strike}`);
         const ltp = rawPrice ? Math.floor(parseFloat(rawPrice)) : 0; // Capture baseline at first observation
-        const rawOi = await redis_1.default.get(`oi:${strike}`);
+        const rawOi = await (0, redisWriteBuffer_1.readLive)(`oi:${strike}`);
         const oi = rawOi ? Math.floor(parseFloat(rawOi)) : 0;
         dayOpenPrices[strike] = ltp;
         strikes[strike] = {
@@ -402,8 +399,8 @@ const startTrackerSession = async (userId, sessionType, indexSymbol, expiryDate,
     }
     // Resolve Futures symbols and fetch details
     const futSymbol = getFuturesSymbol(indexSymbol);
-    const rawFutPrice = await redis_1.default.get(`ltp:${futSymbol}`);
-    const rawFutOi = await redis_1.default.get(`oi:${futSymbol}`);
+    const rawFutPrice = await (0, redisWriteBuffer_1.readLive)(`ltp:${futSymbol}`);
+    const rawFutOi = await (0, redisWriteBuffer_1.readLive)(`oi:${futSymbol}`);
     const futPrice = rawFutPrice ? parseFloat(rawFutPrice) : 0;
     const futOi = rawFutOi ? Math.floor(parseFloat(rawFutOi)) : 0;
     const futuresOI = {
@@ -467,9 +464,9 @@ const updateTrackerStrikes = async (sessionId, newStrikes) => {
     // Identify new strikes to initialize baselines
     for (const strike of newStrikes) {
         if (!session.selectedStrikes.includes(strike)) {
-            const rawPrice = await redis_1.default.get(`ltp:${strike}`);
+            const rawPrice = await (0, redisWriteBuffer_1.readLive)(`ltp:${strike}`);
             const ltp = rawPrice ? Math.floor(parseFloat(rawPrice)) : 0; // Capture baseline at first observation
-            const rawOi = await redis_1.default.get(`oi:${strike}`);
+            const rawOi = await (0, redisWriteBuffer_1.readLive)(`oi:${strike}`);
             const oi = rawOi ? Math.floor(parseFloat(rawOi)) : 0;
             session.dayOpenPrices[strike] = ltp;
             session.strikes[strike] = {

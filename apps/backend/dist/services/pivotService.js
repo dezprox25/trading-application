@@ -1,13 +1,10 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.evaluateIndicators = exports.getPivotLevels = exports.recalculatePivots = exports.initPivotService = exports.setOnPivotsUpdated = void 0;
 const FuturesOHLC_1 = require("../models/FuturesOHLC");
 const PivotLevels_1 = require("../models/PivotLevels");
 const ohlcAggregator_1 = require("./ohlcAggregator");
-const redis_1 = __importDefault(require("../config/redis"));
+const redisWriteBuffer_1 = require("./redisWriteBuffer");
 const pivotEngine_1 = require("../utils/pivotEngine");
 // Local cache for the latest computed pivots: latestPivots[symbol][timeframe][method]
 const latestPivots = {};
@@ -138,8 +135,8 @@ const getPivotLevels = async (symbol, timeframe, method) => {
         return computed[method];
     }
     else {
-        // Fallback: Calculate pivots using the current Redis LTP if DB is offline
-        const rawFutLtp = await redis_1.default.get(`ltp:${symbol}`);
+        // Fallback: Calculate pivots using the current cached LTP if DB is offline
+        const rawFutLtp = await (0, redisWriteBuffer_1.readLive)(`ltp:${symbol}`);
         const currentPrice = rawFutLtp ? parseFloat(rawFutLtp) : 22100;
         const computed = await (0, exports.recalculatePivots)(symbol, timeframe, currentPrice + 50, currentPrice - 50, currentPrice);
         return computed[method];
@@ -152,9 +149,10 @@ exports.getPivotLevels = getPivotLevels;
  */
 const evaluateIndicators = async (symbol, timeframe, method, spotSymbol = "NIFTY-SPOT") => {
     try {
-        // 1. Fetch latest prices from Redis cache
-        const rawFutLtp = await redis_1.default.get(`ltp:${symbol}`);
-        const rawSpotLtp = await redis_1.default.get(`ltp:${spotSymbol}`);
+        // 1. Fetch latest prices — memory-first (this runs up to 2×/sec per active
+        // indicator room; per-eval Redis GETs were pure quota waste).
+        const rawFutLtp = await (0, redisWriteBuffer_1.readLive)(`ltp:${symbol}`);
+        const rawSpotLtp = await (0, redisWriteBuffer_1.readLive)(`ltp:${spotSymbol}`);
         if (!rawFutLtp || !rawSpotLtp) {
             return null;
         }

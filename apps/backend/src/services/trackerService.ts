@@ -1,6 +1,6 @@
 import { Module2Session } from "../models/Module2Session";
 import { Module2StrikeTick } from "../models/Module2StrikeTick";
-import redis from "../config/redis";
+import { readLive } from "./redisWriteBuffer";
 import { broadcastTrackerUpdate } from "./socketService";
 import { Module2SessionData, Module2StrikeState, Module2Cell, TrendBadgeState } from "@stock/shared";
 import { getModule2DataSource, logModule2InteractiveStatus } from "./module2InteractiveDataService";
@@ -120,8 +120,8 @@ const executeMinuteBoundary = async () => {
     
     // 1. Calculate Futures OI Delta
     const futSymbol = getFuturesSymbol(session.indexSymbol);
-    const rawFutPrice = await redis.get(`ltp:${futSymbol}`);
-    const rawFutOi = await redis.get(`oi:${futSymbol}`);
+    const rawFutPrice = await readLive(`ltp:${futSymbol}`);
+    const rawFutOi = await readLive(`oi:${futSymbol}`);
     let futLtp = rawFutPrice ? parseFloat(rawFutPrice) : 0;
     let futOi = rawFutOi ? Math.floor(parseFloat(rawFutOi)) : 0;
 
@@ -168,10 +168,10 @@ const executeMinuteBoundary = async () => {
     // 2. Process Options Strikes
     for (const strike of session.selectedStrikes) {
       // Fetch latest price & OI from Redis cache
-      const rawPrice = await redis.get(`ltp:${strike}`);
+      const rawPrice = await readLive(`ltp:${strike}`);
       let ltp = rawPrice ? Math.floor(parseFloat(rawPrice)) : 0;
       
-      const rawOi = await redis.get(`oi:${strike}`);
+      const rawOi = await readLive(`oi:${strike}`);
       let oi = rawOi ? Math.floor(parseFloat(rawOi)) : 0;
 
       let strikeState = session.strikes[strike];
@@ -408,10 +408,10 @@ export const startTrackerSession = async (
   const strikes: Record<string, Module2StrikeState> = {};
 
   for (const strike of selectedStrikes) {
-    const rawPrice = await redis.get(`ltp:${strike}`);
+    const rawPrice = await readLive(`ltp:${strike}`);
     const ltp = rawPrice ? Math.floor(parseFloat(rawPrice)) : 0; // Capture baseline at first observation
 
-    const rawOi = await redis.get(`oi:${strike}`);
+    const rawOi = await readLive(`oi:${strike}`);
     const oi = rawOi ? Math.floor(parseFloat(rawOi)) : 0;
 
     dayOpenPrices[strike] = ltp;
@@ -438,8 +438,8 @@ export const startTrackerSession = async (
 
   // Resolve Futures symbols and fetch details
   const futSymbol = getFuturesSymbol(indexSymbol);
-  const rawFutPrice = await redis.get(`ltp:${futSymbol}`);
-  const rawFutOi = await redis.get(`oi:${futSymbol}`);
+  const rawFutPrice = await readLive(`ltp:${futSymbol}`);
+  const rawFutOi = await readLive(`oi:${futSymbol}`);
   const futPrice = rawFutPrice ? parseFloat(rawFutPrice) : 0;
   const futOi = rawFutOi ? Math.floor(parseFloat(rawFutOi)) : 0;
 
@@ -514,10 +514,10 @@ export const updateTrackerStrikes = async (
   // Identify new strikes to initialize baselines
   for (const strike of newStrikes) {
     if (!session.selectedStrikes.includes(strike)) {
-      const rawPrice = await redis.get(`ltp:${strike}`);
+      const rawPrice = await readLive(`ltp:${strike}`);
       const ltp = rawPrice ? Math.floor(parseFloat(rawPrice)) : 0; // Capture baseline at first observation
 
-      const rawOi = await redis.get(`oi:${strike}`);
+      const rawOi = await readLive(`oi:${strike}`);
       const oi = rawOi ? Math.floor(parseFloat(rawOi)) : 0;
 
       session.dayOpenPrices[strike] = ltp;

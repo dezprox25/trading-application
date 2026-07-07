@@ -1,6 +1,6 @@
 import axios from "axios";
 import { io, Socket } from "socket.io-client";
-import redis from "../config/redis";
+import { bufferSet } from "./redisWriteBuffer";
 import { broadcastBrokerStatus } from "./socketService";
 import {
   loginMarketData,
@@ -203,7 +203,10 @@ export const subscribeToInstruments = async (
 };
 
 /**
- * Handles incoming ticks and updates Redis
+ * Handles incoming ticks and updates the in-process live store (Module 2's
+ * tracker reads these via readLive — same process, zero Redis commands).
+ * Previously each tick issued a direct Redis SET; per-tick REST calls were a
+ * major contributor to the monthly command quota blowout.
  */
 const handleLtpTick = async (tick: any) => {
   const token = String(tick.exchangeInstrumentID || tick.ExchangeInstrumentID);
@@ -211,7 +214,7 @@ const handleLtpTick = async (tick: any) => {
   if (token && ltp !== undefined) {
     const symbol = tokenToSymbolMap.get(token);
     if (symbol) {
-      await redis.set(`ltp:${symbol}`, ltp.toString());
+      bufferSet(`ltp:${symbol}`, ltp.toString());
     }
   }
 };
@@ -222,7 +225,7 @@ const handleOiTick = async (tick: any) => {
   if (token && oi !== undefined) {
     const symbol = tokenToSymbolMap.get(token);
     if (symbol) {
-      await redis.set(`oi:${symbol}`, oi.toString());
+      bufferSet(`oi:${symbol}`, oi.toString());
     }
   }
 };
