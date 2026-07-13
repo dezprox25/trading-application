@@ -169,7 +169,11 @@ export const loginMarketData = async (
     );
 
     const body = response.data;
-    if (body?.code === "success" && body?.result?.token) {
+    // XTS wraps every response as { type: "success"|"error", code: "<granular-code>", ... } —
+    // e.g. a successful login carries code "s-response-0001", never the literal string
+    // "success". "type" is the actual success/failure discriminant (verified against the
+    // official symphonyfintech/xts-binary-marketdata-nodeJS-api SDK + public API docs).
+    if (body?.type === "success" && body?.result?.token) {
       const now = new Date();
       session = {
         token: String(body.result.token),

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useDashStore } from "./store";
+import { exportModule1Excel } from "./excelExport";
 
 const TFS_MIN = ["1m", "2m", "3m", "5m", "10m", "15m", "30m", "45m"];
 const TFS_HR  = ["1h", "2h", "3h", "4h"];
@@ -16,6 +17,8 @@ const ALL_COL_IDS = [
   "ranking",
   // Future (6)
   "fut-o", "fut-h", "fut-l", "fut-c", "fut-mma", "fut-tla",
+  // Space (1) — reserved placeholder column
+  "space",
   // Spot (6)
   "spot-o", "spot-h", "spot-l", "spot-c", "spot-mma", "spot-tla",
   // Indicators (5)
@@ -31,6 +34,7 @@ const ALL_COL_LABELS: Record<string, string> = {
   ranking: "Ranking",
   "fut-o": "Fut Open",  "fut-h": "Fut High", "fut-l": "Fut Low",  "fut-c": "Fut Close",
   "fut-mma": "Fut MMA", "fut-tla": "Fut TLA",
+  space: "Space",
   "spot-o": "Spot Open","spot-h": "Spot High","spot-l": "Spot Low","spot-c": "Spot Close",
   "spot-mma": "Spot MMA","spot-tla": "Spot TLA",
   smc: "SMC", fib: "FIB", rsi: "RSI", ema: "EMA", vwap: "VWAP",
@@ -46,6 +50,7 @@ const COL_GROUP_LABEL: Record<string, string> = {
   ranking: "Ranking",
   "fut-o": "Future", "fut-h": "Future", "fut-l": "Future", "fut-c": "Future",
   "fut-mma": "Future", "fut-tla": "Future",
+  space: "Space",
   "spot-o": "Spot", "spot-h": "Spot", "spot-l": "Spot", "spot-c": "Spot",
   "spot-mma": "Spot", "spot-tla": "Spot",
   smc: "Indicators", fib: "Indicators", rsi: "Indicators", ema: "Indicators", vwap: "Indicators",
@@ -71,6 +76,7 @@ export function TimeframeRow() {
     timeframe, setTimeframe, customRange, setCustomRange,
     feedStatus, hiddenCols, toggleColumn,
     colOrder, setColOrder,
+    rows, type, instrument,
   } = useDashStore();
 
   const [colsOpen, setColsOpen] = useState(false);
@@ -105,8 +111,8 @@ export function TimeframeRow() {
 
   const pillStyle = (active: boolean): React.CSSProperties => ({
     fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
-    fontSize: 11, fontWeight: 700,
-    padding: "3px 10px", borderRadius: 3,
+    fontSize: 13, fontWeight: 700,
+    padding: "5px 13px", borderRadius: 4,
     border: `1px solid ${active ? "#2E75B6" : "#BDC4CF"}`,
     background: active ? "#2E75B6" : "transparent",
     color: active ? "#fff" : "#1A2533",
@@ -182,14 +188,14 @@ export function TimeframeRow() {
 
   const inputStyle: React.CSSProperties = {
     fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
-    fontSize: 11, padding: "2px 6px",
-    border: "1px solid #BDC4CF", borderRadius: 3,
+    fontSize: 13, padding: "4px 8px",
+    border: "1px solid #BDC4CF", borderRadius: 4,
     background: "#fff", color: "#1A2533",
     outline: "none",
   };
 
   const labelStyle: React.CSSProperties = {
-    fontSize: 10, fontWeight: 700, color: "#5B6B7F",
+    fontSize: 11, fontWeight: 700, color: "#5B6B7F",
     textTransform: "uppercase", letterSpacing: "0.06em",
     whiteSpace: "nowrap",
   };
@@ -199,8 +205,8 @@ export function TimeframeRow() {
 
       {/* ── Main pill row ─────────────────────────────────────────────────── */}
       <div style={{
-        display: "flex", alignItems: "center", gap: 4,
-        padding: "5px 12px",
+        display: "flex", alignItems: "center", gap: 6,
+        padding: "7px 14px",
         background: "#FFFFFF",
         flexWrap: "wrap",
       }}>
@@ -215,7 +221,7 @@ export function TimeframeRow() {
           </button>
         ))}
 
-        <div style={{ width: 1, height: 18, background: "#BDC4CF", margin: "0 4px" }} />
+        <div style={{ width: 1, height: 22, background: "#BDC4CF", margin: "0 5px" }} />
 
         {TFS_HR.map(tf => (
           <button
@@ -227,10 +233,11 @@ export function TimeframeRow() {
           </button>
         ))}
 
-        <div style={{ width: 1, height: 18, background: "#BDC4CF", margin: "0 4px" }} />
+        <div style={{ width: 1, height: 22, background: "#BDC4CF", margin: "0 5px" }} />
 
+        {/* Custom timeframe option — hidden per client request; logic kept intact for future use */}
         <button
-          style={pillStyle(timeframe === "custom")}
+          style={{ ...pillStyle(timeframe === "custom"), display: "none" }}
           onClick={() => setTimeframe("custom")}
         >
           📅 Custom
@@ -239,14 +246,33 @@ export function TimeframeRow() {
         <div style={{ flex: 1 }} />
 
         {/* Feed status indicator */}
-        <div style={{ display: "flex", alignItems: "center", gap: 5, marginRight: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginRight: 14 }}>
           <span style={{
-            width: 7, height: 7, borderRadius: "50%", background: statusColor,
+            width: 8, height: 8, borderRadius: "50%", background: statusColor,
             boxShadow: feedStatus === "live" ? `0 0 0 2px ${statusColor}40` : "none",
             display: "inline-block",
           }} />
-          <span style={{ fontSize: 11, fontWeight: 700, color: statusColor }}>{statusLabel}</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: statusColor }}>{statusLabel}</span>
         </div>
+
+        {/* Download Excel button */}
+        <button
+          onClick={() => exportModule1Excel({ rows, hiddenCols, colOrder, type, instrument, timeframe })}
+          disabled={rows.length === 0}
+          title={rows.length === 0 ? "No data to export yet" : "Download the full table as an Excel file"}
+          style={{
+            fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
+            fontSize: 13, fontWeight: 700,
+            padding: "5px 12px", borderRadius: 4,
+            border: "1px solid #BDC4CF",
+            background: "#fff",
+            color: rows.length === 0 ? "#BDC4CF" : "#1A2533",
+            cursor: rows.length === 0 ? "not-allowed" : "pointer",
+            marginRight: 10,
+          }}
+        >
+          ⬇ Download Excel
+        </button>
 
         {/* Columns button + popover */}
         <div style={{ position: "relative" }} ref={popRef}>
@@ -254,8 +280,8 @@ export function TimeframeRow() {
             onClick={() => setColsOpen(o => !o)}
             style={{
               fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
-              fontSize: 11, fontWeight: 700,
-              padding: "3px 10px", borderRadius: 3,
+              fontSize: 13, fontWeight: 700,
+              padding: "5px 12px", borderRadius: 4,
               border: "1px solid #BDC4CF", background: colsOpen ? "#EBF3FA" : "#fff",
               color: "#1A2533", cursor: "pointer",
             }}
@@ -268,11 +294,11 @@ export function TimeframeRow() {
               position: "absolute", right: 0, top: "calc(100% + 4px)",
               background: "#fff", border: "1px solid #BDC4CF",
               borderRadius: 4, boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
-              zIndex: 100, minWidth: 200, padding: "8px 0",
-              maxHeight: 400, overflowY: "auto",
+              zIndex: 100, minWidth: 230, padding: "10px 0",
+              maxHeight: 440, overflowY: "auto",
             }}>
               <div style={{
-                padding: "4px 12px 8px", fontSize: 9, fontWeight: 700,
+                padding: "5px 14px 9px", fontSize: 10, fontWeight: 700,
                 color: "#5B6B7F", textTransform: "uppercase",
                 letterSpacing: "0.1em", borderBottom: "1px solid #EBF3FA",
               }}>
@@ -288,8 +314,8 @@ export function TimeframeRow() {
                     <div key={id}>
                       {showDivider && (
                         <div style={{
-                          padding: "5px 12px 2px",
-                          fontSize: 9, fontWeight: 700,
+                          padding: "6px 14px 3px",
+                          fontSize: 10, fontWeight: 700,
                           color: "#8A93A3", textTransform: "uppercase",
                           letterSpacing: "0.1em",
                           borderTop: "1px solid #EBF3FA",
@@ -305,9 +331,9 @@ export function TimeframeRow() {
                         onDrop={() => handleDrop(id)}
                         onDragEnd={handleDragEnd}
                         style={{
-                          display: "flex", alignItems: "center", gap: 8,
-                          padding: "4px 12px", cursor: "grab",
-                          fontSize: 12, color: "#1A2533",
+                          display: "flex", alignItems: "center", gap: 9,
+                          padding: "6px 14px", cursor: "grab",
+                          fontSize: 13, color: "#1A2533",
                           background: dragOver === id
                             ? "#EBF3FA"
                             : hiddenCols.includes(id) ? "#FBF7F0" : "transparent",
@@ -315,13 +341,13 @@ export function TimeframeRow() {
                           transition: "background 0.1s",
                         }}
                       >
-                        <span style={{ fontSize: 10, color: "#BDC4CF", lineHeight: 1, userSelect: "none" }}>⠿</span>
+                        <span style={{ fontSize: 11, color: "#BDC4CF", lineHeight: 1, userSelect: "none" }}>⠿</span>
                         <input
                           type="checkbox"
                           checked={!hiddenCols.includes(id)}
                           onChange={() => toggleColumn(id)}
                           onClick={e => e.stopPropagation()}
-                          style={{ accentColor: "#2E75B6" }}
+                          style={{ accentColor: "#2E75B6", width: 15, height: 15 }}
                         />
                         {ALL_COL_LABELS[id] ?? id}
                       </label>
@@ -333,10 +359,10 @@ export function TimeframeRow() {
                 <button
                   onClick={() => setColOrder([])}
                   style={{
-                    display: "block", width: "calc(100% - 24px)", margin: "8px 12px 4px",
+                    display: "block", width: "calc(100% - 28px)", margin: "10px 14px 5px",
                     fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
-                    fontSize: 11, fontWeight: 600, padding: "3px 0",
-                    border: "1px solid #BDC4CF", borderRadius: 3,
+                    fontSize: 13, fontWeight: 600, padding: "5px 0",
+                    border: "1px solid #BDC4CF", borderRadius: 4,
                     background: "#fff", color: "#5B6B7F", cursor: "pointer",
                   }}
                 >
@@ -351,8 +377,8 @@ export function TimeframeRow() {
       {/* ── Custom date range panel ──────────────────────────────────────── */}
       {timeframe === "custom" && (
         <div style={{
-          display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10,
-          padding: "6px 12px",
+          display: "flex", alignItems: "center", flexWrap: "wrap", gap: 12,
+          padding: "8px 14px",
           background: "#F3F6FA",
           borderTop: "1px solid #BDC4CF",
         }}>
@@ -361,7 +387,7 @@ export function TimeframeRow() {
             {CUSTOM_CANDLE_TFS.map(tf => <option key={tf} value={tf}>{tf}</option>)}
           </select>
 
-          <div style={{ width: 1, height: 18, background: "#BDC4CF" }} />
+          <div style={{ width: 1, height: 22, background: "#BDC4CF" }} />
 
           <span style={labelStyle}>From</span>
           <input type="datetime-local" value={fromDt} onChange={e => setFromDt(e.target.value)} style={inputStyle} />
@@ -373,8 +399,8 @@ export function TimeframeRow() {
             onClick={handleApplyCustomRange}
             style={{
               fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
-              fontSize: 11, fontWeight: 700,
-              padding: "3px 14px", borderRadius: 3,
+              fontSize: 13, fontWeight: 700,
+              padding: "5px 16px", borderRadius: 4,
               border: "1px solid #2E75B6", background: "#2E75B6",
               color: "#fff", cursor: "pointer",
             }}
@@ -386,8 +412,8 @@ export function TimeframeRow() {
             onClick={handleClearCustomRange}
             style={{
               fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
-              fontSize: 11, fontWeight: 700,
-              padding: "3px 10px", borderRadius: 3,
+              fontSize: 13, fontWeight: 700,
+              padding: "5px 12px", borderRadius: 4,
               border: "1px solid #BDC4CF", background: "#fff",
               color: "#5B6B7F", cursor: "pointer",
             }}
@@ -396,7 +422,7 @@ export function TimeframeRow() {
           </button>
 
           {customRange && (
-            <span style={{ fontSize: 11, color: "#2E75B6", fontWeight: 600 }}>
+            <span style={{ fontSize: 13, color: "#2E75B6", fontWeight: 600 }}>
               {new Date(customRange.from).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "short", timeStyle: "short" })}
               {" — "}
               {new Date(customRange.to).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "short", timeStyle: "short" })}
@@ -405,7 +431,7 @@ export function TimeframeRow() {
           )}
 
           {rangeError && (
-            <span style={{ fontSize: 11, color: "#DC2626", fontWeight: 600 }}>{rangeError}</span>
+            <span style={{ fontSize: 13, color: "#DC2626", fontWeight: 600 }}>{rangeError}</span>
           )}
         </div>
       )}

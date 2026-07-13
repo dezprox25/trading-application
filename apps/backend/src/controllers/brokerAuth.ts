@@ -2,7 +2,8 @@ import { Request, Response } from "express";
 import crypto from "crypto";
 import axios from "axios";
 import { startDataFeedWithCredentials } from "../services/dataFeed";
-import { loginToAetramWithCredentials, connectToAetramWebSocket } from "../services/aetramMarketDataService";
+import { loginToAetramWithCredentials } from "../services/aetramMarketDataService";
+import { connect as connectMarketDataWebSocket } from "../services/marketDataWebSocketService";
 import { generateAccessToken, JWT_SECRET } from "../utils/token";
 import jwt from "jsonwebtoken";
 
@@ -171,7 +172,7 @@ export const module2BrokerLogin = async (req: Request, res: Response) => {
     }
 
     console.log("[Module2/BrokerLogin] Aetram auth success. Connecting WebSocket...");
-    await connectToAetramWebSocket();
+    await connectMarketDataWebSocket();
 
     const moduleToken = jwt.sign(
       { moduleId: "module2", type: "module-access" },

@@ -86,7 +86,7 @@ const savedPivot = (): PivotMethod => {
 const getUserId = (): string | undefined =>
   useStore.getState().user?.id as string | undefined;
 
-const scopedKey = (base: string) => {
+export const scopedKey = (base: string) => {
   const uid = getUserId();
   return uid ? `${base}_${uid}` : base;
 };

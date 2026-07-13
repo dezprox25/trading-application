@@ -24,6 +24,13 @@ import { getZebuOAuthStatusEndpoint, zebuOAuthCallback } from "./controllers/zeb
 import { initPivotService } from "./services/pivotService";
 import { initSocketServer } from "./services/socketService";
 import { initTrackerEngine } from "./services/trackerService";
+import { initSubscriptionSync } from "./services/subscriptionSyncService";
+import { initMarketDataCache } from "./services/marketDataCacheService";
+import { initMinuteAggregation } from "./services/minuteAggregationService";
+import { connectRedis as connectModule2Redis } from "./services/redisService";
+import { initCandleHistory } from "./services/candleHistoryService";
+import { initCandleArchive } from "./services/candleArchiveService";
+import { initMarketBroadcast } from "./services/marketBroadcastService";
 import { initModule1OiService } from "./services/module1OiService";
 import { startMonitoringLoop, stopMonitoringLoop, getMonitoringStatus } from "./services/monitoringService";
 import { stopDataFeed } from "./services/dataFeed";
@@ -234,6 +241,22 @@ const startServer = async () => {
   // ── Step 2: Initialize infrastructure (no DB queries here) ───────────────
   initPivotService();
   initSocketServer(io);
+  // Reuses the exact same io instance above — registers its own independent
+  // "connection" listener rather than a second Socket.IO server.
+  initMarketBroadcast(io);
+  initSubscriptionSync();
+  initMarketDataCache();
+  initMinuteAggregation();
+
+  // Module 2's own Redis connection (candle history) — independent of the
+  // Module 1 client above. A failed/absent connection degrades gracefully;
+  // it never blocks startup.
+  try {
+    await connectModule2Redis();
+  } catch (err) {
+    console.warn("[Server] Module 2 Redis connection warning:", err);
+  }
+  initCandleHistory();
 
   // ── Step 3: Initialize services that depend on DB being ready ────────────
   // Only start these after the DB connection is confirmed.
@@ -243,8 +266,13 @@ const startServer = async () => {
     } catch (err) {
       console.warn("[Server] TrackerEngine init warning:", err);
     }
+    try {
+      initCandleArchive();
+    } catch (err) {
+      console.warn("[Server] CandleArchive init warning:", err);
+    }
   } else {
-    console.warn("[Server] Skipping TrackerEngine init — DB not ready.");
+    console.warn("[Server] Skipping TrackerEngine/CandleArchive init — DB not ready.");
   }
 
   // Warm up in-memory OI state from Redis (safe to run even if Redis is offline)

@@ -10,6 +10,7 @@ import { getPivotLevels, evaluateIndicators } from "../services/pivotService";
 import { getLatestModule1OiMetrics } from "../services/module1OiService";
 import { isZebuLiveConnected } from "../services/zebuMarketDataClient";
 import { isAetramConnected } from "../services/aetramMarketDataService";
+import { getAvailableExpiries, getAvailableStrikes } from "../services/instrumentTokenService";
 
 // Returns the start of the current NSE trading session in UTC.
 // NSE opens at 09:15 IST = 03:45 UTC. If it's currently before 03:45 UTC,
@@ -364,6 +365,46 @@ export const getOptionChain = async (req: AuthenticatedRequest, res: Response) =
     });
   } catch (error) {
     console.error("Get Option Chain Error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
+const MONTHS_TITLE = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// GET /module1/expiries/:symbol
+// Real expiry dates from the live NFO instrument master (instrumentTokenService's
+// cachedRows) — not a synthetic count-limited generator. Returns every active
+// expiry, ascending, for the given index symbol.
+export const getModule1Expiries = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { symbol } = req.params;
+    const isoDates = await getAvailableExpiries(symbol);
+
+    const expiries = isoDates.map((iso) => {
+      const d = new Date(`${iso}T00:00:00.000Z`);
+      const expiry = `${String(d.getUTCDate()).padStart(2, "0")} ${MONTHS_TITLE[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+      return { id: iso, expiry };
+    });
+
+    return res.status(200).json({ symbol: symbol.toUpperCase(), expiries });
+  } catch (error) {
+    console.error("Get Module1 Expiries Error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
+// GET /module1/strikes/:symbol/:expiryId
+// Real strike prices for the given index symbol + expiry (ISO YYYY-MM-DD) from
+// the live NFO instrument master — full chain, no ATM-band limiting.
+export const getModule1Strikes = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { symbol, expiryId } = req.params;
+    const values = await getAvailableStrikes(symbol, expiryId);
+    const strikes = values.map((value) => ({ value }));
+
+    return res.status(200).json({ symbol: symbol.toUpperCase(), expiryId, strikes });
+  } catch (error) {
+    console.error("Get Module1 Strikes Error:", error);
     return res.status(500).json({ error: "Internal Server Error" });
   }
 };

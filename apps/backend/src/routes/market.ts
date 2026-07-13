@@ -13,7 +13,9 @@ import {
   getOptionChain,
   updateCustomTimeframe,
   getMarketStatus,
-  getModuleStatus
+  getModuleStatus,
+  getModule1Expiries,
+  getModule1Strikes
 } from "../controllers/market";
 
 const router = Router();
@@ -36,5 +38,9 @@ router.get("/module/status", authenticate, getModuleStatus);
 // Module 1 Indicators
 router.get("/module1/indicators/:symbol", authenticate, getIndicatorsEndpoint);
 router.get("/module1/latest-oi", getModule1LatestOi);
+
+// Module 1 Expiry/Strike dropdowns (real NFO instrument-master data)
+router.get("/module1/expiries/:symbol", authenticate, getModule1Expiries);
+router.get("/module1/strikes/:symbol/:expiryId", authenticate, getModule1Strikes);
 
 export default router;

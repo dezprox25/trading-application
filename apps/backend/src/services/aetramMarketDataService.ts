@@ -1,19 +1,22 @@
 import axios from "axios";
-import { io, Socket } from "socket.io-client";
 import { bufferSet } from "./redisWriteBuffer";
 import { broadcastBrokerStatus } from "./socketService";
 import {
   loginMarketData,
   getMarketDataToken,
-  getMarketDataUser,
   isMarketDataAuthenticated,
   markMarketDataSessionExpired,
 } from "./marketDataSessionService";
+import { onRawSocketEvent, disconnect as disconnectMarketDataWebSocket, getStatus as getWebSocketStatus } from "./marketDataWebSocketService";
+import { marketDataEvents } from "./marketDataEvents";
+import { processRawPacket, NormalizedMarketEvent } from "./marketDataPipelineService";
 
-// Session state (token, userID, expiry) lives in marketDataSessionService —
-// this service only owns the market-data transport (REST lookups + WebSocket).
-let socket: Socket | null = null;
-let socketConnected = false;
+// Session state (token, userID, expiry) lives in marketDataSessionService.
+// The socket connection itself lives ONLY in marketDataWebSocketService
+// (Phase 6 consolidation) — this service is a pure consumer of it: it
+// registers tick handlers via onRawSocketEvent and reacts to connection
+// lifecycle via marketDataEvents. It never creates, destroys, or reconnects
+// a socket itself.
 let _onReconnectFn: (() => Promise<void>) | null = null;
 
 export const setOnAetramReconnect = (fn: () => Promise<void>) => {
@@ -22,7 +25,9 @@ export const setOnAetramReconnect = (fn: () => Promise<void>) => {
 
 export const clearAetramSession = () => {
   markMarketDataSessionExpired();
-  socketConnected = false;
+  // The session backing the shared socket is gone — tear the connection down
+  // too rather than leaving a socket open with a now-invalid token.
+  disconnectMarketDataWebSocket();
 };
 
 export const isAetramConnected = (): "CONNECTED" | "ERROR" | "WAITING_FOR_CONFIGURATION" => {
@@ -35,7 +40,7 @@ export const isAetramConnected = (): "CONNECTED" | "ERROR" | "WAITING_FOR_CONFIG
     return "WAITING_FOR_CONFIGURATION";
   }
 
-  if (isMarketDataAuthenticated() && socketConnected) {
+  if (isMarketDataAuthenticated() && getWebSocketStatus().state === "CONNECTED") {
     return "CONNECTED";
   }
 
@@ -92,6 +97,64 @@ export const loginToAetram = async (): Promise<boolean> => {
 };
 
 /**
+ * Normalized shape of one row returned by Aetram's /search/instruments endpoint.
+ * Used by the Instrument Discovery layer (InstrumentService) as well as the
+ * strike-token resolution below.
+ */
+export interface AetramInstrumentResult {
+  exchangeSegment: number;
+  exchangeInstrumentID: string;
+  name: string;
+  tradingSymbol: string;
+  series: string;
+  instrumentType: string;
+  expiryDate?: string;
+  strikePrice?: number;
+  optionType?: string;
+}
+
+/**
+ * Raw instrument search against Aetram's /search/instruments endpoint.
+ * Extracted from resolveOptionStrikeToken (Phase 3) so the Instrument Discovery
+ * layer can reuse the exact same search call instead of re-implementing it.
+ */
+export const searchInstruments = async (searchString: string): Promise<AetramInstrumentResult[]> => {
+  const baseUrl = getBaseUrl();
+  if (!baseUrl || !getMarketDataToken()) return [];
+
+  try {
+    const searchUrl = `${baseUrl}/search/instruments?searchString=${encodeURIComponent(searchString)}`;
+    const response = await axios.get(searchUrl, { headers: getHeaders(), timeout: 10000 });
+
+    // "type" is the success/failure discriminant per the XTS response envelope
+    // (code carries a granular id like "s-response-0001", never "success").
+    if (response.data?.type !== "success" || !Array.isArray(response.data.result)) return [];
+
+    return response.data.result.map((inst: any) => ({
+      exchangeSegment: Number(inst.exchangeSegment ?? 2),
+      exchangeInstrumentID: String(inst.exchangeInstrumentID ?? ""),
+      name: String(inst.name ?? inst.symbol ?? ""),
+      tradingSymbol: String(inst.tradingSymbol ?? inst.displayName ?? ""),
+      series: String(inst.series ?? ""),
+      instrumentType: String(inst.instrumentType ?? inst.series ?? ""),
+      expiryDate: inst.expiryDate || inst.expiry || undefined,
+      strikePrice: inst.strikePrice !== undefined ? Number(inst.strikePrice)
+        : inst.strike !== undefined ? Number(inst.strike) : undefined,
+      optionType: inst.optionType || inst.type || undefined,
+    }));
+  } catch (error: any) {
+    if (error?.response?.status === 401) {
+      console.warn("[AetramMD] Session expired (401) during instrument search.");
+      clearAetramSession();
+      broadcastBrokerStatus("session-expired", "Broker session expired. Please login again.", "module2");
+    } else {
+      console.error(`[AetramMD] Instrument search error for "${searchString}":`, error?.message || error);
+    }
+    return [];
+  }
+};
+
+/**
  * Search and resolve an option strike symbol to its instrument token
  */
 export const resolveOptionStrikeToken = async (
@@ -104,8 +167,7 @@ export const resolveOptionStrikeToken = async (
     return symbolToTokenMap.get(strikeSymbol)!;
   }
 
-  const baseUrl = getBaseUrl();
-  if (!baseUrl || !getMarketDataToken()) return null;
+  if (!getBaseUrl() || !getMarketDataToken()) return null;
 
   // Extract strike price and option type from strikeSymbol (e.g. "NIFTY22100CE")
   const match = strikeSymbol.match(/(\d+)(CE|PE)$/);
@@ -115,54 +177,38 @@ export const resolveOptionStrikeToken = async (
 
   const indexShort = index.replace("50", "").replace("fifty", "").toUpperCase(); // e.g. "NIFTY"
 
-  try {
-    // Search using searchString
-    const searchString = `${indexShort} ${strikePrice} ${optionType}`;
-    const searchUrl = `${baseUrl}/search/instruments?searchString=${encodeURIComponent(searchString)}`;
-    
-    const response = await axios.get(searchUrl, { headers: getHeaders(), timeout: 10000 });
-    
-    if (response.data && response.data.code === "success" && Array.isArray(response.data.result)) {
-      const targetYmd = parseDateToYMD(expiryDate);
-      
-      // Filter list in-memory for the closest match
-      for (const inst of response.data.result) {
-        const instExpiryYmd = parseDateToYMD(inst.expiryDate || inst.expiry || "");
-        const instStrike = Math.round(Number(inst.strikePrice || inst.strike || 0));
-        const instOptType = String(inst.optionType || inst.type || "").toUpperCase();
-        const isOptCE = instOptType.startsWith("C") || instOptType.includes("CE");
-        const targetCE = optionType.startsWith("C");
+  const searchString = `${indexShort} ${strikePrice} ${optionType}`;
+  const results = await searchInstruments(searchString);
+  const targetYmd = parseDateToYMD(expiryDate);
 
-        if (
-          instExpiryYmd === targetYmd &&
-          instStrike === strikePrice &&
-          isOptCE === targetCE
-        ) {
-          const segment = Number(inst.exchangeSegment || 2);
-          const token = String(inst.exchangeInstrumentID);
+  // Filter list in-memory for the closest match
+  for (const inst of results) {
+    const instExpiryYmd = parseDateToYMD(inst.expiryDate || "");
+    const instStrike = Math.round(inst.strikePrice || 0);
+    const instOptType = String(inst.optionType || "").toUpperCase();
+    const isOptCE = instOptType.startsWith("C") || instOptType.includes("CE");
+    const targetCE = optionType.startsWith("C");
 
-          const result = { segment, token };
-          symbolToTokenMap.set(strikeSymbol, result);
-          tokenToSymbolMap.set(`${segment}|${token}`, strikeSymbol);
-          tokenToSymbolMap.set(token, strikeSymbol); // Fallback lookup mapping
+    if (
+      instExpiryYmd === targetYmd &&
+      instStrike === strikePrice &&
+      isOptCE === targetCE
+    ) {
+      const segment = inst.exchangeSegment;
+      const token = inst.exchangeInstrumentID;
 
-          console.log(`[AetramMD] Resolved ${strikeSymbol} to Token: ${token} (Seg: ${segment})`);
-          return result;
-        }
-      }
+      const result = { segment, token };
+      symbolToTokenMap.set(strikeSymbol, result);
+      tokenToSymbolMap.set(`${segment}|${token}`, strikeSymbol);
+      tokenToSymbolMap.set(token, strikeSymbol); // Fallback lookup mapping
+
+      console.log(`[AetramMD] Resolved ${strikeSymbol} to Token: ${token} (Seg: ${segment})`);
+      return result;
     }
-    console.warn(`[AetramMD] Could not find matching Aetram instrument for strike ${strikeSymbol} (${expiryDate})`);
-    return null;
-  } catch (error: any) {
-    if (error?.response?.status === 401) {
-      console.warn("[AetramMD] Session expired (401) during instrument lookup.");
-      clearAetramSession();
-      broadcastBrokerStatus("session-expired", "Broker session expired. Please login again.", "module2");
-    } else {
-      console.error(`[AetramMD] Instrument lookup error for ${strikeSymbol}:`, error?.message || error);
-    }
-    return null;
   }
+
+  console.warn(`[AetramMD] Could not find matching Aetram instrument for strike ${strikeSymbol} (${expiryDate})`);
+  return null;
 };
 
 /**
@@ -203,135 +249,85 @@ export const subscribeToInstruments = async (
 };
 
 /**
- * Handles incoming ticks and updates the in-process live store (Module 2's
+ * Persists normalized LTP/OI events to the in-process live store (Module 2's
  * tracker reads these via readLive — same process, zero Redis commands).
  * Previously each tick issued a direct Redis SET; per-tick REST calls were a
  * major contributor to the monthly command quota blowout.
+ *
+ * This is business logic (what to do with a tick), kept separate from
+ * transport/decoding — see marketDataPipelineService.ts (Phase 7), which
+ * decodes the raw packet and publishes LTP_UPDATED/OI_UPDATED. This service
+ * only reacts to those normalized events; it no longer parses raw packets.
  */
-const handleLtpTick = async (tick: any) => {
-  const token = String(tick.exchangeInstrumentID || tick.ExchangeInstrumentID);
-  const ltp = tick.lastTradedPrice || tick.lastPrice || tick.ltp || tick.close;
-  if (token && ltp !== undefined) {
-    const symbol = tokenToSymbolMap.get(token);
-    if (symbol) {
-      bufferSet(`ltp:${symbol}`, ltp.toString());
-    }
-  }
-};
+marketDataEvents.on("LTP_UPDATED", (event: NormalizedMarketEvent) => {
+  if (!event.exchangeInstrumentID || event.lastPrice === null) return;
+  const symbol = tokenToSymbolMap.get(event.exchangeInstrumentID);
+  if (symbol) bufferSet(`ltp:${symbol}`, String(event.lastPrice));
+});
 
-const handleOiTick = async (tick: any) => {
-  const token = String(tick.exchangeInstrumentID || tick.ExchangeInstrumentID);
-  const oi = tick.openInterest || tick.oi;
-  if (token && oi !== undefined) {
-    const symbol = tokenToSymbolMap.get(token);
-    if (symbol) {
-      bufferSet(`oi:${symbol}`, oi.toString());
-    }
-  }
-};
+marketDataEvents.on("OI_UPDATED", (event: NormalizedMarketEvent) => {
+  if (!event.exchangeInstrumentID || event.openInterest === null) return;
+  const symbol = tokenToSymbolMap.get(event.exchangeInstrumentID);
+  if (symbol) bufferSet(`oi:${symbol}`, String(event.openInterest));
+});
 
 /**
- * Establish WebSocket / Socket.IO connection.
- * Disconnects any existing socket before creating a new one.
- * Returns true if the socket connected within the 12-second timeout,
- * false if the initial attempt timed out (reconnection still runs in background).
+ * WebSocket lifecycle wiring (Phase 6 consolidation).
+ *
+ * marketDataWebSocketService is the ONLY owner of the socket. This service
+ * only registers what it needs on top of that shared connection:
+ *   - raw packet routing into the Phase 7 pipeline, re-attached to every
+ *     socket instance the manager creates (including across reconnects) via
+ *     onRawSocketEvent
+ *   - a reaction to CONNECTED/RECONNECTED/DISCONNECTED lifecycle events to
+ *     preserve the exact same business behavior the old inline socket
+ *     handlers had (frontend broker-status broadcast + the tracker resync
+ *     callback), without owning the socket itself.
+ *
+ * "-json-full"/"-json-partial" are Aetram/XTS's own event-name suffixes for a
+ * full snapshot vs. an incremental update of the same message code; both route
+ * to the same decoder since the pipeline normalizes either shape identically.
+ * 1501/1502 are wired defensively even though nothing currently requests those
+ * message codes via subscribeToInstruments — the pipeline is meant to be
+ * reusable for whatever future subsystems start requesting them.
  */
-export const connectToAetramWebSocket = async (): Promise<boolean> => {
-  const sessionToken = getMarketDataToken();
-  const userID = getMarketDataUser();
-  if (!sessionToken || !userID) {
-    console.warn("[AetramMD] No active session. Cannot connect socket.");
-    return false;
-  }
+const routeToPipeline = (packetType: string) => (raw: unknown) => processRawPacket(packetType, raw);
 
-  // Disconnect stale socket before creating new one
-  if (socket) {
-    socket.removeAllListeners();
-    socket.disconnect();
-    socket = null;
-    socketConnected = false;
-  }
+onRawSocketEvent("1512-json-full", routeToPipeline("1512"));
+onRawSocketEvent("1512-json-partial", routeToPipeline("1512"));
+onRawSocketEvent("1510-json-full", routeToPipeline("1510"));
+onRawSocketEvent("1510-json-partial", routeToPipeline("1510"));
+onRawSocketEvent("1501-json-full", routeToPipeline("1501"));
+onRawSocketEvent("1501-json-partial", routeToPipeline("1501"));
+onRawSocketEvent("1502-json-full", routeToPipeline("1502"));
+onRawSocketEvent("1502-json-partial", routeToPipeline("1502"));
 
-  const baseUrl = getBaseUrl();
-  let host = "";
-  try {
-    const parsed = new URL(baseUrl);
-    host = `${parsed.protocol}//${parsed.host}`;
-  } catch {
-    console.error("[AetramMD] Invalid MarketData Base URL.");
-    return false;
-  }
-
-  console.log(`[AetramMD] Connecting Socket.IO client to ${host}...`);
-
-  // Use polling first so the connection can be established through proxies and
-  // load-balancers that may not support direct WebSocket upgrades. Once the
-  // handshake succeeds over polling, Socket.IO upgrades to WebSocket automatically.
-  socket = io(host, {
-    path: "/apibinarymarketdata/socket.io",
-    query: {
-      token: sessionToken,
-      userID: userID,
-      apiType: "MARKETDATA",
-      publishFormat: "JSON",
-    },
-    transports: ["polling", "websocket"],
-    reconnection: true,
-    reconnectionDelay: 3000,
-    reconnectionAttempts: 10,
-  });
-
-  // Persistent connect handler — fires on initial connect AND every reconnect.
-  socket.on("connect", async () => {
-    socketConnected = true;
-    console.log("[AetramMD] Socket connected.");
-    broadcastBrokerStatus("live", undefined, "module2");
-    if (_onReconnectFn) {
-      try { await _onReconnectFn(); } catch (err: any) {
-        console.error("[AetramMD] Reconnect callback error:", err?.message || err);
-      }
-    }
-  });
-
-  socket.on("connect_error", (error: Error) => {
-    socketConnected = false;
-    console.error("[AetramMD] Socket connection error:", error.message);
-    broadcastBrokerStatus("reconnecting", "Lost connection to broker. Reconnecting...", "module2");
-  });
-
-  socket.on("1512-json-full", handleLtpTick);
-  socket.on("1512-json-partial", handleLtpTick);
-  socket.on("1510-json-full", handleOiTick);
-  socket.on("1510-json-partial", handleOiTick);
-
-  socket.on("disconnect", (reason: string) => {
-    socketConnected = false;
-    console.warn(`[AetramMD] Socket disconnected: ${reason}`);
-    if (reason !== "io client disconnect") {
-      // Only broadcast disconnected for unintentional disconnects — not when we
-      // call socket.disconnect() ourselves (e.g. on re-login).
-      broadcastBrokerStatus("broker-disconnected", "Lost connection to broker. Reconnecting...", "module2");
-    }
-  });
-
-  // Wait up to 12 seconds for the initial connection to be established.
-  // The persistent handlers above remain active for the lifetime of the socket.
-  const connected = await new Promise<boolean>((resolve) => {
-    const timer = setTimeout(() => {
-      console.warn("[AetramMD] Initial connection timed out — socket reconnection running in background.");
-      resolve(false);
-    }, 12000);
-
-    socket!.once("connect", () => {
-      clearTimeout(timer);
-      resolve(true);
+const triggerReconnectCallback = () => {
+  if (_onReconnectFn) {
+    _onReconnectFn().catch((err: any) => {
+      console.error("[AetramMD] Reconnect callback error:", err?.message || err);
     });
-    // connect_error is handled by the persistent handler above.
-    // The timer will resolve(false) after 12 seconds if no connection is made.
-  });
-
-  return connected;
+  }
 };
+
+marketDataEvents.on("CONNECTED", () => {
+  console.log("[AetramMD] Socket connected.");
+  broadcastBrokerStatus("live", undefined, "module2");
+  triggerReconnectCallback();
+});
+
+marketDataEvents.on("RECONNECTED", () => {
+  console.log("[AetramMD] Socket reconnected.");
+  broadcastBrokerStatus("live", undefined, "module2");
+  triggerReconnectCallback();
+});
+
+marketDataEvents.on("DISCONNECTED", ({ reason, manual }: { reason: string; manual: boolean }) => {
+  console.warn(`[AetramMD] Socket disconnected: ${reason}`);
+  if (!manual) {
+    broadcastBrokerStatus("broker-disconnected", "Lost connection to broker. Reconnecting...", "module2");
+  }
+});
 
 /**
  * Compute the next N upcoming Thursdays (NSE weekly expiry pattern, last resort fallback)
@@ -353,17 +349,20 @@ const computeUpcomingThursdays = (count: number): string[] => {
 /**
  * Fetch available expiry dates for options on the given index.
  * Priority: Aetram API → MOD2_EXPIRY_DATES env → computed Thursdays
+ *
+ * `exchangeSegment` defaults to 2 (NSEFO) to preserve existing NIFTY/BANKNIFTY/
+ * FINNIFTY behavior. Pass 12 (BSEFO) for SENSEX — the only supported BSE index.
  */
-export const getAetramExpiryDates = async (indexSymbol: string): Promise<string[]> => {
+export const getAetramExpiryDates = async (indexSymbol: string, exchangeSegment = 2): Promise<string[]> => {
   const baseUrl = getBaseUrl();
 
   if (baseUrl && getMarketDataToken()) {
     try {
       const name = indexSymbol.replace(/50$/i, "").replace(/FIFTY$/i, "").toUpperCase();
-      const url = `${baseUrl}/instruments/expiry?exchangeSegment=2&series=OPT&name=${encodeURIComponent(name)}`;
+      const url = `${baseUrl}/instruments/expiry?exchangeSegment=${exchangeSegment}&series=OPT&name=${encodeURIComponent(name)}`;
       const response = await axios.get(url, { headers: getHeaders(), timeout: 8000 });
 
-      if (response.data?.code === "success" && Array.isArray(response.data.result)) {
+      if (response.data?.type === "success" && Array.isArray(response.data.result)) {
         const dates = response.data.result
           .map((r: any) => parseDateToYMD(r.expiryDate || r.expiry || ""))
           .filter(Boolean)

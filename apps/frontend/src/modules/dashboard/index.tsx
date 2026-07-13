@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { useDashStore } from "./store";
+import { useDashStore, scopedKey } from "./store";
 import type { FeedStatus } from "./store";
 import { ConfigRow } from "./ConfigRow";
 import { TimeframeRow } from "./TimeframeRow";
 import { Worksheet } from "./Worksheet";
+import { exportModule1Excel, istDateStr } from "./excelExport";
 import { useStore } from "../../store/useStore";
 import { api } from "../../utils/api";
 import type { OHLCBar } from "../../calc";
@@ -163,22 +164,22 @@ function InfoBar() {
   const { pivotMethod, setPivotMethod } = useDashStore();
 
   const labelStyle: React.CSSProperties = {
-    fontSize: 9, fontWeight: 700, color: "rgba(255,255,255,0.5)",
+    fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.5)",
     textTransform: "uppercase", letterSpacing: "0.1em",
   };
 
   return (
     <div style={{
-      height: 36, flexShrink: 0,
+      height: 42, flexShrink: 0,
       background: "#0F2744",
       display: "flex", alignItems: "center",
       borderBottom: "1px solid rgba(255,255,255,0.08)",
       userSelect: "none",
     }}>
       <div style={{
-        padding: "0 16px",
+        padding: "0 18px",
         fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
-        fontSize: 13, fontWeight: 800, color: "#f1f5f9",
+        fontSize: 15, fontWeight: 800, color: "#f1f5f9",
         letterSpacing: "0.04em", whiteSpace: "nowrap",
       }}>
         ◆ SYNERGY <span style={{ opacity: 0.4 }}>·</span> Trading Dashboard
@@ -186,19 +187,20 @@ function InfoBar() {
 
       <div style={{ flex: 1 }} />
 
+      {/* PP / 4-Bar / Classic labels — hidden per client request; logic kept intact for future use */}
       <div style={{
-        display: "flex", alignItems: "center", gap: 3,
-        padding: "0 14px", borderLeft: "1px solid rgba(255,255,255,0.1)",
+        display: "none", alignItems: "center", gap: 4,
+        padding: "0 16px", borderLeft: "1px solid rgba(255,255,255,0.1)",
       }}>
-        <span style={{ ...labelStyle, marginRight: 6 }}>PP</span>
+        <span style={{ ...labelStyle, marginRight: 7 }}>PP</span>
         {(["client", "classic"] as const).map(m => (
           <button
             key={m}
             onClick={() => setPivotMethod(m)}
             style={{
               fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
-              fontSize: 10, fontWeight: 700,
-              padding: "2px 8px", borderRadius: 2,
+              fontSize: 11, fontWeight: 700,
+              padding: "3px 10px", borderRadius: 3,
               border: "1px solid rgba(255,255,255,0.2)",
               background: pivotMethod === m ? "#2E75B6" : "transparent",
               color: pivotMethod === m ? "#fff" : "rgba(255,255,255,0.5)",
@@ -675,6 +677,49 @@ export function Dashboard() {
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isGenerated, timeframe]);
+
+  // Effect 3: automatic end-of-day Excel export. Once NSE closes (15:45 IST,
+  // Mon–Fri) this fires exactly once per trading day and flags itself done in
+  // localStorage, so a page refresh after the download already happened does
+  // not trigger a second one. Checked on a 60s poll rather than a single
+  // timer-at-close because the tab may not be open exactly at market close.
+  useEffect(() => {
+    if (!isGenerated) return;
+
+    const tryAutoExport = () => {
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Kolkata", hour12: false,
+        weekday: "short", hour: "numeric", minute: "numeric",
+      }).formatToParts(new Date());
+      const partMap: Record<string, string> = {};
+      parts.forEach(p => { partMap[p.type] = p.value; });
+      if (partMap.weekday === "Sat" || partMap.weekday === "Sun") return;
+
+      const minutesNow = parseInt(partMap.hour, 10) * 60 + parseInt(partMap.minute, 10);
+      const MARKET_CLOSE_MIN = 15 * 60 + 45; // 3:45 PM IST — matches backend isMarketOpenTime
+      if (minutesNow < MARKET_CLOSE_MIN) return;
+
+      const flagKey = scopedKey(`m1_eod_export_${istDateStr()}`);
+      try {
+        if (localStorage.getItem(flagKey) === "1") return;
+      } catch { return; }
+
+      const dash = useDashStore.getState();
+      if (dash.rows.length === 0) return;
+
+      const exported = exportModule1Excel({
+        rows: dash.rows, hiddenCols: dash.hiddenCols, colOrder: dash.colOrder,
+        type: dash.type, instrument: dash.instrument, timeframe: dash.timeframe,
+      });
+      if (exported) {
+        try { localStorage.setItem(flagKey, "1"); } catch { /* noop */ }
+      }
+    };
+
+    tryAutoExport();
+    const timer = setInterval(tryAutoExport, 60000);
+    return () => clearInterval(timer);
+  }, [isGenerated]);
 
   const worksheetFeedStatus: "idle" | "live" | "interrupted" =
     feedStatus === "live"        ? "live"        :

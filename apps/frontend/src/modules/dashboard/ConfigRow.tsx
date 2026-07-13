@@ -29,29 +29,29 @@ function useLivePrice(symbol: string): { ltp: number | null; dir: "up" | "down" 
 
 const SEL: React.CSSProperties = {
   fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
-  fontSize: 12,
+  fontSize: 14,
   fontWeight: 600,
   color: "#1A2533",
   background: "#F3F6FA",
   border: "1px solid #BDC4CF",
-  borderRadius: 3,
-  padding: "3px 22px 3px 6px",
-  height: 26,
+  borderRadius: 4,
+  padding: "6px 28px 6px 10px",
+  height: 34,
   appearance: "none",
   backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%235B6B7F'/%3E%3C/svg%3E")`,
   backgroundRepeat: "no-repeat",
-  backgroundPosition: "right 6px center",
+  backgroundPosition: "right 8px center",
   cursor: "pointer",
-  minWidth: 120,
+  minWidth: 132,
 };
 
 const LABEL: React.CSSProperties = {
-  fontSize: 9,
+  fontSize: 10,
   fontWeight: 700,
   color: "#5B6B7F",
   textTransform: "uppercase",
   letterSpacing: "0.08em",
-  marginBottom: 2,
+  marginBottom: 3,
 };
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -98,30 +98,28 @@ function DepSelect({
 }
 
 function DirArrow({ dir }: { dir: "up" | "down" | null }) {
-  if (dir === "up")   return <span style={{ color: "#16a34a", fontSize: 10, lineHeight: 1 }}>▲</span>;
-  if (dir === "down") return <span style={{ color: "#dc2626", fontSize: 10, lineHeight: 1 }}>▼</span>;
+  if (dir === "up")   return <span style={{ color: "#16a34a", fontSize: 12, lineHeight: 1 }}>▲</span>;
+  if (dir === "down") return <span style={{ color: "#dc2626", fontSize: 12, lineHeight: 1 }}>▼</span>;
   return null;
 }
 
 function LivePrice({ label, value, dir }: { label: string; value: number | null; dir: "up" | "down" | null }) {
-  const formatted = value != null
-    ? value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-    : "—";
+  const formatted = value != null ? Math.trunc(value).toLocaleString("en-IN") : "—";
 
   return (
     <div style={{ display: "flex", flexDirection: "column" }}>
       <span style={LABEL}>{label}</span>
       <div style={{
-        display: "flex", alignItems: "center", gap: 3, height: 26,
-        padding: "0 8px",
+        display: "flex", alignItems: "center", gap: 4, height: 34,
+        padding: "0 10px",
         background: "#EEF4FB",
         border: "1px solid #BDC4CF",
-        borderRadius: 3,
-        minWidth: 88,
+        borderRadius: 4,
+        minWidth: 100,
       }}>
         <span style={{
           fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
-          fontSize: 12, fontWeight: 700, color: "#1A2533", letterSpacing: "0.01em",
+          fontSize: 14, fontWeight: 700, color: "#1A2533", letterSpacing: "0.01em",
         }}>
           {formatted}
         </span>
@@ -231,7 +229,7 @@ export function ConfigRow() {
 
   if (configCollapsed) {
     const p2 = (n: number | null) =>
-      n != null ? n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
+      n != null ? Math.trunc(n).toLocaleString("en-IN") : "—";
 
     const summary = [
       instrumentType,
@@ -242,24 +240,24 @@ export function ConfigRow() {
     return (
       <div
         style={{
-          display: "flex", alignItems: "center", gap: 10,
-          height: 28, padding: "0 12px",
+          display: "flex", alignItems: "center", gap: 12,
+          height: 34, padding: "0 14px",
           background: "#F3F6FA", borderBottom: "1px solid #BDC4CF",
           cursor: "pointer", flexShrink: 0,
         }}
         onClick={toggleConfigCollapsed}
       >
-        <span style={{ fontSize: 11, fontWeight: 700, color: "#2E75B6" }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: "#2E75B6" }}>
           SPOT {p2(spotLtp)}
         </span>
-        <span style={{ fontSize: 11, fontWeight: 700, color: "#1A2533" }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: "#1A2533" }}>
           FUT {p2(futureLtp)}
         </span>
         <span style={{ color: "#BDC4CF" }}>|</span>
-        <span style={{ fontSize: 11, fontWeight: 700, color: "#5B6B7F" }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: "#5B6B7F" }}>
           {summary}
         </span>
-        <span style={{ marginLeft: "auto", fontSize: 10, color: "#5B6B7F" }}>▼ Expand config</span>
+        <span style={{ marginLeft: "auto", fontSize: 11, color: "#5B6B7F" }}>▼ Expand config</span>
       </div>
     );
   }
@@ -270,8 +268,8 @@ export function ConfigRow() {
 
   return (
     <div style={{
-      display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap",
-      padding: "8px 14px",
+      display: "flex", alignItems: "flex-end", gap: 12, flexWrap: "wrap",
+      padding: "10px 16px",
       background: "#F3F6FA", borderBottom: "1px solid #BDC4CF",
       flexShrink: 0,
     }}>
@@ -280,7 +278,7 @@ export function ConfigRow() {
       <LivePrice label="Spot"   value={spotLtp}   dir={spotDir} />
       <LivePrice label="Future" value={futureLtp} dir={futureDir} />
 
-      <div style={{ width: 1, height: 36, background: "#BDC4CF", alignSelf: "center", margin: "0 2px" }} />
+      <div style={{ width: 1, height: 44, background: "#BDC4CF", alignSelf: "center", margin: "0 2px" }} />
 
       {/* Instrument (type) */}
       <Field label="Instrument">
@@ -290,7 +288,7 @@ export function ConfigRow() {
           disabled={false}
           loading={false}
           options={INSTRUMENT_TYPES}
-          minWidth={130}
+          minWidth={144}
         />
       </Field>
 
@@ -315,39 +313,42 @@ export function ConfigRow() {
             disabled={!instrument}
             loading={loadExp}
             options={expiries.map((e) => ({ value: e.id, label: e.expiry }))}
-            minWidth={110}
+            minWidth={122}
           />
         </Field>
       )}
 
-      {/* Option Type */}
-      <Field label="Type">
-        <div style={{
-          display: "flex", height: 26,
-          border: "1px solid #BDC4CF", borderRadius: 3, overflow: "hidden",
-        }}>
-          {(["Call+Put", "Call", "Put"] as const).map((opt, i) => (
-            <button
-              key={opt}
-              onClick={() => setType(opt)}
-              style={{
-                fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
-                fontSize: 11, fontWeight: 700,
-                padding: "0 11px",
-                border: "none",
-                borderLeft: i > 0 ? "1px solid #BDC4CF" : "none",
-                background: type === opt ? "#2E75B6" : "#F3F6FA",
-                color: type === opt ? "#fff" : "#5B6B7F",
-                cursor: "pointer",
-                whiteSpace: "nowrap",
-                lineHeight: "26px",
-              }}
-            >
-              {opt === "Call+Put" ? "Call + Put" : opt}
-            </button>
-          ))}
-        </div>
-      </Field>
+      {/* Option Type — hidden from UI per client request; app always uses the
+          default Call+Put behind the scenes, component/logic kept intact. */}
+      <div style={{ display: "none" }}>
+        <Field label="Type">
+          <div style={{
+            display: "flex", height: 34,
+            border: "1px solid #BDC4CF", borderRadius: 4, overflow: "hidden",
+          }}>
+            {(["Call+Put", "Call", "Put"] as const).map((opt, i) => (
+              <button
+                key={opt}
+                onClick={() => setType(opt)}
+                style={{
+                  fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
+                  fontSize: 13, fontWeight: 700,
+                  padding: "0 14px",
+                  border: "none",
+                  borderLeft: i > 0 ? "1px solid #BDC4CF" : "none",
+                  background: type === opt ? "#2E75B6" : "#F3F6FA",
+                  color: type === opt ? "#fff" : "#5B6B7F",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                  lineHeight: "34px",
+                }}
+              >
+                {opt === "Call+Put" ? "Call + Put" : opt}
+              </button>
+            ))}
+          </div>
+        </Field>
+      </div>
 
       {/* Call strike */}
       {includesCall && (
@@ -358,7 +359,7 @@ export function ConfigRow() {
             disabled={!expiryDate}
             loading={loadSt}
             options={strikeOptions}
-            minWidth={90}
+            minWidth={100}
           />
         </Field>
       )}
@@ -372,24 +373,24 @@ export function ConfigRow() {
             disabled={!expiryDate}
             loading={loadSt}
             options={strikeOptions}
-            minWidth={90}
+            minWidth={100}
           />
         </Field>
       )}
 
       <div style={{ flex: 1 }} />
 
-      {/* Reset + Generate + Collapse */}
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
+      {/* Reset + Generate + Collapse — hidden per client request; logic kept intact for future use */}
+      <div style={{ display: "none", alignItems: "flex-end", gap: 10 }}>
         {isGenerated && (
           <button
             onClick={reset}
             style={{
               fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
-              fontSize: 12, fontWeight: 700,
-              padding: "5px 14px", borderRadius: 3,
+              fontSize: 14, fontWeight: 700,
+              padding: "7px 18px", borderRadius: 4,
               border: "1px solid #BDC4CF", background: "#fff",
-              color: "#5B6B7F", cursor: "pointer", height: 28,
+              color: "#5B6B7F", cursor: "pointer", height: 34,
             }}
           >
             Reset
@@ -400,12 +401,12 @@ export function ConfigRow() {
           disabled={!canGenerate}
           style={{
             fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
-            fontSize: 12, fontWeight: 700,
-            padding: "5px 20px", borderRadius: 3,
+            fontSize: 14, fontWeight: 700,
+            padding: "7px 24px", borderRadius: 4,
             border: "none",
             background: canGenerate ? "#2E9E4F" : "#9ca3af",
             color: "#fff", cursor: canGenerate ? "pointer" : "not-allowed",
-            height: 28,
+            height: 34,
           }}
         >
           ▶ Generate
@@ -415,9 +416,9 @@ export function ConfigRow() {
           onClick={toggleConfigCollapsed}
           title="Collapse config"
           style={{
-            border: "1px solid #BDC4CF", background: "#fff", borderRadius: 3,
-            width: 26, height: 26, cursor: "pointer",
-            fontSize: 10, color: "#5B6B7F",
+            border: "1px solid #BDC4CF", background: "#fff", borderRadius: 4,
+            width: 34, height: 34, cursor: "pointer",
+            fontSize: 12, color: "#5B6B7F",
             display: "flex", alignItems: "center", justifyContent: "center",
           }}
         >

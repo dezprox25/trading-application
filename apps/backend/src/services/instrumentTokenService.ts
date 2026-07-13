@@ -12,6 +12,14 @@ const NFO_SYMBOLS_URL = "https://go.mynt.in/NFO_symbols.txt.zip";
 const DOWNLOAD_TIMEOUT_MS = 30_000;
 const CACHE_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours — covers weekly expiry cycles
 
+// NSE F&O index roots cached for Module 1's expiry/strike dropdowns (real
+// instrument-master lookup — see getAvailableExpiries/getAvailableStrikes).
+// Live spot/futures ticks are still NIFTY-only (fixed ZEBU_NIFTY_* env tokens
+// in zebuMarketDataClient.ts) — this only widens what the dropdowns can show
+// and what on-demand option-token resolution (resolveOptionInstrument) can find.
+// BSE instruments (SENSEX, BANKEX) aren't in this NSE-only master.
+const NSE_INDEX_SYMBOLS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"];
+
 interface ZebuNFORow {
   exchange: string;
   token: string;
@@ -248,15 +256,15 @@ export const refreshInstrumentTokens = async (): Promise<ActiveInstrumentTokens 
       const row = parseNFOLine(line);
       if (!row) continue;
       totalParsedRows++;
-      if (row.symbol === "NIFTY" && (row.instrumentType === "FUTIDX" || row.instrumentType === "OPTIDX")) {
+      if (NSE_INDEX_SYMBOLS.includes(row.symbol) && (row.instrumentType === "FUTIDX" || row.instrumentType === "OPTIDX")) {
         rows.push(row);
       }
     }
-    // Phase 1 diagnostics: total rows (all symbols) vs. the NIFTY-only subset actually cached.
-    console.log(`[InstrumentTokens] Total rows parsed (all symbols): ${totalParsedRows} | Total NIFTY rows: ${rows.length}`);
+    // Phase 1 diagnostics: total rows (all symbols) vs. the cached NSE_INDEX_SYMBOLS subset.
+    console.log(`[InstrumentTokens] Total rows parsed (all symbols): ${totalParsedRows} | Total cached rows (${NSE_INDEX_SYMBOLS.join("/")}): ${rows.length}`);
 
     if (rows.length === 0) {
-      console.warn("[InstrumentTokens] No NIFTY rows parsed — NFO file format may have changed.");
+      console.warn("[InstrumentTokens] No index rows parsed — NFO file format may have changed.");
       return null;
     }
 
@@ -325,6 +333,48 @@ export const getActiveInstrumentTokens = async (): Promise<ActiveInstrumentToken
 };
 
 export const getCachedInstrumentTokens = (): ActiveInstrumentTokens | null => cachedTokens;
+
+/**
+ * All real, currently-active OPTIDX expiry dates for one index symbol, from the
+ * live NFO instrument master (not a synthetic count-limited generator). ISO
+ * `YYYY-MM-DD`, ascending. Powers Module 1's Expiry Date dropdown.
+ */
+export const getAvailableExpiries = async (symbol: string): Promise<string[]> => {
+  if (!cachedRows.length) await getActiveInstrumentTokens();
+
+  const inst = symbol.toUpperCase();
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+
+  const isoDates = cachedRows
+    .filter(r => r.symbol === inst && r.instrumentType === "OPTIDX" && r.expiry && r.expiry >= today)
+    .map(r => r.expiry!.toISOString().slice(0, 10));
+
+  return Array.from(new Set(isoDates)).sort();
+};
+
+/**
+ * All real strike prices for one index symbol + expiry, from the live NFO
+ * instrument master (not a synthetic ATM-band generator). CE and PE rows share
+ * the same strike set, so this dedupes across both. Ascending. Powers Module 1's
+ * Call Strike / Put Strike dropdowns.
+ */
+export const getAvailableStrikes = async (symbol: string, expiryIso: string): Promise<number[]> => {
+  if (!cachedRows.length) await getActiveInstrumentTokens();
+
+  const inst = symbol.toUpperCase();
+
+  const strikes = cachedRows
+    .filter(r =>
+      r.symbol === inst &&
+      r.instrumentType === "OPTIDX" &&
+      r.expiry && r.expiry.toISOString().slice(0, 10) === expiryIso &&
+      r.strike > 0
+    )
+    .map(r => r.strike);
+
+  return Array.from(new Set(strikes)).sort((a, b) => a - b);
+};
 
 /**
  * Resolves the exact NFO token for one option contract by instrument + expiry + strike +

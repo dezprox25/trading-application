@@ -26,7 +26,7 @@ export function Module1LoginPanel() {
     setModule1Status("authenticating");
 
     try {
-      const res = await api.post("/auth/module1-broker-login", { userId, password, factor2 });
+      const res = await api.post("/auth/module1-broker-login", { userId, password, factor2 }, { skipAuth: true });
       const token = res?.moduleToken;
       if (!token) throw new Error(res?.error || "Authentication failed");
 

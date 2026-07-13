@@ -3,10 +3,10 @@ import type { DashboardRow, OHLCBar } from "../../calc";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type Group = "datetime" | "call" | "put" | "ranking" | "future" | "spot" | "indicators";
+export type Group = "datetime" | "call" | "put" | "ranking" | "future" | "space" | "spot" | "indicators";
 type Align = "left" | "right" | "center";
 
-interface ColSpec {
+export interface ColSpec {
   id: string;
   sub: string;
   group: Group;
@@ -26,7 +26,7 @@ interface WorksheetProps {
   type: "Call" | "Put" | "Call+Put";
 }
 
-const TYPE_HIDDEN: Record<string, string[]> = {
+export const TYPE_HIDDEN: Record<string, string[]> = {
   "Call":     ["pe-o", "pe-h", "pe-l", "pe-c", "mma-p", "tla-p"],
   "Put":      ["ce-o", "ce-h", "ce-l", "ce-c", "mma-c", "tla-c"],
   "Call+Put": [],
@@ -34,55 +34,58 @@ const TYPE_HIDDEN: Record<string, string[]> = {
 
 // ── Column definitions (v2 — 31-column client spec) ───────────────────────────
 
-const ALL_COLS: ColSpec[] = [
+export const ALL_COLS: ColSpec[] = [
   // Date & Time (1 frozen column — "DD Mon HH:MM")
-  { id: "datetime",  sub: "Date & Time", group: "datetime",   defaultW: 112, frozen: true, align: "center" },
+  { id: "datetime",  sub: "Date & Time", group: "datetime",   defaultW: 124, frozen: true, align: "center" },
   // Call (CE) — 6 columns
-  { id: "ce-o",      sub: "Open",        group: "call",       defaultW: 80 },
-  { id: "ce-h",      sub: "High",        group: "call",       defaultW: 80 },
-  { id: "ce-l",      sub: "Low",         group: "call",       defaultW: 80 },
-  { id: "ce-c",      sub: "Close",       group: "call",       defaultW: 80 },
-  { id: "mma-c",     sub: "Call MMA",    group: "call",       defaultW: 88 },
-  { id: "tla-c",     sub: "Call TLA",    group: "call",       defaultW: 88 },
+  { id: "ce-o",      sub: "Open",        group: "call",       defaultW: 88 },
+  { id: "ce-h",      sub: "High",        group: "call",       defaultW: 88 },
+  { id: "ce-l",      sub: "Low",         group: "call",       defaultW: 88 },
+  { id: "ce-c",      sub: "Close",       group: "call",       defaultW: 88 },
+  { id: "mma-c",     sub: "Call MMA",    group: "call",       defaultW: 96 },
+  { id: "tla-c",     sub: "Call TLA",    group: "call",       defaultW: 96 },
   // Put (PE) — 6 columns
-  { id: "pe-o",      sub: "Open",        group: "put",        defaultW: 80 },
-  { id: "pe-h",      sub: "High",        group: "put",        defaultW: 80 },
-  { id: "pe-l",      sub: "Low",         group: "put",        defaultW: 80 },
-  { id: "pe-c",      sub: "Close",       group: "put",        defaultW: 80 },
-  { id: "mma-p",     sub: "Put MMA",     group: "put",        defaultW: 88 },
-  { id: "tla-p",     sub: "Put TLA",     group: "put",        defaultW: 88 },
+  { id: "pe-o",      sub: "Open",        group: "put",        defaultW: 88 },
+  { id: "pe-h",      sub: "High",        group: "put",        defaultW: 88 },
+  { id: "pe-l",      sub: "Low",         group: "put",        defaultW: 88 },
+  { id: "pe-c",      sub: "Close",       group: "put",        defaultW: 88 },
+  { id: "mma-p",     sub: "Put MMA",     group: "put",        defaultW: 96 },
+  { id: "tla-p",     sub: "Put TLA",     group: "put",        defaultW: 96 },
   // Ranking — 1 column
-  { id: "ranking",   sub: "Ranking",     group: "ranking",    defaultW: 90, align: "center" },
+  { id: "ranking",   sub: "Ranking",     group: "ranking",    defaultW: 100, align: "center" },
   // Future — 6 columns (full OHLC + MMA + TLA)
-  { id: "fut-o",     sub: "Open",        group: "future",     defaultW: 80 },
-  { id: "fut-h",     sub: "High",        group: "future",     defaultW: 80 },
-  { id: "fut-l",     sub: "Low",         group: "future",     defaultW: 80 },
-  { id: "fut-c",     sub: "Close",       group: "future",     defaultW: 80 },
-  { id: "fut-mma",   sub: "Future MMA",  group: "future",     defaultW: 88 },
-  { id: "fut-tla",   sub: "Future TLA",  group: "future",     defaultW: 88 },
+  { id: "fut-o",     sub: "Open",        group: "future",     defaultW: 88 },
+  { id: "fut-h",     sub: "High",        group: "future",     defaultW: 88 },
+  { id: "fut-l",     sub: "Low",         group: "future",     defaultW: 88 },
+  { id: "fut-c",     sub: "Close",       group: "future",     defaultW: 88 },
+  { id: "fut-mma",   sub: "Future MMA",  group: "future",     defaultW: 96 },
+  { id: "fut-tla",   sub: "Future TLA",  group: "future",     defaultW: 96 },
+  // Space — 1 column (reserved placeholder, no data/logic — see PR notes)
+  { id: "space",     sub: "",            group: "space",      defaultW: 88 },
   // Spot — 6 columns (full OHLC + MMA + TLA)
-  { id: "spot-o",    sub: "Open",        group: "spot",       defaultW: 80 },
-  { id: "spot-h",    sub: "High",        group: "spot",       defaultW: 80 },
-  { id: "spot-l",    sub: "Low",         group: "spot",       defaultW: 80 },
-  { id: "spot-c",    sub: "Close",       group: "spot",       defaultW: 80 },
-  { id: "spot-mma",  sub: "Spot MMA",    group: "spot",       defaultW: 88 },
-  { id: "spot-tla",  sub: "Spot TLA",    group: "spot",       defaultW: 88 },
+  { id: "spot-o",    sub: "Open",        group: "spot",       defaultW: 88 },
+  { id: "spot-h",    sub: "High",        group: "spot",       defaultW: 88 },
+  { id: "spot-l",    sub: "Low",         group: "spot",       defaultW: 88 },
+  { id: "spot-c",    sub: "Close",       group: "spot",       defaultW: 88 },
+  { id: "spot-mma",  sub: "Spot MMA",    group: "spot",       defaultW: 96 },
+  { id: "spot-tla",  sub: "Spot TLA",    group: "spot",       defaultW: 96 },
   // Indicators — 5 columns
-  { id: "smc",       sub: "SMC",         group: "indicators", defaultW: 120, align: "left" },
-  { id: "fib",       sub: "FIB",         group: "indicators", defaultW: 110, align: "left" },
-  { id: "rsi",       sub: "RSI",         group: "indicators", defaultW: 70 },
-  { id: "ema",       sub: "EMA",         group: "indicators", defaultW: 70 },
-  { id: "vwap",      sub: "VWAP",        group: "indicators", defaultW: 70 },
+  { id: "smc",       sub: "SMC",         group: "indicators", defaultW: 132, align: "left" },
+  { id: "fib",       sub: "FIB",         group: "indicators", defaultW: 122, align: "left" },
+  { id: "rsi",       sub: "RSI",         group: "indicators", defaultW: 78 },
+  { id: "ema",       sub: "EMA",         group: "indicators", defaultW: 78 },
+  { id: "vwap",      sub: "VWAP",        group: "indicators", defaultW: 78 },
 ];
 
 // ── Group display metadata ────────────────────────────────────────────────────
 
-const GROUP_LABELS: Record<Group, string> = {
+export const GROUP_LABELS: Record<Group, string> = {
   datetime:   "Date & Time",
   call:       "Call",
   put:        "Put",
   ranking:    "Ranking",
   future:     "Future",
+  space:      "Space",
   spot:       "Spot",
   indicators: "Indicators",
 };
@@ -93,6 +96,7 @@ const GROUP_COLORS: Record<Group, { bg: string; subBg: string; text: string }> =
   put:        { bg: "#FEF3C7", subBg: "#FFFBEB", text: "#92400E" },
   ranking:    { bg: "#F3E8FF", subBg: "#FAF0FF", text: "#6B21A8" },
   future:     { bg: "#D1FAE5", subBg: "#ECFDF5", text: "#065F46" },
+  space:      { bg: "#E5E7EB", subBg: "#F3F4F6", text: "#4B5563" },
   spot:       { bg: "#CCFBF1", subBg: "#F0FDFA", text: "#0F766E" },
   indicators: { bg: "#EDE9FE", subBg: "#F5F3FF", text: "#4C1D95" },
 };
@@ -140,9 +144,9 @@ const C_RANK_PUT:  CellColor = { bg: "#FFFFFF", textColor: "#78350F" }; // white
 const C_RANK_UP_TEXT   = "#16A34A"; // green — higher than previous bar
 const C_RANK_DOWN_TEXT = "#DC2626"; // red — lower than previous bar
 
-type RankDir = "up" | "down" | "flat" | "none";
+export type RankDir = "up" | "down" | "flat" | "none";
 
-function rankingDir(curr: number, prev: number | undefined): RankDir {
+export function rankingDir(curr: number, prev: number | undefined): RankDir {
   if (prev === undefined || !Number.isFinite(prev) || !Number.isFinite(curr)) return "none";
   if (curr > prev) return "up";
   if (curr < prev) return "down";
@@ -179,17 +183,11 @@ function getCellStyle(colId: string, row: DashboardRow): CellColor {
 
 // ── Formatting ────────────────────────────────────────────────────────────────
 
+// Display-only: truncates to a whole number (drops the decimal portion,
+// doesn't round). Underlying values keep full precision for calculations —
+// only the rendered text is affected. Used for every price column.
 const p0 = (n: number | null | undefined): string =>
-  n == null || !Number.isFinite(n) ? "—" : Math.round(n).toLocaleString("en-IN");
-
-// Option premiums move in ₹0.05 ticks — sub-rupee precision is real market
-// signal. A deep-OTM expiry-day put trading 1.35→1.50 must render as
-// 1.35/1.50, not as a constant "1" (Math.floor destroyed all variation and
-// made the PUT side look frozen). Used for Call/Put OHLC, MMA, TLA, Ranking.
-const p2 = (n: number | null | undefined): string =>
-  n == null || !Number.isFinite(n)
-    ? "—"
-    : n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  n == null || !Number.isFinite(n) ? "—" : Math.trunc(n).toLocaleString("en-IN");
 
 // 12-hour display with AM/PM (e.g. "07 Jul, 1:04 PM"). Display-only — the
 // row's millisecond timestamp stays the source of truth for ordering and
@@ -207,26 +205,56 @@ const fmtDateTime = (ms: number) => {
 // ── Cell value resolver ───────────────────────────────────────────────────────
 // Values are pre-computed by the row builder; Worksheet only reads them.
 
-function getCellValue(row: DashboardRow, colId: string): string {
+// Ranking cell text as displayed: the value prefixed with +/- when it moved
+// vs the chronologically previous bar (see rankingDir). Shared by the live
+// table render and the Excel export so both show identical text.
+export function rankingDisplayValue(row: DashboardRow, prevRow: DashboardRow | undefined): string {
+  const dir = rankingDir(row.ranking, prevRow?.ranking);
+  let val = p0(row.ranking);
+  if ((dir === "up" || dir === "down") && row.ranking >= 0) {
+    val = (dir === "up" ? "+" : "-") + val;
+  }
+  return val;
+}
+
+// Visible, ordered column list for a given table configuration — the single
+// source of truth shared by the live table render and the Excel export so
+// both always show/export the exact same columns in the exact same order.
+export function getVisibleColumns(type: string, hiddenCols: string[], colOrder: string[]): ColSpec[] {
+  const typeHidden = TYPE_HIDDEN[type] ?? [];
+  const sortedBase = colOrder.length > 0
+    ? [...ALL_COLS].sort((a, b) => {
+        const ai = colOrder.indexOf(a.id);
+        const bi = colOrder.indexOf(b.id);
+        if (ai === -1 && bi === -1) return 0;
+        if (ai === -1) return 1;
+        if (bi === -1) return -1;
+        return ai - bi;
+      })
+    : ALL_COLS;
+  return sortedBase.filter(c => !hiddenCols.includes(c.id) && !typeHidden.includes(c.id));
+}
+
+export function getCellValue(row: DashboardRow, colId: string): string {
   switch (colId) {
     // Date & Time (single frozen column)
     case "datetime":  return fmtDateTime(row.t);
-    // Call OHLC (option premiums — 2-decimal precision, see p2)
-    case "ce-o":      return p2(row.call.o);
-    case "ce-h":      return p2(row.call.h);
-    case "ce-l":      return p2(row.call.l);
-    case "ce-c":      return p2(row.call.c);
-    case "mma-c":     return p2(row.callMMA);
-    case "tla-c":     return p2(row.callTLA);
-    // Put OHLC (option premiums — 2-decimal precision, see p2)
-    case "pe-o":      return p2(row.put.o);
-    case "pe-h":      return p2(row.put.h);
-    case "pe-l":      return p2(row.put.l);
-    case "pe-c":      return p2(row.put.c);
-    case "mma-p":     return p2(row.putMMA);
-    case "tla-p":     return p2(row.putTLA);
-    // Ranking (compares option MMAs — same precision; coloured via getCellStyle)
-    case "ranking":   return p2(row.ranking);
+    // Call OHLC
+    case "ce-o":      return p0(row.call.o);
+    case "ce-h":      return p0(row.call.h);
+    case "ce-l":      return p0(row.call.l);
+    case "ce-c":      return p0(row.call.c);
+    case "mma-c":     return p0(row.callMMA);
+    case "tla-c":     return p0(row.callTLA);
+    // Put OHLC
+    case "pe-o":      return p0(row.put.o);
+    case "pe-h":      return p0(row.put.h);
+    case "pe-l":      return p0(row.put.l);
+    case "pe-c":      return p0(row.put.c);
+    case "mma-p":     return p0(row.putMMA);
+    case "tla-p":     return p0(row.putTLA);
+    // Ranking (compares option MMAs; coloured via getCellStyle)
+    case "ranking":   return p0(row.ranking);
     // Future OHLC + indicators
     case "fut-o":     return p0(row.future.o);
     case "fut-h":     return p0(row.future.h);
@@ -234,6 +262,8 @@ function getCellValue(row: DashboardRow, colId: string): string {
     case "fut-c":     return p0(row.future.c);
     case "fut-mma":   return p0(row.futureMMA);
     case "fut-tla":   return p0(row.futureTLA);
+    // Space — reserved placeholder column, intentionally always blank
+    case "space":     return "";
     // Spot OHLC + indicators
     case "spot-o":    return p0(row.spot.o);
     case "spot-h":    return p0(row.spot.h);
@@ -258,27 +288,14 @@ const SHIMMER_STYLE: React.CSSProperties = {
   backgroundSize: "200% 100%",
   animation: "ws-shimmer 1.5s infinite",
   borderRadius: 2,
-  height: 10,
+  height: 13,
   display: "block",
 };
 
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, type }: WorksheetProps) {
-  const typeHidden = TYPE_HIDDEN[type] ?? [];
-
-  const sortedBase = colOrder.length > 0
-    ? [...ALL_COLS].sort((a, b) => {
-        const ai = colOrder.indexOf(a.id);
-        const bi = colOrder.indexOf(b.id);
-        if (ai === -1 && bi === -1) return 0;
-        if (ai === -1) return 1;
-        if (bi === -1) return -1;
-        return ai - bi;
-      })
-    : ALL_COLS;
-
-  const cols = sortedBase.filter(c => !hiddenCols.includes(c.id) && !typeHidden.includes(c.id));
+  const cols = getVisibleColumns(type, hiddenCols, colOrder);
 
   const initWidths = (): Record<string, number> => {
     const w: Record<string, number> = {};
@@ -293,7 +310,10 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
   const frozenWarnKeyRef = useRef<string>("");
   const [frozenWarn, setFrozenWarn] = useState<string[]>([]);
 
-  const displayRows = [...rows].reverse();
+  // rows is already chronological (oldest first, appendRow pushes newest to
+  // the end) — display in that order so the earliest candle is the first row
+  // and the live candle is always the last.
+  const displayRows = rows;
 
   const copySelection = useCallback(() => {
     if (!selRange) return;
@@ -404,9 +424,9 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
   })();
 
   // ── Shared header heights ──────────────────────────────────────────────────
-  // Row 1 (group header) is 26 px; row 2 (column sub-header) is sticky at top: 26.
+  // Row 1 (group header) is 34 px; row 2 (column sub-header) is sticky at top: 34.
 
-  const GROUP_ROW_H = 26;
+  const GROUP_ROW_H = 34;
 
   // ── Skeleton rows ─────────────────────────────────────────────────────────
 
@@ -427,9 +447,9 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                 const gc = GROUP_COLORS[gs.group];
                 return (
                   <th key={i} colSpan={gs.span} style={{
-                    border: "1px solid #BDC4CF", padding: "3px 8px",
+                    border: "1px solid #BDC4CF", padding: "6px 10px",
                     fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
-                    fontSize: 11, fontWeight: 700, height: GROUP_ROW_H,
+                    fontSize: 13, fontWeight: 700, height: GROUP_ROW_H,
                     whiteSpace: "nowrap", textAlign: "center", letterSpacing: "0.04em",
                     textTransform: "uppercase", userSelect: "none",
                     position: "sticky", top: 0, zIndex: gs.frozen ? 7 : 5,
@@ -446,9 +466,9 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                 const gc = GROUP_COLORS[c.group];
                 return (
                   <th key={c.id} style={{
-                    border: "1px solid #BDC4CF", padding: "2px 6px",
+                    border: "1px solid #BDC4CF", padding: "5px 10px",
                     fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
-                    fontSize: 10, fontWeight: 600, whiteSpace: "nowrap",
+                    fontSize: 12, fontWeight: 600, whiteSpace: "nowrap",
                     textAlign: "center", userSelect: "none",
                     position: "sticky", top: GROUP_ROW_H, zIndex: 4,
                     background: gc.subBg, color: gc.text,
@@ -464,8 +484,8 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
               <tr key={ri}>
                 {cols.map(c => (
                   <td key={c.id} style={{
-                    border: "1px solid #BDC4CF", padding: "2px 6px",
-                    height: 22, background: "#FFFFFF",
+                    border: "1px solid #BDC4CF", padding: "6px 10px",
+                    height: 32, background: "#FFFFFF",
                   }}>
                     <span style={SHIMMER_STYLE} />
                   </td>
@@ -547,8 +567,8 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                     style={{
                       border: "1px solid #BDC4CF",
                       borderBottom: `2px solid ${gc.text}40`,
-                      padding: "3px 8px",
-                      fontSize: 11,
+                      padding: "6px 10px",
+                      fontSize: 13,
                       fontWeight: 700,
                       height: GROUP_ROW_H,
                       whiteSpace: "nowrap",
@@ -581,8 +601,8 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                     key={c.id}
                     style={{
                       border: "1px solid #BDC4CF",
-                      padding: "2px 6px",
-                      fontSize: 10,
+                      padding: "5px 10px",
+                      fontSize: 12,
                       fontWeight: 600,
                       whiteSpace: "nowrap",
                       textAlign: "center",
@@ -629,18 +649,15 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                   let fontWeight = 400;
 
                   if (c.id === "ranking") {
-                    // displayRows is newest-first, so the chronologically
-                    // previous bar is the row BELOW (ri + 1). The oldest row
+                    // displayRows is chronological (oldest first), so the
+                    // previous bar is the row ABOVE (ri - 1). The oldest row
                     // has no previous bar and renders plain.
-                    const dir = rankingDir(row.ranking, displayRows[ri + 1]?.ranking);
+                    const dir = rankingDir(row.ranking, displayRows[ri - 1]?.ranking);
                     if (dir === "up" || dir === "down") {
                       textColor  = dir === "up" ? C_RANK_UP_TEXT : C_RANK_DOWN_TEXT;
                       fontWeight = 600;
-                      // Prefix marks direction vs previous row; the number is
-                      // the actual Ranking value. A negative value keeps its
-                      // own sign (no double prefix) — colour still shows direction.
-                      if (row.ranking >= 0) val = (dir === "up" ? "+" : "-") + val;
                     }
+                    val = rankingDisplayValue(row, displayRows[ri - 1]);
                   }
 
                   return (
@@ -648,9 +665,9 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                       key={c.id}
                       style={{
                         border: "1px solid #BDC4CF",
-                        padding: "2px 6px",
-                        fontSize: 11,
-                        height: 22,
+                        padding: "6px 10px",
+                        fontSize: 13,
+                        height: 32,
                         whiteSpace: "nowrap",
                         userSelect: "none",
                         textAlign: (c.align ?? "center") as "left" | "right" | "center",
@@ -688,9 +705,9 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
 
       {/* ── Status bar ────────────────────────────────────────────────────── */}
       <div style={{
-        flexShrink: 0, padding: "3px 12px",
+        flexShrink: 0, padding: "5px 12px",
         background: "#F3F6FA", borderTop: "1px solid #BDC4CF",
-        fontSize: 10, color: "#5B6B7F",
+        fontSize: 11, color: "#5B6B7F",
         display: "flex", justifyContent: "space-between",
         fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
       }}>
