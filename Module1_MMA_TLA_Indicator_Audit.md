@@ -1,16 +1,38 @@
 # Module 1 – MMA, TLA & Indicator Formulas Documentation
 
 This document is a factual audit of the **current implementation** of the MMA, TLA and Indicator
-columns in Module 1. No code was changed to produce this report. No bugs were fixed. Where the
-running code differs from other in-app documentation, or where a value is not actually calculated,
-this is stated explicitly (see the **Notes / Discrepancies** boxes).
+columns in Module 1, updated to reflect the Pivot Point implementation added after the original
+audit. Everything below except the **Pivot Points** section is an audit only — no code was changed
+to produce that part of the report. The Pivot Points section documents a real implementation change
+(see **Update log** below). Where the running code differs from other in-app documentation, or where
+a value is not actually calculated, this is stated explicitly (see the **Notes / Discrepancies**
+boxes).
 
 **Source files reviewed:**
 - `apps/frontend/src/calc/index.ts` — pure calculation engine (formulas)
 - `apps/frontend/src/modules/dashboard/index.tsx` — row builder (wires inputs → formulas, historical + live)
 - `apps/frontend/src/modules/dashboard/Worksheet.tsx` — cell rendering / display formatting
 - `apps/frontend/src/modules/dashboard/store.ts` — dashboard state (incl. `pivotMethod`)
+- `apps/frontend/src/modules/dashboard/excelExport.ts` — Excel export (mirrors the live table)
+- `apps/frontend/src/modules/dashboard/TimeframeRow.tsx` — Columns show/hide/reorder panel
 - `apps/frontend/src/modules/docs/content.ts` — existing in-app user documentation (cross-checked, not authoritative)
+
+## Update log
+
+- **Original audit:** MMA, TLA, Ranking, SMC, FIB, RSI, EMA, VWAP documented as implemented; Pivot
+  Points (PP/R1-R3/S1-S3) documented as formulas-exist-but-never-called, with no table column and no
+  effect from the `pivotMethod` toggle.
+- **Second update (implementation):** Pivot Points were implemented and wired into the worksheet,
+  the Columns panel, and the Excel export. The `pivotMethod` toggle (title bar) started actually
+  selecting between the 4-Bar and Classic formulas and was unhidden so users could reach it.
+- **Third update (this one — UI hide, calc kept):** On request, the 7 pivot columns were hidden
+  again from the worksheet, the Columns panel, and the Excel export via a single filter
+  (`PIVOT_UI_HIDDEN` in `Worksheet.tsx`'s `getVisibleColumns()`), while the calculation itself
+  (`calc/pivotForBar`, `Worksheet.getCellValue`'s `pp`/`r1`/…/`s3` cases, the `pivotMethod` store
+  state, and the now-visible title-bar toggle) stays fully wired and correct, ready for future
+  consumers (signals, strategies, reports, API). See the **Pivot Points** section below for details.
+  No other column's formula, inputs, or output was changed — MMA, TLA, Ranking, SMC, FIB, RSI, EMA
+  and VWAP are exactly as originally audited.
 
 ---
 
@@ -566,44 +588,102 @@ Displayed as: 24,461
 
 ## Pivot Points — PP, R1, R2, R3, S1, S2, S3
 
-**Status: NOT calculated for, or displayed in, the live table. No column exists for these values.**
+**Status: ✅ Calculated, ⛔ hidden from the UI (by design, on request).** The seven columns are
+defined in `ALL_COLS` and fully computed by `getCellValue()` exactly as described below, but a
+dedicated filter (`PIVOT_UI_HIDDEN` in `Worksheet.tsx`) removes them from `getVisibleColumns()` —
+the single function shared by the live table render, the Columns show/hide/reorder panel, and the
+Excel export — so they render nowhere in the current UI. This is a deliberate, reversible
+UI-visibility switch, not a removal: re-exposing them later only requires deleting the
+`PIVOT_UI_HIDDEN` filter (and re-adding the 7 ids to `TimeframeRow.tsx`'s `ALL_COL_IDS`/labels if the
+Columns-panel toggle should come back too). See **Update log** at the top of this document.
 
-**Purpose (as originally intended):** Classic/4-Bar pivot-point support/resistance levels.
+**Purpose:** Classic/4-Bar pivot-point support/resistance levels, computed per candle from the
+Future OHLC bar, using whichever formula the client's `pivotMethod` toggle currently selects.
 
-**Formula (defined but unused)** — two pivot variants exist in `calc/index.ts:74-90`, both dead code
-as far as the dashboard row builder is concerned:
+**Formula** (`pivotForBar()`, `calc/index.ts` — new dispatcher added on top of the two formulas that
+already existed; **no formula was rewritten**, `pivotForBar` only selects between them):
 ```
-4-Bar variant (clientPivot4Bar):
+pivotForBar(method, bar):
+    if any of bar.o/h/l/c is not finite → return null   (renders "—")
+    method === "classic" → classicPivot(bar)
+    method === "client"  → clientPivot4Bar(bar)   (the default; UI label "4-Bar")
+
+4-Bar variant (clientPivot4Bar, calc/index.ts:74-81):
     PP = (Open + High + Low + Close) / 4
     R1 = 2×PP − Low        S1 = 2×PP − High
     R2 = PP + (High−Low)   S2 = PP − (High−Low)
     R3 = High + 2×(PP−Low) S3 = Low − 2×(High−PP)
 
-Classic variant (classicPivot):
+Classic variant (classicPivot, calc/index.ts:83-90):
     PP = (High + Low + Close) / 3
     R1 = 2×PP − Low        S1 = 2×PP − High
     R2 = PP + (High−Low)   S2 = PP − (High−Low)
     R3 = High + 2×(PP−Low) S3 = Low − 2×(High−PP)
 ```
 
-**Input Values:** N/A — never invoked.
+**Input Values:**
+- That row's own **Future** candle: Open, High, Low, Close (4-Bar uses all four; Classic uses H/L/C
+  only — Open is ignored by the Classic formula but still part of the finite-value guard)
+- `pivotMethod` — `"client"` (4-Bar, the default) or `"classic"`, from the dashboard store, set via
+  the "PP" toggle in the title bar (now visible; previously hidden with no effect)
 
-**Calculation Process:** N/A. `clientPivot4Bar()` and `classicPivot()` are exported from
-`calc/index.ts` (source comment: *"Legacy pivot calculations, kept for reference; not used in v2
-row builder"*) but are **never imported or called** from `index.tsx` (the row builder) or anywhere
-else in the frontend. `DashboardRow` (the row data model) has no `pp`/`r1`/`r2`/`r3`/`s1`/`s2`/`s3`
-fields, and `Worksheet.tsx`'s `ALL_COLS` table-column list has no corresponding entries — there is
-no UI surface for these values at all, hidden or otherwise.
+**Calculation Process:**
+1. Take the row's already-stored Future `OHLCBar` — the exact same bar object already used for that
+   row's Future MMA/TLA and for RSI/SMC/FIB (historical rows use the closed Future candle; the live
+   row uses the currently-forming Future candle, updated every tick exactly like MMA/TLA).
+2. If any of that bar's O/H/L/C is not a finite number (missing/stale bar), the result is `null` for
+   all seven values and every cell renders `"—"`.
+3. Otherwise run the selected formula (4-Bar or Classic) once, producing `{ pp, r1, r2, r3, s1, s2, s3 }`.
+4. Because this runs **at render time** off data the row already carries, switching the `pivotMethod`
+   toggle recalculates every visible row (historical and live) immediately — there is no need to
+   refetch or rebuild the stored rows.
 
-**Displayed Value:** None. There is nothing to hide/show — the columns do not exist in the table.
+**Displayed Value:** Each of the seven values is passed through the same `p0()` truncation formatter
+as MMA/TLA/RSI/EMA/VWAP (see Global display rule) — truncated to a whole number, `en-IN` grouped,
+`"—"` when null. **Not currently rendered anywhere** (live table, Columns panel, or Excel) because of
+the `PIVOT_UI_HIDDEN` filter described above — the values below are what `getCellValue()` computes
+internally, verified directly (not through the screen).
 
-> **⚠ Note:** The `pivotMethod` toggle (`store.ts`, the "PP" / "4-Bar" / "Classic" control in the
-> title bar, currently hidden from the UI per a separate change) only sets a piece of state
-> (`"client" | "classic"`) that is saved to `localStorage`. It is never read by any calculation —
-> it does not select between `clientPivot4Bar`/`classicPivot`, and it has no effect on the Ranking,
-> MMA, TLA, or any of the 31 table columns. This matches the existing in-app documentation's own
-> admission (`docs/content.ts`, section 11): *"The 'PP' toggle in the title bar is a legacy control
-> from an earlier version of the table and currently has no effect on the 31 columns."*
+**Example (4-Bar / "client" method):**
+```
+Future candle: Open=24460, High=24474.3, Low=24460, Close=24473.6
+
+PP = (24460 + 24474.3 + 24460 + 24473.6) / 4 = 97867.9 / 4 = 24466.975
+R1 = 2×24466.975 − 24460     = 24473.95
+R2 = 24466.975 + (24474.3 − 24460) = 24481.275
+R3 = 24474.3 + 2×(24466.975 − 24460) = 24488.25
+S1 = 2×24466.975 − 24474.3   = 24459.65
+S2 = 24466.975 − (24474.3 − 24460) = 24452.675
+S3 = 24460 − 2×(24474.3 − 24466.975) = 24445.35
+
+Displayed as: PP 24,466 · R1 24,473 · R2 24,481 · R3 24,488 · S1 24,459 · S2 24,452 · S3 24,445
+```
+
+**Example (Classic method, same candle):**
+```
+PP = (24474.3 + 24460 + 24473.6) / 3 = 73407.9 / 3 = 24469.3
+R1 = 2×24469.3 − 24460 = 24478.6
+S1 = 2×24469.3 − 24474.3 = 24464.3
+(R2/R3/S2/S3 use the same R2-R3/S2-S3 formulas as 4-Bar, off this Classic PP)
+
+Displayed as: PP 24,469 · R1 24,478 · S1 24,464 · …
+```
+
+**Files touched to implement this (chronological):**
+- `calc/index.ts` — added `PivotMethod` type and `pivotForBar()` dispatcher (formulas themselves unchanged)
+- `store.ts` — `PivotMethod` now imported from `calc` instead of a duplicate local type
+- `Worksheet.tsx` — 7 new `ALL_COLS` entries; `getCellValue()` takes a `pivotMethod` param and computes pivot values on demand from `row.future`
+- `excelExport.ts` — `ExportParams.pivotMethod` (optional, defaults to `"client"`), threaded into cell values
+- `TimeframeRow.tsx` — columns initially registered in the Columns panel, `pivotMethod` passed to the Download Excel button
+- `index.tsx` — `pivotMethod` passed into `<Worksheet>` and the automatic end-of-day export; the "PP / 4-Bar / Classic" title-bar toggle unhidden
+- **Follow-up (this update):** `Worksheet.tsx` — added the `PIVOT_UI_HIDDEN` constant and applied it inside `getVisibleColumns()`, so the 7 ids are filtered out of the live table, the Columns panel, *and* the Excel export (all three consume `getVisibleColumns()`), while `ALL_COLS` and `getCellValue()` are untouched. `TimeframeRow.tsx` — removed the 7 ids from `ALL_COL_IDS`/`ALL_COL_LABELS`/`COL_GROUP_LABEL` so the Columns panel no longer shows non-functional checkboxes for columns that can never be turned on.
+
+**Backward compatibility confirmed:** MMA, TLA, Ranking, RSI, EMA, VWAP, SMC and Fibonacci go through
+no code path shared with the pivot logic — the existing calc/Worksheet test suite (32 tests) passes
+unchanged, `tsc --noEmit` is clean, and a production build succeeds. An ad-hoc test run during the
+UI-hide follow-up additionally confirmed: (a) `ALL_COLS` still defines all 7 pivot ids, (b)
+`getVisibleColumns()` excludes all 7 even with empty `hiddenCols`/`colOrder`, and (c) `getCellValue()`
+still returns a real (non-`"—"`) value for `"pp"` given a valid Future bar.
 
 ---
 
@@ -615,5 +695,6 @@ no UI surface for these values at all, hidden or otherwise.
 | 2 | `MMA_CLOSE_SIGN = -1` | Hardcoded | MMA formula subtracts Close instead of adding it, per client spec, but this halves the effective option-price scale and makes TLA frequently negative. Flagged as intentional-but-unusual in the code's own comments. |
 | 3 | SMC `PDH`/`PDL` on live rows | Hardcoded | Live rows pass `sessHigh`/`sessLow` in place of genuine previous-candle High/Low, so the live row's SMC label can never show `"PDH"`/`"PDL"`, only `"SWH"`/`"SWL"`. |
 | 4 | VWAP volume weighting | Not implemented | No volume field exists on `OHLCBar`; VWAP is actually an unweighted cumulative average of Typical Price, despite the name. |
-| 5 | Pivot Points (PP/R1-R3/S1-S3) | Not calculated | Formulas exist in `calc/index.ts` but are never called; no table column exists for them. The "PP" toggle changes only unused state. |
+| 5 | Pivot Points (PP/R1-R3/S1-S3) | **Resolved, then intentionally re-hidden** | Was "formulas exist but never called, no column" at the original audit → implemented and shown → now calculated but deliberately hidden from the worksheet UI, Columns panel and Excel export again on request (`PIVOT_UI_HIDDEN` filter). The "PP" toggle in the title bar remains visible/functional and still drives the (invisible) calculation. |
 | 6 | RSI/EMA/VWAP source | Confirmed by design | RSI always uses Future closes; EMA/VWAP always use Spot closes (falling back to Future only when a Spot bar is missing for that timestamp). Ranking only ever compares Call MMA vs Put MMA — Future/Spot MMA never participate. |
+| 7 | Pivot Points source | Confirmed by design | Pivot Points use the Future candle only (same instrument as RSI/SMC/FIB) — there is no per-side (Call/Put/Spot) pivot variant, matching the single-set-of-columns request. |

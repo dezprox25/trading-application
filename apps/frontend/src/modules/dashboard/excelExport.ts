@@ -4,7 +4,7 @@
 // so the exported file always matches what's on screen.
 
 import * as XLSX from "xlsx";
-import type { DashboardRow } from "../../calc";
+import type { DashboardRow, PivotMethod } from "../../calc";
 import {
   getVisibleColumns, getCellValue, rankingDisplayValue, GROUP_LABELS,
 } from "./Worksheet";
@@ -34,6 +34,7 @@ export interface ExportParams {
   type: "Call" | "Put" | "Call+Put";
   instrument: string;
   timeframe: string;
+  pivotMethod?: PivotMethod;
 }
 
 // Pure sheet-building logic — no I/O, easy to unit test. Row/column content
@@ -41,7 +42,7 @@ export interface ExportParams {
 // live table uses, so the exported values are an exact text match of what's
 // currently displayed. Returns null when there's nothing to export.
 export function buildModule1Workbook(params: ExportParams): { wb: XLSX.WorkBook; filename: string } | null {
-  const { rows, hiddenCols, colOrder, type, instrument, timeframe } = params;
+  const { rows, hiddenCols, colOrder, type, instrument, timeframe, pivotMethod = "client" } = params;
   if (rows.length === 0) return null;
 
   const cols = getVisibleColumns(type, hiddenCols, colOrder);
@@ -51,7 +52,7 @@ export function buildModule1Workbook(params: ExportParams): { wb: XLSX.WorkBook;
   const subRow   = cols.map(c => c.sub);
 
   const body = rows.map((row, i) =>
-    cols.map(c => c.id === "ranking" ? rankingDisplayValue(row, rows[i - 1]) : getCellValue(row, c.id))
+    cols.map(c => c.id === "ranking" ? rankingDisplayValue(row, rows[i - 1]) : getCellValue(row, c.id, pivotMethod))
   );
 
   const ws = XLSX.utils.aoa_to_sheet([groupRow, subRow, ...body]);

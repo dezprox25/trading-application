@@ -23,6 +23,11 @@ const ALL_COL_IDS = [
   "spot-o", "spot-h", "spot-l", "spot-c", "spot-mma", "spot-tla",
   // Indicators (5)
   "smc", "fib", "rsi", "ema", "vwap",
+  // EMA20 vs EMA200 / VWAP vs EMA20 scoring (client EMA & VWAP spec) — 6 columns
+  "ema200", "ema-score", "vwap-score", "total-score", "rating", "signal",
+  // Pivot Points (PP/R1-R3/S1-S3) are intentionally excluded here — they are
+  // calculated (see calc/pivotForBar + Worksheet.getCellValue) but hidden from
+  // the worksheet UI, so they must not appear as togglable columns either.
 ];
 
 const ALL_COL_LABELS: Record<string, string> = {
@@ -38,6 +43,8 @@ const ALL_COL_LABELS: Record<string, string> = {
   "spot-o": "Spot Open","spot-h": "Spot High","spot-l": "Spot Low","spot-c": "Spot Close",
   "spot-mma": "Spot MMA","spot-tla": "Spot TLA",
   smc: "SMC", fib: "FIB", rsi: "RSI", ema: "EMA", vwap: "VWAP",
+  ema200: "EMA200", "ema-score": "EMA Score", "vwap-score": "VWAP Score",
+  "total-score": "Total Score", rating: "Rating", signal: "Signal",
 };
 
 // Group label for each column ID — used to render dividers in the panel.
@@ -54,6 +61,8 @@ const COL_GROUP_LABEL: Record<string, string> = {
   "spot-o": "Spot", "spot-h": "Spot", "spot-l": "Spot", "spot-c": "Spot",
   "spot-mma": "Spot", "spot-tla": "Spot",
   smc: "Indicators", fib: "Indicators", rsi: "Indicators", ema: "Indicators", vwap: "Indicators",
+  ema200: "Indicators", "ema-score": "Indicators", "vwap-score": "Indicators",
+  "total-score": "Indicators", rating: "Indicators", signal: "Indicators",
 };
 
 const CUSTOM_CANDLE_TFS = ["1m", "2m", "3m", "5m", "10m", "15m", "30m", "45m", "1h", "2h", "3h", "4h"];
@@ -76,7 +85,7 @@ export function TimeframeRow() {
     timeframe, setTimeframe, customRange, setCustomRange,
     feedStatus, hiddenCols, toggleColumn,
     colOrder, setColOrder,
-    rows, type, instrument,
+    rows, type, instrument, pivotMethod,
   } = useDashStore();
 
   const [colsOpen, setColsOpen] = useState(false);
@@ -257,7 +266,7 @@ export function TimeframeRow() {
 
         {/* Download Excel button */}
         <button
-          onClick={() => exportModule1Excel({ rows, hiddenCols, colOrder, type, instrument, timeframe })}
+          onClick={() => exportModule1Excel({ rows, hiddenCols, colOrder, type, instrument, timeframe, pivotMethod })}
           disabled={rows.length === 0}
           title={rows.length === 0 ? "No data to export yet" : "Download the full table as an Excel file"}
           style={{

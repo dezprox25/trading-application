@@ -6,6 +6,10 @@ export interface OHLCBar {
   h: number;
   l: number;
   c: number;
+  // Optional: only the Future bar carries a real traded volume today (Call/Put
+  // premiums and the Spot index either lack it or aren't sourced here).
+  // Undefined means "no volume data for this bar", not zero.
+  volume?: number;
 }
 
 export interface PivotLevels {
@@ -63,8 +67,15 @@ export interface DashboardRow {
   smc:  string;
   fib:  string;
   rsi:  number | null;
-  ema:  number | null;   // EMA-20 of Spot Close (confirm period)
-  vwap: number | null;   // Session cumulative avg of TP=(H+L+C)/3 (confirm with volume)
+  ema:  number | null;   // EMA-20 of Spot Close
+  vwap: number | null;   // True VWAP = Σ(TP×Volume)/ΣVolume on Future bars; null until volume is available
+  // EMA20 vs EMA200 / VWAP vs EMA20 scoring (client EMA & VWAP spec) — null until inputs are warmed up
+  ema200:     number | null; // EMA-200 of Spot Close, same engine/source as `ema`, period 200
+  emaScore:   ScoreSign | null; // compareScore(ema, ema200)
+  vwapScore:  ScoreSign | null; // compareScore(vwap, ema)
+  totalScore: number | null;    // emaScore + vwapScore
+  rating:     Rating | null;    // 5-level mapping of totalScore
+  signal:     Signal | null;    // 3-level mapping of totalScore
   // OI snapshot (kept for Module 1 OI sidebar)
   oiMatrix: OiSnapshot | null;
 }
@@ -87,6 +98,20 @@ export function classicPivot(bar: OHLCBar): PivotLevels {
     r1: 2 * pp - bar.l,  r2: pp + (bar.h - bar.l),  r3: bar.h + 2 * (pp - bar.l),
     s1: 2 * pp - bar.h,  s2: pp - (bar.h - bar.l),  s3: bar.l - 2 * (bar.h - pp),
   };
+}
+
+// ── Pivot Points (PP / R1-R3 / S1-S3) — worksheet columns ─────────────────────
+// Dispatches to whichever of the two formulas above the user has selected
+// (dashboard store's pivotMethod), evaluated against a single OHLC bar — the
+// same per-candle bar already used for that row's MMA/TLA. No new formulas;
+// this only selects between the two existing exported functions.
+export type PivotMethod = "client" | "classic";
+
+export function pivotForBar(method: PivotMethod, bar: OHLCBar): PivotLevels | null {
+  if (!Number.isFinite(bar.o) || !Number.isFinite(bar.h) || !Number.isFinite(bar.l) || !Number.isFinite(bar.c)) {
+    return null;
+  }
+  return method === "classic" ? classicPivot(bar) : clientPivot4Bar(bar);
 }
 
 // ── MMA v2 / TLA v2 ──────────────────────────────────────────────────────────
@@ -149,20 +174,74 @@ export function computeEMASeries(closes: number[], period = 20): (number | null)
 }
 
 // ── VWAP ──────────────────────────────────────────────────────────────────────
-// Session-cumulative average of Typical Price = (H+L+C)/3.
-// Volume weighting omitted because OHLCBar has no volume field yet.
-// TODO: add v?: number to OHLCBar and weight by volume when available.
-// Source: Spot bars; caller falls back to Future bars if Spot unavailable.
+// True volume-weighted VWAP = Σ(TP × Volume) / ΣVolume, TP = (H+L+C)/3.
+// Source: Future bars (the tradable instrument with real broker volume) —
+// the Spot index has no traded volume, so VWAP is no longer sourced from it.
 // Resets every session (caller is responsible for feeding only today's bars).
+// A bar is a null cumulative value until ΣVolume > 0 — never fabricate a VWAP
+// from unweighted price when volume is unavailable.
 export function computeVWAPSeries(bars: OHLCBar[]): (number | null)[] {
   const out: (number | null)[] = [];
-  let cumTP = 0;
+  let cumTPV = 0; // Σ(TP × Volume)
+  let cumV = 0;   // ΣVolume
   for (let i = 0; i < bars.length; i++) {
-    const { h, l, c } = bars[i];
-    cumTP += (h + l + c) / 3;
-    out.push(cumTP / (i + 1));
+    const { h, l, c, volume } = bars[i];
+    const v = volume ?? 0;
+    cumTPV += ((h + l + c) / 3) * v;
+    cumV += v;
+    out.push(cumV > 0 ? cumTPV / cumV : null);
   }
   return out;
+}
+
+// ── EMA20 vs EMA200 / VWAP vs EMA20 scoring (client EMA & VWAP spec) ──────────
+// EMA200 reuses computeEMASeries(closes, 200) — same engine and source as EMA20,
+// just a longer period. Score is +1 when the first value is above the second,
+// -1 when below, 0 when equal; null when either input isn't available yet
+// (e.g. EMA200 still warming up, or VWAP/EMA20 not seeded).
+export type ScoreSign = -1 | 0 | 1;
+
+export function compareScore(a: number | null, b: number | null): ScoreSign | null {
+  if (a == null || b == null || !Number.isFinite(a) || !Number.isFinite(b)) return null;
+  if (a > b) return 1;
+  if (a < b) return -1;
+  return 0;
+}
+
+// Total Score = EMA Score + VWAP Score. Null unless both scores are available.
+export function totalScoreFromParts(emaScore: ScoreSign | null, vwapScore: ScoreSign | null): number | null {
+  if (emaScore == null || vwapScore == null) return null;
+  return emaScore + vwapScore;
+}
+
+export type Rating = "Strong CALL" | "CALL" | "Neutral" | "PUT" | "Strong PUT";
+
+// +2 → Strong CALL · +1 → CALL · 0 → Neutral · -1 → PUT · -2 → Strong PUT
+export function ratingFromTotalScore(score: number | null): Rating | null {
+  switch (score) {
+    case  2: return "Strong CALL";
+    case  1: return "CALL";
+    case  0: return "Neutral";
+    case -1: return "PUT";
+    case -2: return "Strong PUT";
+    default: return null;
+  }
+}
+
+export type Signal = "BUY CALL" | "WAIT" | "BUY PUT" | "STRONG BUY PUT";
+
+// Rating → Signal (client spec — intentionally asymmetric: Strong CALL and
+// CALL both read as "BUY CALL", but Strong PUT gets its own "STRONG BUY PUT"
+// distinct from plain PUT's "BUY PUT").
+export function signalFromRating(rating: Rating | null): Signal | null {
+  switch (rating) {
+    case "Strong CALL": return "BUY CALL";
+    case "CALL":         return "BUY CALL";
+    case "Neutral":      return "WAIT";
+    case "PUT":          return "BUY PUT";
+    case "Strong PUT":   return "STRONG BUY PUT";
+    default:             return null;
+  }
 }
 
 // ── RSI (Wilder) ─────────────────────────────────────────────────────────────

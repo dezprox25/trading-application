@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import crypto from "crypto";
 import axios from "axios";
-import { startDataFeedWithCredentials } from "../services/dataFeed";
+import { startDataFeedWithCredentials, resumeDataFeedFromPersistedSession } from "../services/dataFeed";
 import { loginToAetramWithCredentials } from "../services/aetramMarketDataService";
 import { connect as connectMarketDataWebSocket } from "../services/marketDataWebSocketService";
 import { generateAccessToken, JWT_SECRET } from "../utils/token";
@@ -142,6 +142,28 @@ export const module1BrokerLogin = async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error("[Module1/BrokerLogin] Unexpected error:", error?.message || error);
     return res.status(500).json({ error: "Module 1 authentication failed. Please try again." });
+  }
+};
+
+// ── Module 1: Session resume (reconnection, not authentication) ───────────────
+//
+// Called by the frontend when it restores a cached module1Token ("Active
+// session") instead of showing Module1LoginPanel, so the backend's live feed
+// — a separate, process-scoped resource — actually gets re-established
+// instead of silently staying dead. Takes no credentials: it only ever
+// restarts a feed from a session this same backend already obtained via a
+// real QuickAuth login (see persistBrokerSession in dataFeed.ts). Public like
+// module1-broker-login (see that route's skipAuth precedent) since it never
+// accepts caller-supplied credentials and is idempotent/no-op when the feed
+// is already live or nothing is resumable.
+export const module1ResumeSession = async (req: Request, res: Response) => {
+  try {
+    const result = await resumeDataFeedFromPersistedSession();
+    console.log(`[Module1/ResumeSession] Result: ${result}`);
+    return res.status(200).json({ result });
+  } catch (error: any) {
+    console.error("[Module1/ResumeSession] Unexpected error:", error?.message || error);
+    return res.status(500).json({ error: "Failed to resume Module 1 session." });
   }
 };
 

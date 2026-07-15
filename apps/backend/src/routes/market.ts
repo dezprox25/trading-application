@@ -7,6 +7,7 @@ import {
   getFuturesData,
   getOHLCBars,
   getHistoricalOHLCBars,
+  getWarmupOHLCBars,
   getPivotLevelsEndpoint,
   getIndicatorsEndpoint,
   getModule1LatestOi,
@@ -29,6 +30,7 @@ router.get("/market/spot/:symbol", authenticate, getSpotPrice);
 router.get("/market/futures/:symbol", authenticate, getFuturesData);
 router.get("/market/ohlc/:symbol/:tf", authenticate, getOHLCBars);
 router.get("/market/ohlc-history/:symbol/:tf", authenticate, getHistoricalOHLCBars);
+router.get("/market/ohlc-warmup/:symbol/:tf", authenticate, getWarmupOHLCBars);
 router.get("/market/pivots/:symbol/:tf", authenticate, getPivotLevelsEndpoint);
 router.get("/market/option-chain/:index", authenticate, getOptionChain);
 router.post("/market/custom-timeframe", authenticate, updateCustomTimeframe);

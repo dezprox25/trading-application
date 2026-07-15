@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import type { DashboardRow, OHLCBar } from "../../calc";
+import type { DashboardRow, OHLCBar, PivotMethod } from "../../calc";
+import { pivotForBar } from "../../calc";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -24,6 +25,7 @@ interface WorksheetProps {
   feedStatus: "idle" | "live" | "interrupted";
   isLoading: boolean;
   type: "Call" | "Put" | "Call+Put";
+  pivotMethod: PivotMethod;
 }
 
 export const TYPE_HIDDEN: Record<string, string[]> = {
@@ -31,6 +33,24 @@ export const TYPE_HIDDEN: Record<string, string[]> = {
   "Put":      ["ce-o", "ce-h", "ce-l", "ce-c", "mma-c", "tla-c"],
   "Call+Put": [],
 };
+
+// Pivot Point columns (PP/R1-R3/S1-S3) are fully calculated (row data, Excel
+// export param, pivotMethod toggle all stay wired — see getCellValue below)
+// but intentionally not shown in the worksheet UI. Unlike TYPE_HIDDEN/hiddenCols
+// this list is not user-togglable — it's a permanent UI-visibility switch, kept
+// separate so the column defs in ALL_COLS and the calculation pipeline are
+// untouched and easy to re-expose later (Signals/strategies/reports/API).
+const PIVOT_UI_HIDDEN = ["pp", "r1", "r2", "r3", "s1", "s2", "s3"];
+
+// Client spec: the Indicators section shows exactly SMC / FIB / RSI / EMA /
+// VWAP. EMA200, EMA Score, VWAP Score, Total MMA Score, Rating and Signal are
+// internal-only — fully calculated (kept available for future use) and
+// exported nowhere, never shown as columns. The "EMA" column itself displays
+// the EMA20-vs-EMA200 comparison label (CALL/PUT/NEUTRAL), not a raw number —
+// see fmtEmaSignal below — so ema-score is effectively surfaced through "ema",
+// just not as its own numeric column. Same permanent-hide mechanism as
+// PIVOT_UI_HIDDEN above.
+const INDICATOR_UI_HIDDEN = ["ema200", "ema-score", "vwap-score", "total-score", "rating", "signal"];
 
 // ── Column definitions (v2 — 31-column client spec) ───────────────────────────
 
@@ -73,8 +93,29 @@ export const ALL_COLS: ColSpec[] = [
   { id: "smc",       sub: "SMC",         group: "indicators", defaultW: 132, align: "left" },
   { id: "fib",       sub: "FIB",         group: "indicators", defaultW: 122, align: "left" },
   { id: "rsi",       sub: "RSI",         group: "indicators", defaultW: 78 },
+  // "ema" renders the EMA20-vs-EMA200 comparison label (see fmtEmaSignal),
+  // not a raw EMA number — the client spec has exactly one EMA column.
   { id: "ema",       sub: "EMA",         group: "indicators", defaultW: 78 },
+  // ema200 / ema-score / vwap-score / total-score / rating / signal are all
+  // internal-only (see INDICATOR_UI_HIDDEN) — kept as column defs so the calc
+  // pipeline stays untouched and they're easy to re-expose later, but never
+  // rendered or exported.
+  { id: "ema200",    sub: "EMA200",      group: "indicators", defaultW: 84 },
   { id: "vwap",      sub: "VWAP",        group: "indicators", defaultW: 78 },
+  { id: "ema-score",    sub: "EMA Score",   group: "indicators", defaultW: 92 },
+  { id: "vwap-score",   sub: "VWAP Score",  group: "indicators", defaultW: 96 },
+  { id: "total-score",  sub: "Total Score", group: "indicators", defaultW: 96 },
+  { id: "rating",       sub: "Rating",      group: "indicators", defaultW: 120, align: "left" },
+  { id: "signal",       sub: "Signal",      group: "indicators", defaultW: 92,  align: "left" },
+  // Pivot Points — PP/R1-R3/S1-S3 (client's chosen 4-Bar or Classic formula,
+  // see calc/pivotForBar), evaluated on the row's own Future candle.
+  { id: "pp",        sub: "PP",          group: "indicators", defaultW: 78 },
+  { id: "r1",        sub: "R1",          group: "indicators", defaultW: 78 },
+  { id: "r2",        sub: "R2",          group: "indicators", defaultW: 78 },
+  { id: "r3",        sub: "R3",          group: "indicators", defaultW: 78 },
+  { id: "s1",        sub: "S1",          group: "indicators", defaultW: 78 },
+  { id: "s2",        sub: "S2",          group: "indicators", defaultW: 78 },
+  { id: "s3",        sub: "S3",          group: "indicators", defaultW: 78 },
 ];
 
 // ── Group display metadata ────────────────────────────────────────────────────
@@ -189,6 +230,21 @@ function getCellStyle(colId: string, row: DashboardRow): CellColor {
 const p0 = (n: number | null | undefined): string =>
   n == null || !Number.isFinite(n) ? "—" : Math.trunc(n).toLocaleString("en-IN");
 
+// VWAP-specific: null means "no Volume to weight by yet" (client spec) —
+// distinct from the generic "—" used for every other not-yet-available cell.
+const fmtVwap = (n: number | null | undefined): string =>
+  n == null || !Number.isFinite(n) ? "VWAP Not Available" : Math.trunc(n).toLocaleString("en-IN");
+
+// The single visible EMA column shows the EMA20-vs-EMA200 comparison label,
+// not a raw EMA number (client spec) — score is row.emaScore, already
+// +1/-1/0 from compareScore(ema20, ema200).
+const fmtEmaSignal = (score: number | null | undefined): string => {
+  if (score == null || !Number.isFinite(score)) return "—";
+  if (score > 0) return "CALL (+1)";
+  if (score < 0) return "PUT (-1)";
+  return "NEUTRAL (0)";
+};
+
 // 12-hour display with AM/PM (e.g. "07 Jul, 1:04 PM"). Display-only — the
 // row's millisecond timestamp stays the source of truth for ordering and
 // candle boundaries. ICU emits lowercase "am/pm"; the spec wants uppercase.
@@ -232,10 +288,13 @@ export function getVisibleColumns(type: string, hiddenCols: string[], colOrder: 
         return ai - bi;
       })
     : ALL_COLS;
-  return sortedBase.filter(c => !hiddenCols.includes(c.id) && !typeHidden.includes(c.id));
+  return sortedBase.filter(c =>
+    !hiddenCols.includes(c.id) && !typeHidden.includes(c.id) &&
+    !PIVOT_UI_HIDDEN.includes(c.id) && !INDICATOR_UI_HIDDEN.includes(c.id)
+  );
 }
 
-export function getCellValue(row: DashboardRow, colId: string): string {
+export function getCellValue(row: DashboardRow, colId: string, pivotMethod: PivotMethod = "client"): string {
   switch (colId) {
     // Date & Time (single frozen column)
     case "datetime":  return fmtDateTime(row.t);
@@ -275,8 +334,25 @@ export function getCellValue(row: DashboardRow, colId: string): string {
     case "smc":       return row.smc;
     case "fib":       return row.fib;
     case "rsi":       return p0(row.rsi);
-    case "ema":       return p0(row.ema);
-    case "vwap":      return p0(row.vwap);
+    case "ema":       return fmtEmaSignal(row.emaScore);
+    case "vwap":      return fmtVwap(row.vwap);
+    // EMA20 vs EMA200 / VWAP vs EMA20 scoring (client EMA & VWAP spec)
+    case "ema200":       return p0(row.ema200);
+    case "ema-score":    return p0(row.emaScore);
+    case "vwap-score":   return p0(row.vwapScore);
+    case "total-score":  return p0(row.totalScore);
+    case "rating":       return row.rating ?? "—";
+    case "signal":       return row.signal ?? "—";
+    // Pivot Points — computed on demand from the row's own Future candle so
+    // switching pivotMethod recalculates every row immediately, live and
+    // historical, without needing to rebuild the stored rows.
+    case "pp":        return p0(pivotForBar(pivotMethod, row.future)?.pp);
+    case "r1":        return p0(pivotForBar(pivotMethod, row.future)?.r1);
+    case "r2":        return p0(pivotForBar(pivotMethod, row.future)?.r2);
+    case "r3":        return p0(pivotForBar(pivotMethod, row.future)?.r3);
+    case "s1":        return p0(pivotForBar(pivotMethod, row.future)?.s1);
+    case "s2":        return p0(pivotForBar(pivotMethod, row.future)?.s2);
+    case "s3":        return p0(pivotForBar(pivotMethod, row.future)?.s3);
     default:          return "—";
   }
 }
@@ -294,7 +370,7 @@ const SHIMMER_STYLE: React.CSSProperties = {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, type }: WorksheetProps) {
+export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, type, pivotMethod }: WorksheetProps) {
   const cols = getVisibleColumns(type, hiddenCols, colOrder);
 
   const initWidths = (): Record<string, number> => {
@@ -325,12 +401,12 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
       const cells: string[] = [];
       for (let ci = c1; ci <= c2; ci++) {
         const col = cols[ci];
-        if (col) cells.push(getCellValue(row, col.id));
+        if (col) cells.push(getCellValue(row, col.id, pivotMethod));
       }
       lines.push(cells.join("\t"));
     }
     navigator.clipboard.writeText(lines.join("\n")).catch(() => { /* ignore */ });
-  }, [selRange, displayRows, cols]);
+  }, [selRange, displayRows, cols, pivotMethod]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -357,8 +433,13 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
     }
     const frozen: string[] = [];
     for (const col of cols) {
-      if (col.id === "datetime" || col.id === "smc" || col.id === "fib") continue;
-      const vals = displayRows.map(row => getCellValue(row, col.id));
+      // vwap excluded: "VWAP Not Available" legitimately repeats across every
+      // row until cumulative Future volume turns positive — not a sign of a
+      // frozen/duplicated data pipeline the way a repeated price would be.
+      // ema excluded: it's now a 3-way categorical label (CALL/PUT/NEUTRAL),
+      // not a continuous price — long runs of the same label are expected.
+      if (col.id === "datetime" || col.id === "smc" || col.id === "fib" || col.id === "vwap" || col.id === "ema") continue;
+      const vals = displayRows.map(row => getCellValue(row, col.id, pivotMethod));
       const valid = vals.filter(v => v !== "—");
       if (valid.length >= 2 && valid.every(v => v === valid[0])) {
         console.warn(`[Worksheet] FROZEN COLUMN: "${col.sub}" (${col.id}) — all ${valid.length} rows = "${valid[0]}"`);
@@ -370,7 +451,7 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
       frozenWarnKeyRef.current = key;
       setFrozenWarn(frozen);
     }
-  }, [displayRows, cols]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [displayRows, cols, pivotMethod]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const startResize = (colId: string, e: React.MouseEvent) => {
     e.preventDefault();
@@ -644,7 +725,7 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                     && ci >= selRange.c1 && ci <= selRange.c2;
 
                   const cs  = getCellStyle(c.id, row);
-                  let val = getCellValue(row, c.id);
+                  let val = getCellValue(row, c.id, pivotMethod);
                   let textColor  = cs.textColor;
                   let fontWeight = 400;
 
@@ -712,7 +793,7 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
         fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
       }}>
         <span>{rows.length} bar{rows.length !== 1 ? "s" : ""} · Select range + Ctrl/Cmd-C to copy as TSV</span>
-        <span>MMA=(O+H+L−C)/4 · TLA=2×MMA−H · Ranking=max(CallMMA,PutMMA) · EMA-20 Spot · VWAP cumΣ(TP)/n · RSI Wilder(14)</span>
+        <span>MMA=(O+H+L−C)/4 · TLA=2×MMA−H · Ranking=max(CallMMA,PutMMA) · EMA=EMA20 vs EMA200 Spot signal · VWAP Σ(TP×Vol)/ΣVol Future · RSI Wilder(14)</span>
       </div>
     </div>
   );

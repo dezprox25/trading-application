@@ -20,6 +20,7 @@ function mkRow(t: number, i: number): DashboardRow {
     ranking: 10.5 + i, rankingWinner: i % 2 === 0 ? "call" : "put",
     smc: "Neutral", fib: "50%",
     rsi: 55 + i, ema: 22000 + i, vwap: 22005 + i,
+    ema200: 21990 + i, emaScore: 1, vwapScore: 1, totalScore: 2, rating: "Strong CALL", signal: "BUY CALL",
     oiMatrix: null,
   };
 }

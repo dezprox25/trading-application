@@ -228,6 +228,41 @@ export const getOHLCBars = async (req: AuthenticatedRequest, res: Response) => {
   return res.status(200).json(bars);
 };
 
+// Get up to `count` finalized candles strictly BEFORE today's session open —
+// used only to seed indicator warm-up (e.g. EMA200) on connect, never for
+// worksheet display. Ascending order (oldest first) so callers can prepend
+// directly to today's series. Backed by the 45-day retention window in
+// FuturesOHLCSchema.ts / ohlcAggregator.ts; on a fresh symbol or before that
+// history has accumulated, this may return fewer than `count` bars — callers
+// must treat the result as best-effort, not a guaranteed full window.
+export const getWarmupOHLCBars = async (req: AuthenticatedRequest, res: Response) => {
+  const { symbol, tf } = req.params;
+  const count = req.query.count ? parseInt(req.query.count as string) : 200;
+
+  try {
+    const sessionOpen = getTodaySessionOpenUTC();
+    const dbBars = await FuturesOHLC.find({ symbol, timeframe: tf, bar_time: { $lt: sessionOpen } })
+      .sort({ bar_time: -1 })
+      .limit(count);
+
+    const bars = dbBars.reverse().map((b) => ({
+      symbol: b.symbol,
+      timeframe: b.timeframe,
+      open: b.bar_open,
+      high: b.bar_high,
+      low: b.bar_low,
+      close: b.bar_close,
+      openTime: new Date(b.bar_time).getTime(),
+      volume: b.volume,
+    }));
+
+    return res.status(200).json(bars);
+  } catch (error) {
+    console.error("[OHLC Warmup] Query error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
 // Get historical OHLC candles within a date/time range.
 // Accepts either:
 //   ?date=YYYY-MM-DD           — returns bars for that trading day (NSE market hours)

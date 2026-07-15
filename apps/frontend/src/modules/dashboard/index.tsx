@@ -12,6 +12,7 @@ import {
   mmaBar, tlaFromMMA, computeRanking,
   computeRsiSeries, computeEMASeries, computeVWAPSeries,
   nearestFibLabel, smcNearest,
+  compareScore, totalScoreFromParts, ratingFromTotalScore, signalFromRating,
 } from "../../calc";
 import { formatExpiryForBroker } from "../../data/models";
 
@@ -40,7 +41,9 @@ function normalizeBar(raw: any): OHLCBar | null {
   if (t == null || o == null || h == null || l == null || c == null) return null;
   if (!Number.isFinite(t) || !Number.isFinite(+o) || !Number.isFinite(+h) ||
       !Number.isFinite(+l) || !Number.isFinite(+c)) return null;
-  return { t, o: +o, h: +h, l: +l, c: +c };
+  const rawVolume = raw.volume ?? raw.v;
+  const volume = rawVolume != null && Number.isFinite(+rawVolume) ? +rawVolume : undefined;
+  return { t, o: +o, h: +h, l: +l, c: +c, volume };
 }
 
 interface ActiveBar {
@@ -48,6 +51,10 @@ interface ActiveBar {
   putO:  number; putH:  number; putL:  number; putC:  number;
   futO:  number; futH:  number; futL:  number; futC:  number;
   spotO: number; spotH: number; spotL: number; spotC: number;
+  // Cumulative traded volume for the Future contract so far within this
+  // forming bar — polled from the backend's active-candle tracker (the
+  // authoritative accumulator), not re-derived from raw ticks on the client.
+  futVolume: number;
   windowStart: number;
 }
 
@@ -187,9 +194,9 @@ function InfoBar() {
 
       <div style={{ flex: 1 }} />
 
-      {/* PP / 4-Bar / Classic labels — hidden per client request; logic kept intact for future use */}
+      {/* PP / 4-Bar / Classic toggle — now drives the Pivot Point (PP/R1-R3/S1-S3) worksheet columns */}
       <div style={{
-        display: "none", alignItems: "center", gap: 4,
+        display: "flex", alignItems: "center", gap: 4,
         padding: "0 16px", borderLeft: "1px solid rgba(255,255,255,0.1)",
       }}>
         <span style={{ ...labelStyle, marginRight: 7 }}>PP</span>
@@ -228,6 +235,7 @@ export function Dashboard() {
     hiddenCols, colOrder,
     generateKey,
     rehydratePrefs,
+    pivotMethod,
   } = useDashStore();
 
   const [isLoading, setIsLoading] = useState(false);
@@ -239,7 +247,12 @@ export function Dashboard() {
   const swLowRef      = useRef<number>(Infinity);
   const prevOiTin     = useRef<number>(-1);
   const prevEmaRef    = useRef<number | null>(null);
-  const vwapStateRef  = useRef<{ cumTP: number; count: number }>({ cumTP: 0, count: 0 });
+  const prevEma200Ref = useRef<number | null>(null);
+  // True-VWAP running state: Σ(TP×Volume) and ΣVolume over Future bars.
+  const vwapStateRef  = useRef<{ cumTPV: number; cumV: number }>({ cumTPV: 0, cumV: 0 });
+  // Latest polled cumulative volume for the Future contract's forming bar
+  // (see the getFuturesData poll in Effect 2) — read synchronously each tick.
+  const liveFutVolumeRef = useRef<number>(0);
 
   // M-4: Rehydrate user-scoped preferences on login
   const user = useStore((s) => s.user);
@@ -257,7 +270,9 @@ export function Dashboard() {
       barRef.current = null;
       prevRsiCloses.current = [];
       prevEmaRef.current = null;
-      vwapStateRef.current = { cumTP: 0, count: 0 };
+      prevEma200Ref.current = null;
+      vwapStateRef.current = { cumTPV: 0, cumV: 0 };
+      liveFutVolumeRef.current = 0;
       return;
     }
 
@@ -273,7 +288,9 @@ export function Dashboard() {
     prevRsiCloses.current = [];
     prevOiTin.current = -1;
     prevEmaRef.current = null;
-    vwapStateRef.current = { cumTP: 0, count: 0 };
+    prevEma200Ref.current = null;
+    vwapStateRef.current = { cumTPV: 0, cumV: 0 };
+    liveFutVolumeRef.current = 0;
 
     async function init() {
       clearRows();
@@ -320,13 +337,19 @@ export function Dashboard() {
 
         // 4. Fetch all OHLC series in parallel (futures required; options + spot best-effort)
         const tf = timeframe === "custom" ? customRange!.candleTf : timeframe;
-        const [rawFut, rawCe, rawPe, rawSpot] = await Promise.all([
+        const [rawFut, rawCe, rawPe, rawSpot, rawSpotWarmup] = await Promise.all([
           api.get(futUrl).catch(() => null),
           ceSymbol ? api.get(`/api/market/ohlc/${ceSymbol}/${tf}`).catch(() => null) : Promise.resolve(null),
           peSymbol ? api.get(`/api/market/ohlc/${peSymbol}/${tf}`).catch(() => null)  : Promise.resolve(null),
           // M-5: fetch NIFTY-SPOT OHLC for accurate historical spot column
           timeframe !== "custom"
             ? api.get(`/api/market/ohlc/NIFTY-SPOT/${tf}`).catch(() => null)
+            : Promise.resolve(null),
+          // EMA200 warm-up: prior-session Spot candles (best-effort — 45-day
+          // retention may not cover a full 200 bars on coarser timeframes; see
+          // getWarmupOHLCBars). Not shown as rows — seed data only.
+          timeframe !== "custom"
+            ? api.get(`/api/market/ohlc-warmup/NIFTY-SPOT/${tf}?count=200`).catch(() => null)
             : Promise.resolve(null),
         ]);
 
@@ -350,6 +373,14 @@ export function Dashboard() {
         if (Array.isArray(rawSpot)) {
           rawSpot.forEach(r => { const b = normalizeBar(r); if (b) spotMap.set(b.t, b); });
         }
+
+        // EMA200/EMA20 warm-up closes — prior-session Spot bars, oldest first.
+        // Indicator seed data only: never turned into worksheet rows.
+        const spotWarmupCloses: number[] = Array.isArray(rawSpotWarmup)
+          ? (rawSpotWarmup.map(normalizeBar).filter(Boolean) as OHLCBar[])
+              .sort((a, b) => a.t - b.t)
+              .map(b => b.c)
+          : [];
 
         if (process.env.NODE_ENV === "development" && (ceMap.size > 0 || peMap.size > 0)) {
           console.log(`[C-1] Option OHLC loaded — CE bars: ${ceMap.size} PE bars: ${peMap.size} Spot bars: ${spotMap.size}`);
@@ -381,19 +412,48 @@ export function Dashboard() {
           ? futBars
           : futBars.filter(b => b.t < liveWindowStart);
 
+        // Seed EMA20/EMA200 continuation from warm-up alone so a value exists
+        // even before today's first bar closes (client requirement: EMA200
+        // available immediately after market open). Overwritten below with the
+        // fuller warm-up+today series once today has at least one closed bar.
+        if (spotWarmupCloses.length > 0) {
+          const warmupEma    = computeEMASeries(spotWarmupCloses, 20);
+          const warmupEma200 = computeEMASeries(spotWarmupCloses, 200);
+          prevEmaRef.current    = warmupEma[warmupEma.length - 1] ?? null;
+          prevEma200Ref.current = warmupEma200[warmupEma200.length - 1] ?? null;
+        }
+
         if (closedBars.length > 0) {
           const futCloses       = closedBars.map(b => b.c);
           const rsiSeries       = computeRsiSeries(futCloses);
           const spotBarsForCalc = closedBars.map(b => spotMap.get(b.t) ?? b);
           const spotCloses      = spotBarsForCalc.map(sb => sb.c);
-          const emaSeries       = computeEMASeries(spotCloses, 20);
-          const vwapSeries      = computeVWAPSeries(spotBarsForCalc);
 
-          // Seed live-bar EMA / VWAP continuation state
-          prevEmaRef.current = emaSeries[emaSeries.length - 1] ?? null;
-          let cumTPForState = 0;
-          spotBarsForCalc.forEach(sb => { cumTPForState += (sb.h + sb.l + sb.c) / 3; });
-          vwapStateRef.current = { cumTP: cumTPForState, count: closedBars.length };
+          // EMA20 / EMA200: seed with prior-session warm-up closes, then
+          // continue through today's closes — only today's index range
+          // (sliced off after warmupLen) becomes worksheet rows.
+          const warmupLen       = spotWarmupCloses.length;
+          const combinedCloses  = [...spotWarmupCloses, ...spotCloses];
+          const emaSeriesAll    = computeEMASeries(combinedCloses, 20);
+          const emaSeries200All = computeEMASeries(combinedCloses, 200);
+          const emaSeries       = emaSeriesAll.slice(warmupLen);
+          const emaSeries200    = emaSeries200All.slice(warmupLen);
+
+          // True VWAP: Σ(TP×Volume)/ΣVolume over today's Future bars only —
+          // VWAP is session-cumulative and resets every day, so no warm-up.
+          const vwapSeries      = computeVWAPSeries(closedBars);
+
+          // Seed live-bar EMA / EMA200 / VWAP continuation state
+          prevEmaRef.current = emaSeriesAll[emaSeriesAll.length - 1] ?? null;
+          prevEma200Ref.current = emaSeries200All[emaSeries200All.length - 1] ?? null;
+          let cumTPVForState = 0;
+          let cumVForState   = 0;
+          closedBars.forEach(fb => {
+            const v = fb.volume ?? 0;
+            cumTPVForState += ((fb.h + fb.l + fb.c) / 3) * v;
+            cumVForState   += v;
+          });
+          vwapStateRef.current = { cumTPV: cumTPVForState, cumV: cumVForState };
 
           let sessionHigh = closedBars[0].h;
           let sessionLow  = closedBars[0].l;
@@ -418,7 +478,14 @@ export function Dashboard() {
             const fMMA = mmaBar(bar);      const fTLA = tlaFromMMA(fMMA, bar.h);
             const sMMA = mmaBar(spotBar);  const sTLA = tlaFromMMA(sMMA, spotBar.h);
             const { value: rankVal, winner: rankWin } = computeRanking(cMMA, pMMA);
-            const hRsi = rsiSeries[i] ?? null;
+            const hRsi    = rsiSeries[i]    ?? null;
+            const hEma    = emaSeries[i]    ?? null;
+            const hEma200 = emaSeries200[i] ?? null;
+            const hVwap   = vwapSeries[i]   ?? null;
+            const hEmaScore   = compareScore(hEma, hEma200);
+            const hVwapScore  = compareScore(hVwap, hEma);
+            const hTotalScore = totalScoreFromParts(hEmaScore, hVwapScore);
+            const hRating     = ratingFromTotalScore(hTotalScore);
 
             appendRow({
               t: bar.t,
@@ -432,8 +499,11 @@ export function Dashboard() {
               smc: smcNearest(bar.c, sessionHigh, sessionLow, pdh, pdl),
               fib: nearestFibLabel(bar.c, sessionHigh, sessionLow) ?? "—",
               rsi: hRsi,
-              ema:  emaSeries[i]  ?? null,
-              vwap: vwapSeries[i] ?? null,
+              ema:  hEma,
+              vwap: hVwap,
+              ema200: hEma200,
+              emaScore: hEmaScore, vwapScore: hVwapScore, totalScore: hTotalScore,
+              rating: hRating, signal: signalFromRating(hRating),
             });
 
             prevH = bar.h;
@@ -518,6 +588,21 @@ export function Dashboard() {
       const ceLtp = ceSymbol ? (prices[ceSymbol]?.ltp ?? null) : null;
       const peLtp = peSymbol ? (prices[peSymbol]?.ltp ?? null) : null;
 
+      // True-VWAP live volume: the raw tick stream never reaches the frontend
+      // with volume (useSocket only forwards ltp), so poll the existing
+      // active-candle endpoint — the backend's own running total for the
+      // forming Future bar — rather than re-deriving it from ticks here.
+      // Fire-and-forget: liveFutVolumeRef.current is read synchronously below
+      // and simply lags by at most one 500ms tick.
+      const futSymForVolume = `${(inst || "NIFTY").toUpperCase()}-FUT`;
+      api.get(`/api/market/futures/${futSymForVolume}?timeframe=${timeframe}`)
+        .then((data: any) => {
+          if (typeof data?.activeCandle?.volume === "number") {
+            liveFutVolumeRef.current = data.activeCandle.volume;
+          }
+        })
+        .catch(() => { /* keep last known volume on failure */ });
+
       if (oi.tin !== prevOiTin.current) {
         console.log(
           `[Dashboard] OI tick — tin=${oi.tin} futLtp=${futLtp} ceLtp=${ceLtp ?? "—"} peLtp=${peLtp ?? "—"} ` +
@@ -538,8 +623,18 @@ export function Dashboard() {
             const k = 2 / (20 + 1);
             prevEmaRef.current = pb.spotC * k + prevEmaRef.current * (1 - k);
           }
-          vwapStateRef.current.cumTP += (pb.spotH + pb.spotL + pb.spotC) / 3;
-          vwapStateRef.current.count++;
+          if (prevEma200Ref.current !== null) {
+            const k200 = 2 / (200 + 1);
+            prevEma200Ref.current = pb.spotC * k200 + prevEma200Ref.current * (1 - k200);
+          }
+          // Fold the just-closed Future bar's TP×Volume into the running VWAP
+          // state — only when that bar's Future OHLC was actually fresh (not
+          // MISSING_BAR'd by the staleness guard), matching the same NaN
+          // guard already used below for RSI/session-high-low.
+          if (!isNaN(pb.futH) && !isNaN(pb.futL) && !isNaN(pb.futC)) {
+            vwapStateRef.current.cumTPV += ((pb.futH + pb.futL + pb.futC) / 3) * pb.futVolume;
+            vwapStateRef.current.cumV   += pb.futVolume;
+          }
           // RSI closes and session high/low track the FUTURE series only —
           // option premiums must never feed either (history seeds them from
           // futCloses/fut H-L above, so live continuation must match).
@@ -564,6 +659,7 @@ export function Dashboard() {
           putO:  peN, putH:  peN, putL:  peN, putC:  peN,
           futO:  futLtp, futH: futLtp, futL:  futLtp, futC:  futLtp,
           spotO: sLtp,   spotH: sLtp,  spotL: sLtp,   spotC: sLtp,
+          futVolume: liveFutVolumeRef.current,
           windowStart,
         };
 
@@ -588,8 +684,22 @@ export function Dashboard() {
         const rsi    = rsiSer[rsiSer.length - 1] ?? null;
         const k2     = 2 / (20 + 1);
         const ema    = prevEmaRef.current !== null ? sLtp * k2 + prevEmaRef.current * (1 - k2) : null;
-        const tp     = (spotBar.h + spotBar.l + spotBar.c) / 3;
-        const vwap   = (vwapStateRef.current.cumTP + tp) / (vwapStateRef.current.count + 1);
+        const k200   = 2 / (200 + 1);
+        const ema200 = prevEma200Ref.current !== null ? sLtp * k200 + prevEma200Ref.current * (1 - k200) : null;
+        // True VWAP: fold the forming Future bar's own TP×Volume-so-far on
+        // top of the closed-bars cumulative state. futFresh guards against
+        // computing a TP off a stale/MISSING_BAR futBar; volume unavailable
+        // (cumV+liveVol === 0) correctly yields null, never a fake average.
+        const liveTp  = futFresh ? (futBar.h + futBar.l + futBar.c) / 3 : null;
+        const liveVol = liveTp !== null ? liveFutVolumeRef.current : 0;
+        const vwapCumV = vwapStateRef.current.cumV + liveVol;
+        const vwap = vwapCumV > 0
+          ? (vwapStateRef.current.cumTPV + (liveTp ?? 0) * liveVol) / vwapCumV
+          : null;
+        const emaScoreVal   = compareScore(ema, ema200);
+        const vwapScoreVal  = compareScore(vwap, ema);
+        const totalScoreVal = totalScoreFromParts(emaScoreVal, vwapScoreVal);
+        const ratingVal     = ratingFromTotalScore(totalScoreVal);
 
         dash.appendRow({
           t: windowStart,
@@ -603,6 +713,8 @@ export function Dashboard() {
           smc: smcNearest(futLtp, sessHigh, sessLow, sessHigh, sessLow),
           fib: nearestFibLabel(futLtp, sessHigh, sessLow) ?? "—",
           rsi, ema, vwap,
+          ema200, emaScore: emaScoreVal, vwapScore: vwapScoreVal, totalScore: totalScoreVal,
+          rating: ratingVal, signal: signalFromRating(ratingVal),
         });
 
       } else {
@@ -624,6 +736,7 @@ export function Dashboard() {
         b.futH  = Math.max(b.futH,  futLtp);
         b.futL  = Math.min(b.futL,  futLtp);
         b.futC  = futLtp;
+        b.futVolume = liveFutVolumeRef.current;
         const sLtp = spotLtp ?? futLtp;
         b.spotH = Math.max(b.spotH, sLtp);
         b.spotL = Math.min(b.spotL, sLtp);
@@ -654,8 +767,19 @@ export function Dashboard() {
         const rsi    = rsiSer[rsiSer.length - 1] ?? null;
         const k2     = 2 / (20 + 1);
         const ema    = prevEmaRef.current !== null ? sLtp * k2 + prevEmaRef.current * (1 - k2) : null;
-        const tp     = (spotBar.h + spotBar.l + spotBar.c) / 3;
-        const vwap   = (vwapStateRef.current.cumTP + tp) / (vwapStateRef.current.count + 1);
+        const k200   = 2 / (200 + 1);
+        const ema200 = prevEma200Ref.current !== null ? sLtp * k200 + prevEma200Ref.current * (1 - k200) : null;
+        // True VWAP — see the equivalent new-bar branch above for rationale.
+        const liveTp  = futFresh ? (futBar.h + futBar.l + futBar.c) / 3 : null;
+        const liveVol = liveTp !== null ? liveFutVolumeRef.current : 0;
+        const vwapCumV = vwapStateRef.current.cumV + liveVol;
+        const vwap = vwapCumV > 0
+          ? (vwapStateRef.current.cumTPV + (liveTp ?? 0) * liveVol) / vwapCumV
+          : null;
+        const emaScoreVal   = compareScore(ema, ema200);
+        const vwapScoreVal  = compareScore(vwap, ema);
+        const totalScoreVal = totalScoreFromParts(emaScoreVal, vwapScoreVal);
+        const ratingVal     = ratingFromTotalScore(totalScoreVal);
 
         dash.updateLatestRow({
           call: callBar, put: putBar, future: futBar, spot: spotBar,
@@ -668,6 +792,8 @@ export function Dashboard() {
           smc: smcNearest(futLtp, sessHigh, sessLow, sessHigh, sessLow),
           fib: nearestFibLabel(futLtp, sessHigh, sessLow) ?? "—",
           rsi, ema, vwap,
+          ema200, emaScore: emaScoreVal, vwapScore: vwapScoreVal, totalScore: totalScoreVal,
+          rating: ratingVal, signal: signalFromRating(ratingVal),
         });
 
         if (spotLtp != null) dash.setLivePrices(spotLtp, futLtp);
@@ -710,6 +836,7 @@ export function Dashboard() {
       const exported = exportModule1Excel({
         rows: dash.rows, hiddenCols: dash.hiddenCols, colOrder: dash.colOrder,
         type: dash.type, instrument: dash.instrument, timeframe: dash.timeframe,
+        pivotMethod: dash.pivotMethod,
       });
       if (exported) {
         try { localStorage.setItem(flagKey, "1"); } catch { /* noop */ }
@@ -757,6 +884,7 @@ export function Dashboard() {
           feedStatus={worksheetFeedStatus}
           isLoading={isLoading}
           type={type}
+          pivotMethod={pivotMethod}
         />
       )}
     </div>

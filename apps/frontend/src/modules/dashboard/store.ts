@@ -1,9 +1,9 @@
 import { create } from "zustand";
-import type { DashboardRow } from "../../calc";
+import type { DashboardRow, PivotMethod } from "../../calc";
 import { useStore } from "../../store/useStore";
 import { DEFAULT_INSTRUMENT_TYPE } from "../../data/tradingConfig";
 
-type PivotMethod = "client" | "classic";
+export type { PivotMethod };
 export type FeedStatus =
   | "idle"
   | "connecting"

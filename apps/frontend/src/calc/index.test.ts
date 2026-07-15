@@ -11,10 +11,15 @@ import {
   mmaBar,
   tlaFromMMA,
   MMA_CLOSE_SIGN,
+  compareScore,
+  totalScoreFromParts,
+  ratingFromTotalScore,
+  signalFromRating,
   type OHLCBar,
 } from "./index";
 
-const bar = (t: number, o: number, h: number, l: number, c: number): OHLCBar => ({ t, o, h, l, c });
+const bar = (t: number, o: number, h: number, l: number, c: number, volume?: number): OHLCBar =>
+  ({ t, o, h, l, c, volume });
 
 // ── Ranking ───────────────────────────────────────────────────────────────────
 
@@ -139,39 +144,108 @@ describe("computeEMASeries", () => {
   });
 });
 
-// ── VWAP: session-cumulative average of TP = (H+L+C)/3 ────────────────────────
-// (Volume weighting is intentionally omitted: the VWAP source is the NIFTY spot
-// index, which has no traded volume; Σ(TP×V)/ΣV degenerates to ΣTP/n.)
+// ── VWAP: true volume-weighted Σ(TP×Volume)/ΣVolume, TP = (H+L+C)/3 ───────────
+// Sourced from Future bars, the tradable instrument with real broker volume.
 
 describe("computeVWAPSeries", () => {
   const bars = [
-    bar(0, 100, 102, 99, 101),
-    bar(1, 101, 104, 100, 103),
-    bar(2, 103, 103.5, 101, 102),
-    bar(3, 102, 105, 102, 104.5),
+    bar(0, 100, 102, 99, 101, 1000),
+    bar(1, 101, 104, 100, 103, 1500),
+    bar(2, 103, 103.5, 101, 102, 800),
+    bar(3, 102, 105, 102, 104.5, 1200),
   ];
 
-  it("each value equals cumulative Σ((H+L+C)/3) / barCount", () => {
+  it("each value equals cumulative Σ(TP×Volume) / cumulative ΣVolume", () => {
     const series = computeVWAPSeries(bars);
-    let cum = 0;
+    let cumTPV = 0, cumV = 0;
     bars.forEach((b, i) => {
-      cum += (b.h + b.l + b.c) / 3;
-      expect(series[i]).toBeCloseTo(cum / (i + 1), 10);
+      cumTPV += ((b.h + b.l + b.c) / 3) * (b.volume ?? 0);
+      cumV += b.volume ?? 0;
+      expect(series[i]).toBeCloseTo(cumTPV / cumV, 10);
     });
   });
 
-  it("live continuation state (cumTP, count) matches the series", () => {
-    // Mirrors dashboard Effect 2 vwapStateRef: history accumulates cumTP/count,
-    // then the live bar's TP is folded in.
+  it("live continuation state (cumTPV, cumV) matches the series", () => {
+    // Mirrors dashboard Effect 2 vwapStateRef: history accumulates cumTPV/cumV,
+    // then the live bar's TP×Volume is folded in.
     const history = bars.slice(0, 3);
-    let cumTP = 0;
-    history.forEach(b => { cumTP += (b.h + b.l + b.c) / 3; });
+    let cumTPV = 0, cumV = 0;
+    history.forEach(b => {
+      cumTPV += ((b.h + b.l + b.c) / 3) * (b.volume ?? 0);
+      cumV += b.volume ?? 0;
+    });
     const liveBar = bars[3];
     const liveTp = (liveBar.h + liveBar.l + liveBar.c) / 3;
-    const liveVwap = (cumTP + liveTp) / (history.length + 1);
+    const liveV = liveBar.volume ?? 0;
+    const liveVwap = (cumTPV + liveTp * liveV) / (cumV + liveV);
 
     const fullSeries = computeVWAPSeries(bars);
     expect(liveVwap).toBeCloseTo(fullSeries[fullSeries.length - 1]!, 10);
+  });
+
+  it("returns null while cumulative volume is zero — never a fake unweighted average", () => {
+    const noVolumeBars = [
+      bar(0, 100, 102, 99, 101),
+      bar(1, 101, 104, 100, 103),
+    ];
+    const series = computeVWAPSeries(noVolumeBars);
+    expect(series[0]).toBeNull();
+    expect(series[1]).toBeNull();
+  });
+
+  it("becomes available the moment cumulative volume turns positive", () => {
+    const mixedBars = [
+      bar(0, 100, 102, 99, 101, 0),
+      bar(1, 101, 104, 100, 103, 500),
+    ];
+    const series = computeVWAPSeries(mixedBars);
+    expect(series[0]).toBeNull();
+    expect(series[1]).toBeCloseTo((104 + 100 + 103) / 3, 10);
+  });
+});
+
+// ── EMA20 vs EMA200 / VWAP vs EMA20 scoring (client EMA & VWAP spec) ──────────
+
+describe("compareScore", () => {
+  it("returns +1 when a > b, -1 when a < b, 0 when equal", () => {
+    expect(compareScore(105, 100)).toBe(1);
+    expect(compareScore(95, 100)).toBe(-1);
+    expect(compareScore(100, 100)).toBe(0);
+  });
+
+  it("returns null when either input is missing", () => {
+    expect(compareScore(null, 100)).toBeNull();
+    expect(compareScore(100, null)).toBeNull();
+    expect(compareScore(NaN, 100)).toBeNull();
+  });
+});
+
+describe("totalScoreFromParts / ratingFromTotalScore / signalFromRating", () => {
+  it("sums emaScore + vwapScore and maps to the 5-level rating", () => {
+    expect(totalScoreFromParts(1, 1)).toBe(2);
+    expect(ratingFromTotalScore(2)).toBe("Strong CALL");
+    expect(totalScoreFromParts(1, 0)).toBe(1);
+    expect(ratingFromTotalScore(1)).toBe("CALL");
+    expect(totalScoreFromParts(1, -1)).toBe(0);
+    expect(ratingFromTotalScore(0)).toBe("Neutral");
+    expect(totalScoreFromParts(-1, 0)).toBe(-1);
+    expect(ratingFromTotalScore(-1)).toBe("PUT");
+    expect(totalScoreFromParts(-1, -1)).toBe(-2);
+    expect(ratingFromTotalScore(-2)).toBe("Strong PUT");
+  });
+
+  it("maps rating to the asymmetric 4-level signal", () => {
+    expect(signalFromRating("Strong CALL")).toBe("BUY CALL");
+    expect(signalFromRating("CALL")).toBe("BUY CALL");
+    expect(signalFromRating("Neutral")).toBe("WAIT");
+    expect(signalFromRating("PUT")).toBe("BUY PUT");
+    expect(signalFromRating("Strong PUT")).toBe("STRONG BUY PUT");
+  });
+
+  it("is null when either score / the rating is unavailable (e.g. EMA200 still warming up)", () => {
+    expect(totalScoreFromParts(null, 1)).toBeNull();
+    expect(ratingFromTotalScore(null)).toBeNull();
+    expect(signalFromRating(null)).toBeNull();
   });
 });
 

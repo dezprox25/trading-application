@@ -179,6 +179,13 @@ let draining = false;
 // Tracks the session-open ms already pruned per "symbol|timeframe" so the
 // deleteMany cleanup runs once per pair per session instead of per candle.
 const prunedSessions = new Map<string, number>();
+// Rolling retention window for the prune below — matches the TTL index in
+// FuturesOHLCSchema.ts (45 days). Kept as an explicit deleteMany (rather than
+// relying on the TTL alone) so the collection stays bounded even if the TTL
+// background task lags. Deliberately NOT "before today's session open" —
+// that used to wipe yesterday's candles every morning, which left no history
+// for the EMA200 warm-up (ohlc-warmup endpoint) to read.
+const HISTORY_RETENTION_MS = 45 * 24 * 60 * 60 * 1000;
 let _persistErrCount = 0;
 let _persistErrLastLog = 0;
 
@@ -247,7 +254,9 @@ const drainPersistQueue = async () => {
         }
       }
 
-      // 2. Session pruning — once per (symbol,timeframe) per session day.
+      // 2. Retention pruning — once per (symbol,timeframe) per session day.
+      // Cutoff is a rolling 45-day window (matches the TTL index), not
+      // "today's session open" — see HISTORY_RETENTION_MS above.
       for (const c of batch) {
         const key = `${c.symbol}|${c.timeframe}`;
         const sessionOpenMs = sessionOpenForCandle(c.openTime);
@@ -257,7 +266,7 @@ const drainPersistQueue = async () => {
           await FuturesOHLC.deleteMany({
             symbol: c.symbol,
             timeframe: c.timeframe,
-            bar_time: { $lt: new Date(sessionOpenMs) },
+            bar_time: { $lt: new Date(Date.now() - HISTORY_RETENTION_MS) },
           });
         } catch { /* retried next session; cache-side filtering already excludes old bars */ }
       }
