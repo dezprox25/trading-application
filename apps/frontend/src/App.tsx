@@ -9,6 +9,7 @@ import { ModuleSelection } from "./components/ModuleSelection";
 import ModuleWorkspace from "./components/ModuleWorkspace";
 import { DocsPage } from "./modules/docs";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { SidebarDezproxFooter } from "./components/branding/Dezprox";
 
 const GREEN = "#16a34a";
 
@@ -240,6 +241,8 @@ function ModuleSidebar({
             );
           })}
         </div>
+
+        <SidebarDezproxFooter />
       </div>
     </aside>
   );

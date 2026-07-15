@@ -127,7 +127,7 @@ export const ModuleSelection: React.FC = () => {
 
       <div className="ms-root">
         {/* Top bar */}
-        <div className="ms-topbar">
+        {/* <div className="ms-topbar">
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <div style={{ width: 32, height: 32, borderRadius: 8, background: `${GREEN}15`, display: "flex", alignItems: "center", justifyContent: "center", color: GREEN }}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
@@ -144,7 +144,7 @@ export const ModuleSelection: React.FC = () => {
             </div>
             <button className="ms-logout-btn" onClick={handleLogout}>Logout</button>
           </div>
-        </div>
+        </div> */}
 
         {/* Content */}
         <div style={{ maxWidth: 860, margin: "0 auto", padding: "60px 24px" }}>

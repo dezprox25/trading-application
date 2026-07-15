@@ -1,16 +1,20 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
-  SECTIONS,
+  CATEGORIES,
+  Category,
   Section,
   Subsection,
   DocBlock,
   ColRef,
   Tint,
+  categoryMatches,
   sectionMatches,
   matchingColIds,
-  buildToc,
+  buildTocForCategory,
   TocEntry,
 } from "./content";
+import { DocsDezproxBanner } from "../../components/branding/Dezprox";
+import { ProductInfoCard } from "./ProductInfoCard";
 
 // ── Design tokens (match app theme) ──────────────────────────────────────────
 const CALL_BG    = "#D6E4F2";
@@ -21,10 +25,11 @@ const BORDER     = "#d8e0ea";
 const TEXT       = "#102033";
 const MUTED      = "#5b6b82";
 const GREEN      = "#16a34a";
+const AMBER      = "#d97706";
 const FONT       = "'Inter', 'Segoe UI', system-ui, sans-serif";
 const MONO       = "'Consolas', 'Courier New', monospace";
 
-// ── FormulaChip ──────────────────────────────────────────────────────────────
+// ── FormulaChip / code block ──────────────────────────────────────────────────
 
 function FormulaChip({ text }: { text: string }) {
   const lines = text.split("\n");
@@ -80,7 +85,6 @@ function ColumnRefRow({
       overflow: "hidden",
       marginBottom: 4,
     }}>
-      {/* Header row — always visible, clickable */}
       <button
         onClick={onToggle}
         style={{
@@ -112,7 +116,6 @@ function ColumnRefRow({
         )}
       </button>
 
-      {/* Expanded content */}
       {expanded && (
         <div style={{ padding: "14px 16px", background: "#fff", display: "flex", flexDirection: "column", gap: 10 }}>
           <p style={{ margin: 0, fontSize: 13, color: TEXT, lineHeight: 1.65 }}>
@@ -177,6 +180,20 @@ function BlockRenderer({
         </div>
       );
 
+    case "warn":
+      return (
+        <div style={{
+          margin: "0 0 10px",
+          padding: "10px 14px",
+          background: "rgba(217,119,6,0.07)",
+          border: `1.5px solid rgba(217,119,6,0.3)`,
+          borderRadius: 8,
+          fontSize: 13, fontWeight: 600, color: "#92400e", lineHeight: 1.65,
+        }}>
+          ⚠ {block.content}
+        </div>
+      );
+
     case "bullets":
       return (
         <ul style={{ margin: "0 0 10px", paddingLeft: 20 }}>
@@ -235,6 +252,7 @@ function BlockRenderer({
           {block.glossary.map((g, i) => (
             <div key={g.term} style={{
               display: "flex", alignItems: "flex-start", gap: 0,
+              flexWrap: "wrap",
               borderBottom: i < block.glossary.length - 1 ? `1px solid ${BORDER}` : "none",
             }}>
               <div style={{
@@ -247,13 +265,152 @@ function BlockRenderer({
                 {g.term}
               </div>
               <div style={{
-                flex: 1, padding: "8px 14px",
+                flex: 1, minWidth: 200, padding: "8px 14px",
                 fontSize: 13, color: MUTED, lineHeight: 1.6,
               }}>
                 {g.def}
               </div>
             </div>
           ))}
+        </div>
+      );
+
+    case "fields":
+      return (
+        <div style={{
+          margin: "0 0 10px",
+          border: `1px solid ${BORDER}`,
+          borderRadius: 8,
+          overflow: "hidden",
+        }}>
+          {block.fields.map((f, i) => (
+            <div key={i} style={{
+              padding: "10px 14px",
+              borderBottom: i < block.fields.length - 1 ? `1px solid ${BORDER}` : "none",
+              background: i % 2 === 0 ? "#fff" : "#fafcfe",
+            }}>
+              <div style={{
+                fontSize: 10, fontWeight: 800, color: GREEN,
+                textTransform: "uppercase", letterSpacing: "0.09em", marginBottom: 3,
+              }}>
+                {f.label}
+              </div>
+              <div style={{ fontSize: 13, color: TEXT, lineHeight: 1.65 }}>{f.text}</div>
+            </div>
+          ))}
+        </div>
+      );
+
+    case "faq":
+      return (
+        <div style={{ margin: "0 0 10px", display: "flex", flexDirection: "column", gap: 10 }}>
+          {block.items.map((f, i) => (
+            <div key={i} style={{
+              border: `1px solid ${BORDER}`, borderRadius: 8,
+              padding: "12px 14px", background: "#fff",
+            }}>
+              <div style={{ fontSize: 13.5, fontWeight: 800, color: TEXT, marginBottom: 5 }}>
+                Q. {f.q}
+              </div>
+              <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.65 }}>
+                A. {f.a}
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+
+    case "table":
+      return (
+        <div style={{ margin: "0 0 10px", overflowX: "auto", border: `1px solid ${BORDER}`, borderRadius: 8 }}>
+          <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 420, fontSize: 12.5 }}>
+            <thead>
+              <tr>
+                {block.headers.map((h, i) => (
+                  <th key={i} style={{
+                    textAlign: "left", padding: "8px 12px",
+                    background: "#f8fafc", color: MUTED,
+                    fontWeight: 800, fontSize: 10.5,
+                    textTransform: "uppercase", letterSpacing: "0.07em",
+                    borderBottom: `1.5px solid ${BORDER}`,
+                    whiteSpace: "nowrap",
+                  }}>
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {block.rows.map((row, ri) => (
+                <tr key={ri} style={{ background: ri % 2 === 0 ? "#fff" : "#fafcfe" }}>
+                  {row.map((cell, ci) => (
+                    <td key={ci} style={{
+                      padding: "8px 12px", color: TEXT, lineHeight: 1.55,
+                      borderBottom: ri < block.rows.length - 1 ? `1px solid ${BORDER}` : "none",
+                      verticalAlign: "top",
+                    }}>
+                      {cell}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+
+    case "endpoints":
+      return (
+        <div style={{ margin: "0 0 10px", display: "flex", flexDirection: "column", gap: 8 }}>
+          {block.endpoints.map((e, i) => {
+            const methodColor =
+              e.method === "GET" ? "#2E75B6" :
+              e.method === "POST" ? "#16a34a" :
+              e.method === "PUT" ? AMBER : "#DC2626";
+            return (
+              <div key={i} style={{ border: `1px solid ${BORDER}`, borderRadius: 8, padding: "10px 14px", background: "#fff" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 5 }}>
+                  <span style={{
+                    fontSize: 10, fontWeight: 800, padding: "2px 7px", borderRadius: 4,
+                    background: `${methodColor}18`, color: methodColor, letterSpacing: "0.05em",
+                  }}>
+                    {e.method}
+                  </span>
+                  <span style={{ fontFamily: MONO, fontSize: 12.5, color: TEXT, fontWeight: 700, wordBreak: "break-all" }}>
+                    {e.path}
+                  </span>
+                  {e.auth && (
+                    <span style={{ fontSize: 10, color: MUTED, fontStyle: "italic" }}>({e.auth})</span>
+                  )}
+                </div>
+                <div style={{ fontSize: 13, color: TEXT, lineHeight: 1.6, marginBottom: e.params || e.response ? 5 : 0 }}>
+                  {e.purpose}
+                </div>
+                {e.params && (
+                  <div style={{ fontSize: 12, color: MUTED, marginTop: 3 }}>
+                    <strong style={{ color: TEXT }}>Params:</strong> <span style={{ fontFamily: MONO }}>{e.params}</span>
+                  </div>
+                )}
+                {e.response && (
+                  <div style={{ fontSize: 12, color: MUTED, marginTop: 3 }}>
+                    <strong style={{ color: TEXT }}>Response:</strong> <span style={{ fontFamily: MONO }}>{e.response}</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      );
+
+    case "code":
+      return (
+        <div style={{ margin: "0 0 10px" }}>
+          {block.label && (
+            <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>
+              {block.label}
+            </div>
+          )}
+          <FormulaChip text={block.content} />
         </div>
       );
   }
@@ -275,10 +432,7 @@ function SubsectionRenderer({
   onToggleCol: (id: string) => void;
 }) {
   return (
-    <div
-      id={sub.id}
-      style={{ marginBottom: 20, opacity: visible ? 1 : 0.3 }}
-    >
+    <div id={sub.id} style={{ marginBottom: 20, opacity: visible ? 1 : 0.3, scrollMarginTop: 12 }}>
       <h3 style={{
         margin: "0 0 12px", fontSize: 15, fontWeight: 800, color: TEXT,
         letterSpacing: "-0.01em",
@@ -326,9 +480,9 @@ function SectionCard({
         overflow: "hidden",
         opacity: visible ? 1 : 0.3,
         transition: "opacity 0.15s",
+        scrollMarginTop: 12,
       }}
     >
-      {/* Card accent bar */}
       <div style={{ height: 3, background: `linear-gradient(90deg, ${GREEN}, #10b981)` }} />
 
       <div style={{ padding: "20px 24px" }}>
@@ -342,7 +496,6 @@ function SectionCard({
           {section.heading}
         </h2>
 
-        {/* Direct blocks (before subsections) */}
         {section.blocks?.map((block, i) => (
           <BlockRenderer
             key={i}
@@ -353,7 +506,6 @@ function SectionCard({
           />
         ))}
 
-        {/* Subsections */}
         {section.subsections?.map((sub) => {
           const subVisible = !q || sectionMatches(
             { id: sub.id, heading: sub.heading, blocks: sub.blocks },
@@ -375,74 +527,186 @@ function SectionCard({
   );
 }
 
-// ── TOC ───────────────────────────────────────────────────────────────────────
+// ── Category content block (main pane) ────────────────────────────────────────
 
-function Toc({
+function CategoryContent({
+  cat,
+  q,
+  expandedCols,
+  autoExpanded,
+  onToggleCol,
+}: {
+  cat: Category;
+  q: string;
+  expandedCols: Set<string>;
+  autoExpanded: Set<string>;
+  onToggleCol: (id: string) => void;
+}) {
+  const visible = categoryMatches(cat, q);
+
+  return (
+    <section style={{ opacity: visible ? 1 : 0.35, transition: "opacity 0.15s" }}>
+      <div
+        id={`cat-${cat.id}`}
+        style={{
+          display: "flex", alignItems: "center", gap: 10,
+          margin: "8px 0 16px", scrollMarginTop: 12,
+        }}
+      >
+        <span style={{ fontSize: 20 }}>{cat.icon}</span>
+        <div>
+          <h1 style={{ margin: 0, fontSize: 20, fontWeight: 900, color: TEXT, letterSpacing: "-0.02em" }}>
+            {cat.label}
+          </h1>
+          <div style={{ fontSize: 11.5, color: MUTED, fontWeight: 600 }}>{cat.audience}</div>
+        </div>
+      </div>
+
+      {cat.comingSoon ? (
+        <div style={{
+          border: `1.5px dashed ${BORDER}`, borderRadius: 12,
+          padding: "36px 24px", textAlign: "center", marginBottom: 20,
+          background: "#fafcfe",
+        }}>
+          <div style={{ fontSize: 28, marginBottom: 10, opacity: 0.5 }}>📘</div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: TEXT, marginBottom: 4 }}>Coming Soon</div>
+          <div style={{ fontSize: 13, color: MUTED }}>Module 2 documentation has not been written yet.</div>
+        </div>
+      ) : (
+        cat.sections.map((section) => (
+          <SectionCard
+            key={section.id}
+            section={section}
+            q={q}
+            expandedCols={expandedCols}
+            autoExpanded={autoExpanded}
+            onToggleCol={onToggleCol}
+          />
+        ))
+      )}
+    </section>
+  );
+}
+
+// ── Sidebar TOC for one category ──────────────────────────────────────────────
+
+function CategoryNav({
+  cat,
   entries,
   activeId,
   q,
+  expanded,
+  onToggleExpand,
   onScroll,
 }: {
+  cat: Category;
   entries: TocEntry[];
   activeId: string;
   q: string;
+  expanded: boolean;
+  onToggleExpand: () => void;
   onScroll: (id: string) => void;
 }) {
+  const isActiveCategory = activeId === `cat-${cat.id}` || entries.some((e) => e.id === activeId);
+
   return (
-    <nav style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-      {entries.map((entry) => {
-        const isActive = activeId === entry.id;
-        const matchesQ = q
-          ? entry.label.toLowerCase().includes(q)
-          : false;
-        return (
-          <button
-            key={entry.id}
-            onClick={() => onScroll(entry.id)}
-            title={entry.label}
-            style={{
-              all: "unset",
-              display: "block",
-              cursor: "pointer",
-              fontFamily: FONT,
-              fontSize: entry.depth === 0 ? 12 : 11,
-              fontWeight: entry.depth === 0 ? 700 : 500,
-              color: isActive ? GREEN : matchesQ ? "#1d4ed8" : MUTED,
-              background: isActive ? "rgba(22,163,74,0.07)" : "transparent",
-              padding: `5px 16px 5px ${entry.depth === 0 ? 16 : 26}px`,
-              borderLeft: isActive ? `2.5px solid ${GREEN}` : "2.5px solid transparent",
-              lineHeight: 1.35,
-              transition: "all 0.12s",
-              borderRadius: "0 4px 4px 0",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {entry.label}
-          </button>
-        );
-      })}
-    </nav>
+    <div style={{ marginBottom: 2 }}>
+      <button
+        className="docs-toc-btn"
+        onClick={onToggleExpand}
+        style={{
+          all: "unset", cursor: "pointer",
+          display: "flex", alignItems: "center", gap: 7,
+          width: "100%", boxSizing: "border-box",
+          padding: "7px 16px",
+          fontFamily: FONT, fontSize: 12.5, fontWeight: 800,
+          color: isActiveCategory ? GREEN : TEXT,
+          textTransform: "uppercase", letterSpacing: "0.04em",
+        }}
+      >
+        <span style={{
+          fontSize: 9, display: "inline-block",
+          transition: "transform 0.15s",
+          transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
+          color: MUTED,
+        }}>▶</span>
+        <span style={{ fontSize: 13 }}>{cat.icon}</span>
+        <span style={{ flex: 1, textAlign: "left" }}>{cat.label}</span>
+        {cat.comingSoon && (
+          <span style={{
+            fontSize: 8.5, fontWeight: 800, color: AMBER,
+            background: "rgba(217,119,6,0.12)", padding: "1px 5px", borderRadius: 3,
+          }}>
+            SOON
+          </span>
+        )}
+      </button>
+
+      {expanded && !cat.comingSoon && (
+        <nav style={{ display: "flex", flexDirection: "column", gap: 1, marginBottom: 4 }}>
+          {entries.map((entry) => {
+            const isActive = activeId === entry.id;
+            const matchesQ = q ? entry.label.toLowerCase().includes(q) : false;
+            return (
+              <button
+                key={entry.id}
+                onClick={() => onScroll(entry.id)}
+                title={entry.label}
+                style={{
+                  all: "unset",
+                  display: "block",
+                  cursor: "pointer",
+                  fontFamily: FONT,
+                  fontSize: entry.depth === 0 ? 12 : 11,
+                  fontWeight: entry.depth === 0 ? 700 : 500,
+                  color: isActive ? GREEN : matchesQ ? "#1d4ed8" : MUTED,
+                  background: isActive ? "rgba(22,163,74,0.07)" : "transparent",
+                  padding: `5px 16px 5px ${entry.depth === 0 ? 30 : 40}px`,
+                  borderLeft: isActive ? `2.5px solid ${GREEN}` : "2.5px solid transparent",
+                  lineHeight: 1.35,
+                  transition: "all 0.12s",
+                  borderRadius: "0 4px 4px 0",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {entry.label}
+              </button>
+            );
+          })}
+        </nav>
+      )}
+    </div>
   );
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export function DocsPage() {
-  const [query, setQuery]         = useState("");
-  const [expandedCols, setExpandedCols] = useState<Set<string>>(new Set());
-  const [activeId, setActiveId]   = useState<string>(SECTIONS[0]?.id ?? "");
-  const mainRef                   = useRef<HTMLDivElement>(null);
-  const observerRef               = useRef<IntersectionObserver | null>(null);
+  const [query, setQuery]               = useState("");
+  const [expandedCols, setExpandedCols]  = useState<Set<string>>(new Set());
+  const [activeId, setActiveId]          = useState<string>("");
+  const [expandedCats, setExpandedCats]  = useState<Set<string>>(new Set(["module1", "app-details"]));
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const observerRef                      = useRef<IntersectionObserver | null>(null);
 
-  const toc     = useMemo(() => buildToc(), []);
-  const q       = query.toLowerCase().trim();
-  const autoExp = useMemo(() => matchingColIds(q), [q]);
+  const q = query.toLowerCase().trim();
+  const autoExp = useMemo(() => matchingColIds(CATEGORIES, q), [q]);
+
+  const tocByCategory = useMemo(
+    () => CATEGORIES.map((cat) => ({ cat, entries: buildTocForCategory(cat) })),
+    []
+  );
+  const allIds = useMemo(
+    () => [
+      ...CATEGORIES.map((c) => `cat-${c.id}`),
+      ...tocByCategory.flatMap(({ entries }) => entries.map((e) => e.id)),
+    ],
+    [tocByCategory]
+  );
 
   // ── IntersectionObserver for active TOC tracking ──────────────────────────
-  const allIds = useMemo(() => toc.map((e) => e.id), [toc]);
-
   useEffect(() => {
     observerRef.current?.disconnect();
     const obs = new IntersectionObserver(
@@ -450,6 +714,12 @@ export function DocsPage() {
         for (const e of entries) {
           if (e.isIntersecting) {
             setActiveId(e.target.id);
+            const owner = tocByCategory.find(
+              ({ cat, entries: ents }) => `cat-${cat.id}` === e.target.id || ents.some((en) => en.id === e.target.id)
+            );
+            if (owner) {
+              setExpandedCats((prev) => (prev.has(owner.cat.id) ? prev : new Set(prev).add(owner.cat.id)));
+            }
           }
         }
       },
@@ -461,17 +731,25 @@ export function DocsPage() {
       if (el) obs.observe(el);
     });
     return () => obs.disconnect();
-  }, [allIds]);
+  }, [allIds, tocByCategory]);
 
   // ── Scroll to section ─────────────────────────────────────────────────────
   const scrollTo = useCallback((id: string) => {
     const el = document.getElementById(id);
     if (!el) return;
-    // The scroll container is the parent <main> in ModuleDashboardLayout
     el.scrollIntoView({ behavior: "smooth", block: "start" });
+    setMobileNavOpen(false);
   }, []);
 
-  // ── Column expand toggle ──────────────────────────────────────────────────
+  const toggleCategory = useCallback((id: string) => {
+    setExpandedCats((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
   const toggleCol = useCallback((id: string) => {
     setExpandedCols((prev) => {
       const next = new Set(prev);
@@ -481,7 +759,6 @@ export function DocsPage() {
     });
   }, []);
 
-  // ── Print ─────────────────────────────────────────────────────────────────
   const handlePrint = () => window.print();
 
   return (
@@ -491,25 +768,58 @@ export function DocsPage() {
           .docs-toc-panel  { display: none !important; }
           .docs-print-btn  { display: none !important; }
           .docs-search-box { display: none !important; }
-          .docs-page-root  { display: block !important; }
+          .docs-page-root  { display: block !important; height: auto !important; overflow: visible !important; }
           .docs-main       { padding: 20px !important; max-width: 100% !important; }
+          .docs-mobile-toggle, .docs-nav-backdrop { display: none !important; }
           body, html       { background: white !important; }
         }
         .docs-toc-btn:hover {
           background: rgba(22,163,74,0.07) !important;
-          color: ${GREEN} !important;
+        }
+        .docs-mobile-toggle { display: none; }
+        .docs-nav-backdrop  { display: none; }
+
+        @media (max-width: 860px) {
+          .docs-toc-panel {
+            position: fixed !important;
+            top: 60px; bottom: 0; left: 0;
+            z-index: 60;
+            width: 280px !important;
+            height: calc(100vh - 60px) !important;
+            transform: translateX(-100%);
+            transition: transform 0.2s ease;
+            box-shadow: 4px 0 24px rgba(0,0,0,0.15);
+          }
+          .docs-toc-panel.open { transform: translateX(0); }
+          .docs-mobile-toggle { display: inline-flex !important; }
+          .docs-nav-backdrop.open {
+            display: block !important;
+            position: fixed; inset: 60px 0 0 0; z-index: 55;
+            background: rgba(15,23,42,0.35);
+          }
+          .docs-main { padding: 20px 16px !important; max-width: 100% !important; }
         }
       `}</style>
 
       <div
         className="docs-page-root"
-        style={{ display: "flex", minHeight: "calc(100vh - 60px)", fontFamily: FONT }}
+        style={{
+          display: "flex",
+          height: "calc(100vh - 60px)",
+          overflow: "auto",
+          fontFamily: FONT,
+        }}
       >
-        {/* ── Left TOC panel ────────────────────────────────────────────── */}
+        <div
+          className={`docs-nav-backdrop${mobileNavOpen ? " open" : ""}`}
+          onClick={() => setMobileNavOpen(false)}
+        />
+
+        {/* ── Left nav panel ────────────────────────────────────────────── */}
         <aside
-          className="docs-toc-panel"
+          className={`docs-toc-panel${mobileNavOpen ? " open" : ""}`}
           style={{
-            width: 240,
+            width: 250,
             flexShrink: 0,
             position: "sticky",
             top: 0,
@@ -537,7 +847,7 @@ export function DocsPage() {
               </svg>
               <input
                 type="text"
-                placeholder="Search sections & columns…"
+                placeholder="Search documentation…"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 style={{
@@ -576,15 +886,24 @@ export function DocsPage() {
             Contents
           </div>
 
-          {/* TOC links */}
-          <Toc entries={toc} activeId={activeId} q={q} onScroll={scrollTo} />
+          {/* Category groups */}
+          <div style={{ flex: "0 0 auto" }}>
+            {tocByCategory.map(({ cat, entries }) => (
+              <CategoryNav
+                key={cat.id}
+                cat={cat}
+                entries={entries}
+                activeId={activeId}
+                q={q}
+                expanded={!!q || expandedCats.has(cat.id)}
+                onToggleExpand={() => toggleCategory(cat.id)}
+                onScroll={scrollTo}
+              />
+            ))}
+          </div>
 
-          {/* Print button at bottom */}
           <div style={{ flex: 1 }} />
-          <div style={{
-            padding: "14px 16px",
-            borderTop: `1px solid ${BORDER}`,
-          }}>
+          <div style={{ padding: "14px 16px", borderTop: `1px solid ${BORDER}` }}>
             <button
               className="docs-print-btn"
               onClick={handlePrint}
@@ -617,37 +936,56 @@ export function DocsPage() {
         {/* ── Right content ──────────────────────────────────────────────── */}
         <main
           className="docs-main"
-          ref={mainRef}
           style={{
             flex: 1,
             padding: "28px 36px",
-            maxWidth: 860,
+            maxWidth: 900,
             minWidth: 0,
           }}
         >
+          <DocsDezproxBanner />
+
+          {/* <ProductInfoCard /> */}
+
           {/* Page header */}
           <div style={{
             display: "flex", alignItems: "flex-start",
             justifyContent: "space-between", marginBottom: 24,
             paddingBottom: 20, borderBottom: `1.5px solid ${BORDER}`,
-            gap: 16,
+            gap: 16, flexWrap: "wrap",
           }}>
-            <div>
-              <div style={{
-                fontSize: 11, fontWeight: 700, color: GREEN,
-                textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 6,
-              }}>
-                Platform Guide
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+              <button
+                className="docs-mobile-toggle"
+                onClick={() => setMobileNavOpen((o) => !o)}
+                aria-label="Toggle contents"
+                style={{
+                  flexShrink: 0, marginTop: 2,
+                  width: 34, height: 34, borderRadius: 7,
+                  border: `1.5px solid ${BORDER}`, background: "#fff",
+                  alignItems: "center", justifyContent: "center", cursor: "pointer",
+                  color: TEXT,
+                }}
+              >
+                ☰
+              </button>
+              <div>
+                <div style={{
+                  fontSize: 11, fontWeight: 700, color: GREEN,
+                  textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 6,
+                }}>
+                  Platform Guide
+                </div>
+                <h1 style={{
+                  margin: 0, fontSize: 26, fontWeight: 900,
+                  color: TEXT, letterSpacing: "-0.02em",
+                }}>
+                  📖 Documentation
+                </h1>
+                <p style={{ margin: "6px 0 0", fontSize: 13, color: MUTED, fontWeight: 500 }}>
+                  Module documentation for traders, and application details for developers.
+                </p>
               </div>
-              <h1 style={{
-                margin: 0, fontSize: 26, fontWeight: 900,
-                color: TEXT, letterSpacing: "-0.02em",
-              }}>
-                📖 Documentation
-              </h1>
-              <p style={{ margin: "6px 0 0", fontSize: 13, color: MUTED, fontWeight: 500 }}>
-                Complete reference for the Synergy Trading Platform — for traders, not engineers.
-              </p>
             </div>
             <button
               className="docs-print-btn"
@@ -676,6 +1014,7 @@ export function DocsPage() {
               </svg>
               Print / Save as PDF
             </button>
+            
           </div>
 
           {/* Search result hint */}
@@ -689,17 +1028,19 @@ export function DocsPage() {
             </div>
           )}
 
-          {/* Section cards */}
-          {SECTIONS.map((section) => (
-            <SectionCard
-              key={section.id}
-              section={section}
+          {/* Categories */}
+          {CATEGORIES.map((cat) => (
+            <CategoryContent
+              key={cat.id}
+              cat={cat}
               q={q}
               expandedCols={expandedCols}
               autoExpanded={autoExp}
               onToggleCol={toggleCol}
             />
           ))}
+          <ProductInfoCard />
+
 
           {/* Footer */}
           <p style={{
@@ -709,6 +1050,7 @@ export function DocsPage() {
             Pivot Intelligence v1.0 · Authorised Access Only · Analysis tool — no orders placed
           </p>
         </main>
+        
       </div>
     </>
   );

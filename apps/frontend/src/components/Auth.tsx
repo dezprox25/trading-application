@@ -2,6 +2,7 @@ import { useState, useCallback } from "react";
 import { useStore } from "../store/useStore";
 import { api } from "../utils/api";
 import { LoginSchema } from "@stock/shared";
+import { LoginDezproxFooter } from "./branding/Dezprox";
 
 const GREEN = "#047857";
 const OTP_ENABLED = import.meta.env.VITE_APP_OTP_ENABLED === "true";
@@ -141,19 +142,38 @@ export const Auth: React.FC = () => {
       `}</style>
 
       <div style={{
-        width: "100%", minHeight: "100vh",
+        width: "100%", minHeight: "100vh", position: "relative",
         display: "flex", alignItems: "center", justifyContent: "center",
-        background: "linear-gradient(135deg, #f8fafc 0%, #f1f5f9 50%, #e2e8f0 100%)",
         padding: 16, fontFamily: "'Inter', sans-serif",
+        overflow: "hidden",
       }}>
+        {/* Background photo — blurred + darkened so it reads as texture/mood,
+            never competes with the form. Scaled up slightly so the blur's
+            soft edge never shows a hard border at the viewport edge. */}
+        <div style={{
+          position: "absolute", inset: 0,
+          backgroundImage: "url(/login-bg.jpg)",
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+          filter: "blur(3px) brightness(0.8) saturate(1.2)",
+          transform: "scale(1.08)",
+        }} />
+        {/* Brand-colour scrim on top of the photo for contrast + cohesion
+            with the app's green accent. */}
+        <div style={{
+          position: "absolute", inset: 0,
+          background: "linear-gradient(135deg, rgba(4,120,87,0.32) 0%, rgba(15,23,42,0.78) 55%, rgba(15,23,42,0.88) 100%)",
+        }} />
+
         <div
           className="auth-card"
           style={{
             width: "100%", maxWidth: 440,
+            position: "relative", zIndex: 1,
             background: "#fff",
             border: "1.5px solid #e2e8f0",
             borderRadius: 16,
-            boxShadow: "0 10px 30px -5px rgba(0,0,0,0.07), 0 4px 12px -4px rgba(0,0,0,0.04)",
+            boxShadow: "0 20px 50px -12px rgba(0,0,0,0.45), 0 4px 12px -4px rgba(0,0,0,0.15)",
             overflow: "hidden",
           }}
         >
@@ -357,6 +377,8 @@ export const Auth: React.FC = () => {
             }}>
               Pivot Intelligence v1.0 · Authorised Access Only
             </p>
+
+            <LoginDezproxFooter />
           </div>
         </div>
       </div>
