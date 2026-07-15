@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import type { DashboardRow, OHLCBar, PivotMethod } from "../../calc";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import type { DashboardRow, PivotMethod } from "../../calc";
 import { pivotForBar } from "../../calc";
+import { TRACKED_COLUMN_ACCESSORS, buildLiveColorGrid, colorClassStyle } from "./cellColorRules";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -142,37 +143,16 @@ const GROUP_COLORS: Record<Group, { bg: string; subBg: string; text: string }> =
   indicators: { bg: "#EDE9FE", subBg: "#F5F3FF", text: "#4C1D95" },
 };
 
-// ── OHLC conditional coloring ─────────────────────────────────────────────────
+// ── Cell coloring ──────────────────────────────────────────────────────────
+// Static per-column-role coloring has been replaced by the dynamic, stateful
+// rule engine in ./cellColorRules (Blue/Green/Pink/Black — see
+// buildLiveColorGrid) for every Call/Put/Future/Spot OHLC/MMA/TLA column.
+// getCellStyle below now only covers columns that keep static coloring
+// (currently just Ranking); everything else defaults to plain white.
 
 type CellColor = { bg: string; textColor: string };
 
-const C_HIGH: CellColor      = { bg: "#22C55E", textColor: "#FFFFFF" };
-const C_LOW: CellColor       = { bg: "#EF4444", textColor: "#FFFFFF" };
-const C_OPEN: CellColor      = { bg: "#3B82F6", textColor: "#FFFFFF" };
-const C_BULL: CellColor      = { bg: "#DCFCE7", textColor: "#000000" };
-const C_BEAR: CellColor      = { bg: "#FCA5A5", textColor: "#FFFFFF" };
-const C_CALL_TINT: CellColor = { bg: "#EFF6FF", textColor: "#1E40AF" };
-const C_PUT_TINT: CellColor  = { bg: "#FFFBEB", textColor: "#92400E" };
-const C_DEFAULT: CellColor   = { bg: "#FFFFFF", textColor: "#000000" };
-
-function ohlcColor(role: "o" | "h" | "l" | "c", bar: OHLCBar): CellColor {
-  if (!Number.isFinite(bar.o)) return C_DEFAULT; // NaN sentinel — no data for this bar
-  const { o, h, l, c } = bar;
-  switch (role) {
-    case "h": return C_HIGH;
-    case "l": return C_LOW;
-    case "c":
-      if (c === h) return C_HIGH;
-      if (c === l) return C_LOW;
-      if (c > o)   return C_BULL;
-      if (c < o)   return C_BEAR;
-      return C_DEFAULT;
-    case "o":
-      if (o === h) return C_HIGH;
-      if (o === l) return C_LOW;
-      return C_OPEN;
-  }
-}
+const C_DEFAULT: CellColor = { bg: "#FFFFFF", textColor: "#000000" };
 
 const C_RANK_CALL: CellColor = { bg: "#FFFFFF", textColor: "#1E40AF" }; // white bg, blue text — call wins
 const C_RANK_PUT:  CellColor = { bg: "#FFFFFF", textColor: "#78350F" }; // white bg, amber text — put wins
@@ -196,29 +176,10 @@ export function rankingDir(curr: number, prev: number | undefined): RankDir {
 
 function getCellStyle(colId: string, row: DashboardRow): CellColor {
   switch (colId) {
-    case "ce-o":   return ohlcColor("o", row.call);
-    case "ce-h":   return ohlcColor("h", row.call);
-    case "ce-l":   return ohlcColor("l", row.call);
-    case "ce-c":   return ohlcColor("c", row.call);
-    case "mma-c":
-    case "tla-c":  return C_CALL_TINT;
-    case "pe-o":   return ohlcColor("o", row.put);
-    case "pe-h":   return ohlcColor("h", row.put);
-    case "pe-l":   return ohlcColor("l", row.put);
-    case "pe-c":   return ohlcColor("c", row.put);
-    case "mma-p":
-    case "tla-p":  return C_PUT_TINT;
     case "ranking":
       return row.rankingWinner === "call" ? C_RANK_CALL : C_RANK_PUT;
-    case "fut-o":  return ohlcColor("o", row.future);
-    case "fut-h":  return ohlcColor("h", row.future);
-    case "fut-l":  return ohlcColor("l", row.future);
-    case "fut-c":  return ohlcColor("c", row.future);
-    case "spot-o": return ohlcColor("o", row.spot);
-    case "spot-h": return ohlcColor("h", row.spot);
-    case "spot-l": return ohlcColor("l", row.spot);
-    case "spot-c": return ohlcColor("c", row.spot);
-    default:       return C_DEFAULT;
+    default:
+      return C_DEFAULT;
   }
 }
 
@@ -390,6 +351,13 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
   // the end) — display in that order so the earliest candle is the first row
   // and the live candle is always the last.
   const displayRows = rows;
+
+  // Column-independent Blue/Green/Pink/Black live coloring (see
+  // ./cellColorRules) — one left-to-right pass per applicable column,
+  // recomputed only when the `rows` array reference actually changes
+  // (every live tick), never on unrelated re-renders (selection, resize,
+  // column visibility, etc.).
+  const liveColorGrid = useMemo(() => buildLiveColorGrid(displayRows), [displayRows]);
 
   const copySelection = useCallback(() => {
     if (!selRange) return;
@@ -724,7 +692,9 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                     && ri >= selRange.r1 && ri <= selRange.r2
                     && ci >= selRange.c1 && ci <= selRange.c2;
 
-                  const cs  = getCellStyle(c.id, row);
+                  const cs = c.id in TRACKED_COLUMN_ACCESSORS
+                    ? colorClassStyle(liveColorGrid[c.id]?.[ri] ?? null)
+                    : getCellStyle(c.id, row);
                   let val = getCellValue(row, c.id, pivotMethod);
                   let textColor  = cs.textColor;
                   let fontWeight = 400;
