@@ -27,7 +27,6 @@ function StatusBadge({ status }: { status: string | undefined }) {
 export const ModuleSelection: React.FC = () => {
   const navigate  = useNavigate();
   const user      = useStore((s) => s.user);
-  const clearAuth = useStore((s) => s.clearAuth);
   const module1Token = useStore((s) => s.module1Token);
   const module2Token = useStore((s) => s.module2Token);
 
@@ -36,12 +35,6 @@ export const ModuleSelection: React.FC = () => {
     queryFn: () => api.get("/api/module/status"),
     refetchInterval: 10000,
   });
-
-  const handleLogout = async () => {
-    try { await api.post("/auth/logout"); } catch {}
-    clearAuth();
-    navigate("/login", { replace: true });
-  };
 
   const modules = [
     {
