@@ -98,3 +98,39 @@ describe("buildLiveColorGrid — Rule 1 applied literally: 'Current > Highest ->
     expect(isColorableValue(5)).toBe(true);
   });
 });
+
+// ── Display-truncation consistency ────────────────────────────────────────────
+// Regression coverage for a real client-reported defect: the color engine
+// used to compare raw, full-precision values while the cell displays
+// Math.trunc(value) — so two rows showing the identical on-screen number
+// (e.g. both "19") could still get colored if their raw values differed by a
+// fraction. The engine must compare the SAME truncated value the cell shows,
+// so "visually unchanged" and "no color" always agree.
+describe("buildLiveColorGrid — colors match the displayed (truncated) value, not the raw float", () => {
+  it("raw values that display as the same integer produce no color", () => {
+    // 19.6 -> 19.2: a real ~2% raw decrease, but both truncate to "19"
+    const rows = [19.6, 19.2].map(rowWithCallOpen);
+    const grid = buildLiveColorGrid(rows);
+    expect(grid["ce-o"]).toEqual([null, null]);
+  });
+
+  it("reproduces the client's reported dataset shape: 19.4, 19.2, 19.6, 19.1 (all display 19/19/19/19) -> no color on any row", () => {
+    const rows = [19.4, 19.2, 19.6, 19.1].map(rowWithCallOpen);
+    const grid = buildLiveColorGrid(rows);
+    expect(grid["ce-o"]).toEqual([null, null, null, null]);
+  });
+
+  it("still colors when the DISPLAYED integer actually changes, even by a fraction that crosses the boundary", () => {
+    // 18.9 -> 19.1: displays as "18" then "19" — a real, visible change
+    const rows = [18.9, 19.1].map(rowWithCallOpen);
+    const grid = buildLiveColorGrid(rows);
+    expect(grid["ce-o"]).toEqual([null, "blue"]);
+  });
+
+  it("highest tracking uses the truncated value too, so a raw-only new high that doesn't cross the display boundary is not a new high", () => {
+    // 20.9 (displays 20, becomes highest=20) -> 20.1 (still displays 20, not > 20) -> no color
+    const rows = [20.9, 20.1].map(rowWithCallOpen);
+    const grid = buildLiveColorGrid(rows);
+    expect(grid["ce-o"]).toEqual([null, null]);
+  });
+});

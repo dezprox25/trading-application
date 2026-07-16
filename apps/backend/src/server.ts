@@ -14,6 +14,7 @@ import { runStartupCheck } from "./utils/startupCheck";
 
 import { connectDB } from "./config/db";
 import { ensureUniqueCandleIndex } from "./models/FuturesOHLC";
+import { cleanupPreviousModule1SessionData, startModule1DailyCleanupScheduler } from "./services/module1DataCleanupService";
 import redis from "./config/redis";
 import { sweepLegacyMarketKeys } from "./services/redisWriteBuffer";
 import authRouter from "./routes/auth";
@@ -78,6 +79,20 @@ const globalLimiter = rateLimit({
   message: { error: "Too many requests, please try again later." },
   standardHeaders: true,
   legacyHeaders: false,
+  // Module 1's live dashboard polls GET /api/market/futures/:symbol every
+  // 500ms (Dashboard Effect 2, index.tsx) for the active candle's running
+  // volume — ~120 requests/minute by design, already gated behind auth. That
+  // alone exhausts this shared 200-per-15-min budget in under 100 seconds of
+  // any session, after which the NEXT unrelated call (e.g. /api/market/status
+  // on a timeframe change) gets a 429 the frontend correctly — but
+  // confusingly — surfaces as a fatal "API Error", even though nothing is
+  // actually wrong. Excluded here rather than raising `max` globally, so
+  // every other route keeps the exact same protection it had before.
+  // req.originalUrl (not req.path) — this middleware is mounted at "/api/",
+  // and Express rebases req.path relative to the mount point for plain
+  // middleware, so matching the always-absolute originalUrl avoids any
+  // ambiguity about that rebasing.
+  skip: (req) => req.originalUrl.startsWith("/api/market/futures/"),
 });
 
 app.use("/api/", globalLimiter);
@@ -208,6 +223,17 @@ const startServer = async () => {
       await ensureUniqueCandleIndex();
     } catch (error: any) {
       console.error("[Server] Candle index sync failed (will retry on next restart):", error?.message || error);
+    }
+    try {
+      // Storage-lifecycle requirement: MongoDB must hold ONLY the current
+      // trading session's Module 1 market data. Purge everything from before
+      // today's session on every boot — covers the "server restarted this
+      // morning" case — then start the rollover scheduler for a server that
+      // stays running across a midnight boundary without restarting.
+      await cleanupPreviousModule1SessionData();
+      startModule1DailyCleanupScheduler();
+    } catch (error: any) {
+      console.error("[Server] Module 1 daily cleanup failed (will retry on next restart):", error?.message || error);
     }
   } catch (error: any) {
     console.error("[Server] MongoDB connection failed:", error?.message || error);

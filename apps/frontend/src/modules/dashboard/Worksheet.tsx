@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import type { DashboardRow, PivotMethod } from "../../calc";
 import { pivotForBar } from "../../calc";
-import { TRACKED_COLUMN_ACCESSORS, buildLiveColorGrid, colorClassStyle } from "./cellColorRules";
+import { TRACKED_COLUMN_ACCESSORS, TRACKED_COLUMN_THEME, buildLiveColorGrid, colorClassStyle, truncateForDisplay } from "./cellColorRules";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -52,6 +52,36 @@ const PIVOT_UI_HIDDEN = ["pp", "r1", "r2", "r3", "s1", "s2", "s3"];
 // just not as its own numeric column. Same permanent-hide mechanism as
 // PIVOT_UI_HIDDEN above.
 const INDICATOR_UI_HIDDEN = ["ema200", "ema-score", "vwap-score", "total-score", "rating", "signal"];
+
+// ── Frozen-column detector (dev-only debugging utility) ───────────────────────
+// Columns that legitimately repeat the same value across many rows by design —
+// never a sign of a stuck calculation:
+//   datetime — the frozen (pinned) leftmost column, not a data value at all
+//   space    — reserved placeholder column with no data/logic (always "")
+//   smc/fib  — "nearest level" labels; the nearest SWH/SWL/PDH/PDL or Fib
+//              level legitimately stays the same across many bars
+//   vwap     — null ("VWAP Not Available") until cumulative Future volume > 0
+//   ema      — a 3-way categorical label (CALL/PUT/NEUTRAL), not a continuous
+//              price; long runs of the same label are expected
+const FROZEN_DETECTOR_EXCLUDED_COLS = new Set(["datetime", "space", "smc", "fib", "vwap", "ema"]);
+
+// Floating-point tolerance for the frozen-column detector's raw-value
+// comparison — two values are only "the same" when they're mathematically
+// equal within this margin, not merely equal after display rounding.
+const FROZEN_DETECTOR_EPSILON = 0.0001;
+
+const rawValuesEqual = (a: number | string, b: number | string): boolean =>
+  typeof a === "number" && typeof b === "number"
+    ? Math.abs(a - b) < FROZEN_DETECTOR_EPSILON
+    : a === b;
+
+// Missing-data sentinels (NaN, null, "—", "") never count as "the same value" —
+// a column of all-missing cells isn't a frozen calculation, it's absent data.
+const isValidRawValue = (v: number | string | null): v is number | string => {
+  if (v == null) return false;
+  if (typeof v === "number") return Number.isFinite(v);
+  return v !== "" && v !== "—";
+};
 
 // ── Column definitions (v2 — 31-column client spec) ───────────────────────────
 
@@ -145,10 +175,12 @@ const GROUP_COLORS: Record<Group, { bg: string; subBg: string; text: string }> =
 
 // ── Cell coloring ──────────────────────────────────────────────────────────
 // Static per-column-role coloring has been replaced by the dynamic, stateful
-// rule engine in ./cellColorRules (Blue/Green/Pink/Black — see
-// buildLiveColorGrid) for every Call/Put/Future/Spot OHLC/MMA/TLA column.
+// rule engine in ./cellColorRules (Blue/Green/Pink/Black, Light/Dark themes —
+// see buildLiveColorGrid/colorClassStyle) for every Call/Put/Future/Spot
+// OHLC/MMA/TLA column plus the Indicators section (SMC/FIB/RSI/EMA/VWAP).
 // getCellStyle below now only covers columns that keep static coloring
-// (currently just Ranking); everything else defaults to plain white.
+// (currently just Ranking's call/put-winner fallback); everything else
+// defaults to plain white.
 
 type CellColor = { bg: string; textColor: string };
 
@@ -159,11 +191,15 @@ const C_RANK_PUT:  CellColor = { bg: "#FFFFFF", textColor: "#78350F" }; // white
 
 // ── Ranking direction indicator (UI-only) ─────────────────────────────────────
 // Each Ranking cell is compared against the chronologically PREVIOUS bar's
-// Ranking and rendered with a +/− prefix and green/red emphasis. The number
-// shown is always the actual Ranking value (never the difference), and the
-// underlying calculation/data are untouched — this is pure display.
-const C_RANK_UP_TEXT   = "#16A34A"; // green — higher than previous bar
-const C_RANK_DOWN_TEXT = "#DC2626"; // red — lower than previous bar
+// Ranking (rankingDir) — this comparison is unchanged. Direction is now shown
+// as a CELL BACKGROUND (dark green/dark red from the same shared color
+// engine's dark theme, via colorClassStyle) with white text, replacing the
+// old white-background/colored-text rendering. When direction is unknown
+// (first row) or flat (unchanged from the previous row), the cell falls back
+// to the existing call/put-winner styling below (C_RANK_CALL/C_RANK_PUT),
+// unchanged. The number shown is always the actual Ranking value (never the
+// difference), and the underlying calculation/data are untouched — this is
+// pure display.
 
 export type RankDir = "up" | "down" | "flat" | "none";
 
@@ -189,12 +225,12 @@ function getCellStyle(colId: string, row: DashboardRow): CellColor {
 // doesn't round). Underlying values keep full precision for calculations —
 // only the rendered text is affected. Used for every price column.
 const p0 = (n: number | null | undefined): string =>
-  n == null || !Number.isFinite(n) ? "—" : Math.trunc(n).toLocaleString("en-IN");
+  n == null || !Number.isFinite(n) ? "—" : truncateForDisplay(n).toLocaleString("en-IN");
 
 // VWAP-specific: null means "no Volume to weight by yet" (client spec) —
 // distinct from the generic "—" used for every other not-yet-available cell.
 const fmtVwap = (n: number | null | undefined): string =>
-  n == null || !Number.isFinite(n) ? "VWAP Not Available" : Math.trunc(n).toLocaleString("en-IN");
+  n == null || !Number.isFinite(n) ? "VWAP Not Available" : truncateForDisplay(n).toLocaleString("en-IN");
 
 // The single visible EMA column shows the EMA20-vs-EMA200 comparison label,
 // not a raw EMA number (client spec) — score is row.emaScore, already
@@ -318,6 +354,58 @@ export function getCellValue(row: DashboardRow, colId: string, pivotMethod: Pivo
   }
 }
 
+// Raw (pre-formatting) counterpart of getCellValue — returns the actual
+// numeric/string value straight from DashboardRow, with no p0()/Math.trunc()
+// or other display rounding applied. Used only by the dev-only frozen-column
+// detector below, which must compare real values, not rendered text.
+export function getCellRawValue(row: DashboardRow, colId: string, pivotMethod: PivotMethod = "client"): number | string | null {
+  switch (colId) {
+    case "ce-o":      return row.call.o;
+    case "ce-h":      return row.call.h;
+    case "ce-l":      return row.call.l;
+    case "ce-c":      return row.call.c;
+    case "mma-c":     return row.callMMA;
+    case "tla-c":     return row.callTLA;
+    case "pe-o":      return row.put.o;
+    case "pe-h":      return row.put.h;
+    case "pe-l":      return row.put.l;
+    case "pe-c":      return row.put.c;
+    case "mma-p":     return row.putMMA;
+    case "tla-p":     return row.putTLA;
+    case "ranking":   return row.ranking;
+    case "fut-o":     return row.future.o;
+    case "fut-h":     return row.future.h;
+    case "fut-l":     return row.future.l;
+    case "fut-c":     return row.future.c;
+    case "fut-mma":   return row.futureMMA;
+    case "fut-tla":   return row.futureTLA;
+    case "spot-o":    return row.spot.o;
+    case "spot-h":    return row.spot.h;
+    case "spot-l":    return row.spot.l;
+    case "spot-c":    return row.spot.c;
+    case "spot-mma":  return row.spotMMA;
+    case "spot-tla":  return row.spotTLA;
+    case "smc":       return row.smc;
+    case "fib":       return row.fib;
+    case "rsi":       return row.rsi;
+    case "vwap":      return row.vwap;
+    case "ema200":       return row.ema200;
+    case "ema-score":    return row.emaScore;
+    case "vwap-score":   return row.vwapScore;
+    case "total-score":  return row.totalScore;
+    case "rating":       return row.rating;
+    case "signal":       return row.signal;
+    case "pp":        return pivotForBar(pivotMethod, row.future)?.pp ?? null;
+    case "r1":        return pivotForBar(pivotMethod, row.future)?.r1 ?? null;
+    case "r2":        return pivotForBar(pivotMethod, row.future)?.r2 ?? null;
+    case "r3":        return pivotForBar(pivotMethod, row.future)?.r3 ?? null;
+    case "s1":        return pivotForBar(pivotMethod, row.future)?.s1 ?? null;
+    case "s2":        return pivotForBar(pivotMethod, row.future)?.s2 ?? null;
+    case "s3":        return pivotForBar(pivotMethod, row.future)?.s3 ?? null;
+    default:          return null;
+  }
+}
+
 // ── Shimmer skeleton ──────────────────────────────────────────────────────────
 
 const SHIMMER_STYLE: React.CSSProperties = {
@@ -391,9 +479,14 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
   }, []);
 
   // Frozen-column detector — dev only.
-  // A column is "frozen" when every non-missing row shows the same value,
-  // which indicates the row builder copied one price into all rows instead
-  // of using per-bar data.
+  // A column is "frozen" when every non-missing row's RAW (pre-formatting)
+  // value is the same within FROZEN_DETECTOR_EPSILON, which indicates the row
+  // builder copied one price into all rows instead of using per-bar data.
+  // Compares getCellRawValue, never getCellValue/p0() — a column can display
+  // identical truncated text (e.g. 104.20/104.38/104.46/104.42 all showing
+  // "104") while the underlying calculation is changing correctly every row;
+  // that is a display-rounding artifact, not a frozen calculation, and must
+  // not be reported here.
   useEffect(() => {
     if (!import.meta.env.DEV || displayRows.length < 2) {
       if (frozenWarn.length > 0) setFrozenWarn([]);
@@ -401,16 +494,12 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
     }
     const frozen: string[] = [];
     for (const col of cols) {
-      // vwap excluded: "VWAP Not Available" legitimately repeats across every
-      // row until cumulative Future volume turns positive — not a sign of a
-      // frozen/duplicated data pipeline the way a repeated price would be.
-      // ema excluded: it's now a 3-way categorical label (CALL/PUT/NEUTRAL),
-      // not a continuous price — long runs of the same label are expected.
-      if (col.id === "datetime" || col.id === "smc" || col.id === "fib" || col.id === "vwap" || col.id === "ema") continue;
-      const vals = displayRows.map(row => getCellValue(row, col.id, pivotMethod));
-      const valid = vals.filter(v => v !== "—");
-      if (valid.length >= 2 && valid.every(v => v === valid[0])) {
-        console.warn(`[Worksheet] FROZEN COLUMN: "${col.sub}" (${col.id}) — all ${valid.length} rows = "${valid[0]}"`);
+      if (FROZEN_DETECTOR_EXCLUDED_COLS.has(col.id)) continue;
+      const raws = displayRows.map(row => getCellRawValue(row, col.id, pivotMethod));
+      const valid = raws.filter(isValidRawValue);
+      if (valid.length >= 2 && valid.every(v => rawValuesEqual(v, valid[0]))) {
+        const shown = typeof valid[0] === "number" ? valid[0].toFixed(4) : valid[0];
+        console.warn(`[Worksheet] FROZEN COLUMN: "${col.sub}" (${col.id}) — all ${valid.length} rows ≈ ${shown} (raw value, tolerance ${FROZEN_DETECTOR_EPSILON})`);
         frozen.push(col.sub);
       }
     }
@@ -693,9 +782,10 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                     && ci >= selRange.c1 && ci <= selRange.c2;
 
                   const cs = c.id in TRACKED_COLUMN_ACCESSORS
-                    ? colorClassStyle(liveColorGrid[c.id]?.[ri] ?? null)
+                    ? colorClassStyle(liveColorGrid[c.id]?.[ri] ?? null, TRACKED_COLUMN_THEME[c.id] ?? "light")
                     : getCellStyle(c.id, row);
                   let val = getCellValue(row, c.id, pivotMethod);
+                  let bg         = cs.bg;
                   let textColor  = cs.textColor;
                   let fontWeight = 400;
 
@@ -705,7 +795,12 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                     // has no previous bar and renders plain.
                     const dir = rankingDir(row.ranking, displayRows[ri - 1]?.ranking);
                     if (dir === "up" || dir === "down") {
-                      textColor  = dir === "up" ? C_RANK_UP_TEXT : C_RANK_DOWN_TEXT;
+                      // Direction as CELL BACKGROUND (dark green/dark red,
+                      // reused from the shared engine's dark theme) with
+                      // white text, replacing the old colored-text rendering.
+                      const rankStyle = colorClassStyle(dir === "up" ? "green" : "pink", "dark");
+                      bg         = rankStyle.bg;
+                      textColor  = rankStyle.textColor;
                       fontWeight = 600;
                     }
                     val = rankingDisplayValue(row, displayRows[ri - 1]);
@@ -722,7 +817,7 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                         whiteSpace: "nowrap",
                         userSelect: "none",
                         textAlign: (c.align ?? "center") as "left" | "right" | "center",
-                        background: isInSel ? "rgba(31,111,235,0.45)" : cs.bg,
+                        background: isInSel ? "rgba(31,111,235,0.45)" : bg,
                         color: textColor,
                         fontWeight,
                         outline: isInSel ? "1px solid #1F6FEB" : "none",
