@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildLiveColorGrid, isColorableValue } from "./cellColorRules";
+import { buildLiveColorGrid, colorClassStyle, isColorableValue, TRACKED_COLUMN_THEME } from "./cellColorRules";
 import type { DashboardRow, OHLCBar } from "../../calc";
 
 function bar(o: number): OHLCBar {
@@ -19,6 +19,11 @@ function rowWithCallOpen(o: number): DashboardRow {
   } as DashboardRow;
 }
 
+function rowWithCallHigh(h: number): DashboardRow {
+  const row = rowWithCallOpen(1);
+  return { ...row, call: { ...row.call, h } };
+}
+
 describe("buildLiveColorGrid — Rule 1 applied literally: 'Current > Highest -> Blue; Highest = Current'", () => {
   // NOTE: the spec's narrative walkthroughs (e.g. "56 -> Light Green, 57 ->
   // Light Green, 60 -> Blue" for a clean 55..60 climb) are inconsistent with
@@ -34,26 +39,26 @@ describe("buildLiveColorGrid — Rule 1 applied literally: 'Current > Highest ->
   // clean rally being highlighted Blue is also standard "new session high"
   // trading-UI behavior. Flagged for the team in case the narrative
   // walkthroughs reflect a different intended nuance.
-  it("55,56,57,60,58,44,61 -> null,blue,blue,blue,pink,black,blue", () => {
+  it("55,56,57,60,58,44,61 -> null,null,null,null,pink,black,blue (blue is singleton; pink/black split on the 15% drop threshold)", () => {
     const values = [55, 56, 57, 60, 58, 44, 61];
     const rows = values.map(rowWithCallOpen);
     const grid = buildLiveColorGrid(rows);
-    expect(grid["ce-o"]).toEqual([null, "blue", "blue", "blue", "pink", "black", "blue"]);
+    expect(grid["ce-o"]).toEqual([null, null, null, null, "pink", "black", "blue"]);
   });
 
-  it("color-details.md sequence: 55,56,57,58,59,60,58,56,44", () => {
+  it("color-details.md sequence: 55,56,57,58,59,60,58,56,44 -> only the LAST new high (60) stays blue; the two small drops stay pink, the big drop (44) is black", () => {
     const values = [55, 56, 57, 58, 59, 60, 58, 56, 44];
     const rows = values.map(rowWithCallOpen);
     const grid = buildLiveColorGrid(rows);
     expect(grid["ce-o"]).toEqual([
-      null, "blue", "blue", "blue", "blue", "blue", "pink", "pink", "black",
+      null, null, null, null, null, "blue", "pink", "pink", "black",
     ]);
   });
 
   it("highest resets only when the row array itself is rebuilt (new reference)", () => {
     const rows1 = [55, 56, 60].map(rowWithCallOpen);
     const grid1 = buildLiveColorGrid(rows1);
-    expect(grid1["ce-o"]).toEqual([null, "blue", "blue"]);
+    expect(grid1["ce-o"]).toEqual([null, null, "blue"]); // 56's blue is erased once 60 becomes the new highest
 
     // Simulate a timeframe switch: rows array rebuilt from scratch.
     const rows2 = [10, 20].map(rowWithCallOpen);
@@ -61,10 +66,39 @@ describe("buildLiveColorGrid — Rule 1 applied literally: 'Current > Highest ->
     expect(grid2["ce-o"]).toEqual([null, "blue"]); // 20 is a new high in the FRESH series, not compared to 60
   });
 
+  it("blue is a singleton: only the most recent new-highest row stays blue, earlier ones are repainted null", () => {
+    const values = [55, 56, 57, 58, 59, 60, 58, 61, 59, 70];
+    const rows = values.map(rowWithCallOpen);
+    const grid = buildLiveColorGrid(rows);
+    // Each new high (56,57,58,59,60,61,70) erases the PREVIOUS row's blue as
+    // it's assigned, so only 70 (idx9), the final new high, survives. The two
+    // drops (58,59) are both < 15% and stay pink (not singleton).
+    expect(grid["ce-o"]).toEqual([
+      null, null, null, null, null, null, "pink", null, "pink", "blue",
+    ]);
+  });
+
+  it("black is a singleton: only the most recent >=15% drop row stays black, earlier ones are repainted null", () => {
+    const values = [100, 80, 90, 70, 85, 60];
+    const rows = values.map(rowWithCallOpen);
+    const grid = buildLiveColorGrid(rows);
+    // Each drop (80,70,60) erases the PREVIOUS row's black as it's assigned,
+    // so only 60 (idx5), the final drop, survives.
+    expect(grid["ce-o"]).toEqual([null, null, "green", null, "green", "black"]);
+  });
+
   it("Highest=100 / previous=82 / current=85 -> green (not a new high)", () => {
     const rows = [100, 82, 85].map(rowWithCallOpen);
     const grid = buildLiveColorGrid(rows);
     expect(grid["ce-o"]).toEqual([null, "black", "green"]);
+  });
+
+  it("a small drop (< 15%) stays pink, not black", () => {
+    // 100 -> 99 is a ~1% drop — well under the 15% threshold, so it must
+    // stay pink.
+    const rows = [100, 99].map(rowWithCallOpen);
+    const grid = buildLiveColorGrid(rows);
+    expect(grid["ce-o"]).toEqual([null, "pink"]);
   });
 
   it("equal values produce no color", () => {
@@ -83,7 +117,7 @@ describe("buildLiveColorGrid — Rule 1 applied literally: 'Current > Highest ->
   it("columns are fully independent (Call Open vs Put Open never influence each other)", () => {
     const rows: DashboardRow[] = [
       { ...rowWithCallOpen(50), put: bar(90) },
-      { ...rowWithCallOpen(60), put: bar(80) }, // ce-o up -> green/blue, pe-o down -> pink/black
+      { ...rowWithCallOpen(60), put: bar(80) }, // ce-o up -> blue, pe-o down -> pink
     ];
     const grid = buildLiveColorGrid(rows);
     expect(grid["ce-o"][1]).toBe("blue"); // 60 > 50, new high
@@ -96,6 +130,50 @@ describe("buildLiveColorGrid — Rule 1 applied literally: 'Current > Highest ->
     expect(isColorableValue(Infinity)).toBe(false);
     expect(isColorableValue(-5)).toBe(true);
     expect(isColorableValue(5)).toBe(true);
+  });
+});
+
+// ── High/Low/Close dark blue/black theme ──────────────────────────────────────
+// Client revision: High/Low/Close (and now Open too — see the TRACKED_COLUMN_THEME
+// check below) keep light green/pink but switch blue/black to the darker
+// "dark" palette. The underlying color CLASS assigned per cell
+// (blue/green/pink/black) is unchanged by this — only which CellColorStyle
+// colorClassStyle() resolves it to differs. The green/pink hex values
+// themselves (LIGHT_THEME_STYLE / DARK_THEME_STYLE) are untouched.
+describe("High/Low/Close use light green/pink but dark blue/black (\"hlc\" theme)", () => {
+  it("Call High reproduces the same singleton blue/black class sequence as Call Open", () => {
+    const values = [55, 56, 57, 58, 59, 60, 58, 56, 44];
+    const rows = values.map(rowWithCallHigh);
+    const grid = buildLiveColorGrid(rows);
+    expect(grid["ce-h"]).toEqual([
+      null, null, null, null, null, "blue", "pink", "pink", "black",
+    ]);
+  });
+
+  it("colorClassStyle('blue'/'black', 'hlc') matches the dark theme; green/pink match the light theme", () => {
+    const dark = colorClassStyle("blue", "dark");
+    const light = colorClassStyle("green", "light");
+    const lightPink = colorClassStyle("pink", "light");
+    const darkBlack = colorClassStyle("black", "dark");
+
+    expect(colorClassStyle("blue", "hlc")).toEqual(dark);
+    expect(colorClassStyle("black", "hlc")).toEqual(darkBlack);
+    expect(colorClassStyle("green", "hlc")).toEqual(light);
+    expect(colorClassStyle("pink", "hlc")).toEqual(lightPink);
+  });
+
+  it("colorClassStyle('blue', 'light') still resolves to the light-blue swatch (the 'light' theme's own values are untouched)", () => {
+    expect(colorClassStyle("blue", "light")).toEqual({ bg: "#BFDBFE", textColor: "#1E3A8A" });
+  });
+
+  it("Open now uses the SAME 'hlc' theme as High/Low/Close (client revision), not the plain 'light' theme", () => {
+    expect(TRACKED_COLUMN_THEME["ce-o"]).toBe("hlc");
+    expect(TRACKED_COLUMN_THEME["pe-o"]).toBe("hlc");
+    expect(TRACKED_COLUMN_THEME["fut-o"]).toBe("hlc");
+    expect(TRACKED_COLUMN_THEME["spot-o"]).toBe("hlc");
+    expect(TRACKED_COLUMN_THEME["ce-h"]).toBe("hlc");
+    expect(TRACKED_COLUMN_THEME["ce-l"]).toBe("hlc");
+    expect(TRACKED_COLUMN_THEME["ce-c"]).toBe("hlc");
   });
 });
 
