@@ -249,16 +249,18 @@ export function SidebarDezproxFooter({
 // deliberately smaller and quieter than the page's own title.
 
 export function DocsDezproxBanner({
-  border = "#d8e0ea",
   muted = "#5b6b82",
   accent = "#16a34a",
-}: { border?: string; muted?: string; accent?: string }) {
+}: { muted?: string; accent?: string }) {
   return (
     <div style={{
-      display: "block", alignItems: "center", gap: 5,
-      padding: "0 0 14px",
-      marginBottom: 16,
-      borderBottom: `1px solid ${border}`,
+      display: "block",
+      alignItems: "center",
+      gap: 8,
+      // width: "100%",
+      backgroundColor: "#fff",
+      padding: "10px 30px 10px",
+      marginBottom: 0,
     }}>
       <DezproxMark size={26} accent={accent} />
       

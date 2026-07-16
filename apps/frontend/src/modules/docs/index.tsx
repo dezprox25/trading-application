@@ -17,17 +17,17 @@ import { DocsDezproxBanner } from "../../components/branding/Dezprox";
 import { ProductInfoCard } from "./ProductInfoCard";
 
 // ── Design tokens (match app theme) ──────────────────────────────────────────
-const CALL_BG    = "#D6E4F2";
-const CALL_HDR   = "#2E75B6";
-const PUT_BG     = "#FBE2CE";
-const PUT_HDR    = "#C55A11";
-const BORDER     = "#d8e0ea";
-const TEXT       = "#102033";
-const MUTED      = "#5b6b82";
-const GREEN      = "#16a34a";
-const AMBER      = "#d97706";
-const FONT       = "'Inter', 'Segoe UI', system-ui, sans-serif";
-const MONO       = "'Consolas', 'Courier New', monospace";
+const CALL_BG = "#D6E4F2";
+const CALL_HDR = "#2E75B6";
+const PUT_BG = "#FBE2CE";
+const PUT_HDR = "#C55A11";
+const BORDER = "#d8e0ea";
+const TEXT = "#102033";
+const MUTED = "#5b6b82";
+const GREEN = "#16a34a";
+const AMBER = "#d97706";
+const FONT = "'Inter', 'Segoe UI', system-ui, sans-serif";
+const MONO = "'Consolas', 'Courier New', monospace";
 
 // ── FormulaChip / code block ──────────────────────────────────────────────────
 
@@ -365,8 +365,8 @@ function BlockRenderer({
           {block.endpoints.map((e, i) => {
             const methodColor =
               e.method === "GET" ? "#2E75B6" :
-              e.method === "POST" ? "#16a34a" :
-              e.method === "PUT" ? AMBER : "#DC2626";
+                e.method === "POST" ? "#16a34a" :
+                  e.method === "PUT" ? AMBER : "#DC2626";
             return (
               <div key={i} style={{ border: `1px solid ${BORDER}`, borderRadius: 8, padding: "10px 14px", background: "#fff" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 5 }}>
@@ -684,12 +684,12 @@ function CategoryNav({
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export function DocsPage() {
-  const [query, setQuery]               = useState("");
-  const [expandedCols, setExpandedCols]  = useState<Set<string>>(new Set());
-  const [activeId, setActiveId]          = useState<string>("");
-  const [expandedCats, setExpandedCats]  = useState<Set<string>>(new Set(["module1", "app-details"]));
+  const [query, setQuery] = useState("");
+  const [expandedCols, setExpandedCols] = useState<Set<string>>(new Set());
+  const [activeId, setActiveId] = useState<string>("");
+  const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set(["module1", "app-details"]));
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const observerRef                      = useRef<IntersectionObserver | null>(null);
+  const observerRef = useRef<IntersectionObserver | null>(null);
 
   const q = query.toLowerCase().trim();
   const autoExp = useMemo(() => matchingColIds(CATEGORIES, q), [q]);
@@ -779,6 +779,27 @@ export function DocsPage() {
         .docs-mobile-toggle { display: none; }
         .docs-nav-backdrop  { display: none; }
 
+        .docs-fixed-header {
+        display: flex;
+          position: sticky;
+          justify-content: space-between;
+          top: 0px;
+          left: 250px;
+          right: 0;
+          z-index: 40;
+          background: #fff;
+          padding-top: 5px;
+          padding-left: 24px;
+          padding-right: 24px;
+          padding-bottom: 12px;
+          border-bottom: 1.5px solid #d8e0ea;
+          // box-shadow: 0 10px 30px rgba(15,23,42,0.08);
+        }
+
+        .docs-main {
+          padding-top: 140px;
+        }
+
         @media (max-width: 860px) {
           .docs-toc-panel {
             position: fixed !important;
@@ -797,10 +818,97 @@ export function DocsPage() {
             position: fixed; inset: 60px 0 0 0; z-index: 55;
             background: rgba(15,23,42,0.35);
           }
-          .docs-main { padding: 20px 16px !important; max-width: 100% !important; }
+          .docs-fixed-header {
+            left: 0;
+            right: 0;
+            width: 100%;
+          }
+          .docs-main { padding: 140px 16px 28px !important; max-width: 100% !important; }
         }
       `}</style>
+      <div className="docs-fixed-header ">
+        {/* <DocsDezproxBanner /> */}
 
+        {/* <ProductInfoCard /> */}
+        <button
+          className="docs-print-btn"
+          onClick={handlePrint}
+          style={{
+            flexShrink: 0,
+            fontFamily: FONT, fontSize: 12, fontWeight: 700,
+            padding: "8px 16px", borderRadius: 7,
+            border: 'none',
+            background: "#fff", color: MUTED,
+            cursor: "pointer", display: "flex",
+            alignItems: "center", gap: 7,
+            transition: "all 0.15s",
+          }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.borderColor = GREEN;
+            (e.currentTarget as HTMLButtonElement).style.color = GREEN;
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.borderColor = BORDER;
+            (e.currentTarget as HTMLButtonElement).style.color = MUTED;
+          }}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <polyline points="6 9 6 2 18 2 18 9" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><rect x="6" y="14" width="12" height="8" />
+          </svg>
+          Print / Save as PDF
+        </button>
+        {/* Page header */}
+        <div style={{
+          display: "flex",
+          textAlign: "center",
+          alignItems: "flex-center",
+          justifyContent: "space-between", marginBottom: 0,
+          paddingBottom: 5, borderBottom: "none",
+          gap: 16, flexWrap: "wrap",
+        }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+            <button
+              className="docs-mobile-toggle"
+              onClick={() => setMobileNavOpen((o) => !o)}
+              aria-label="Toggle contents"
+              style={{
+                flexShrink: 0, marginTop: 2,
+                width: 34, height: 34, borderRadius: 7,
+
+                border: `1.5px solid ${BORDER}`, background: "#fff",
+                alignItems: "center", justifyContent: "center", cursor: "pointer",
+                color: TEXT,
+              }}
+            >
+              ☰
+            </button>
+            <div>
+              <div style={{
+                fontSize: 11, fontWeight: 700, color: GREEN,
+
+                textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 6,
+              }}>
+                Platform Guide
+              </div>
+              <h1 style={{
+                margin: 0, fontSize: 26, fontWeight: 900,
+                color: TEXT, letterSpacing: "-0.02em",
+              }}>
+                📖 Documentation
+              </h1>
+              <p style={{ margin: "6px 0 0", fontSize: 13, color: MUTED, fontWeight: 500 }}>
+                Module documentation for traders, and application details for developers.
+              </p>
+            </div>
+          </div>
+
+
+        </div>
+
+
+        <DocsDezproxBanner />
+
+      </div>
       <div
         className="docs-page-root"
         style={{
@@ -843,7 +951,7 @@ export function DocsPage() {
                 fill="none" stroke={MUTED} strokeWidth="2.5"
                 style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }}
               >
-                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
               </svg>
               <input
                 type="text"
@@ -926,7 +1034,7 @@ export function DocsPage() {
               }}
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>
+                <polyline points="6 9 6 2 18 2 18 9" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><rect x="6" y="14" width="12" height="8" />
               </svg>
               Print / Save as PDF
             </button>
@@ -934,88 +1042,17 @@ export function DocsPage() {
         </aside>
 
         {/* ── Right content ──────────────────────────────────────────────── */}
+
         <main
           className="docs-main"
           style={{
             flex: 1,
             padding: "28px 36px",
-            maxWidth: 900,
             minWidth: 0,
+            position: "relative",
           }}
         >
-          <DocsDezproxBanner />
 
-          {/* <ProductInfoCard /> */}
-
-          {/* Page header */}
-          <div style={{
-            display: "flex", alignItems: "flex-start",
-            justifyContent: "space-between", marginBottom: 24,
-            paddingBottom: 20, borderBottom: `1.5px solid ${BORDER}`,
-            gap: 16, flexWrap: "wrap",
-          }}>
-            <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-              <button
-                className="docs-mobile-toggle"
-                onClick={() => setMobileNavOpen((o) => !o)}
-                aria-label="Toggle contents"
-                style={{
-                  flexShrink: 0, marginTop: 2,
-                  width: 34, height: 34, borderRadius: 7,
-                  border: `1.5px solid ${BORDER}`, background: "#fff",
-                  alignItems: "center", justifyContent: "center", cursor: "pointer",
-                  color: TEXT,
-                }}
-              >
-                ☰
-              </button>
-              <div>
-                <div style={{
-                  fontSize: 11, fontWeight: 700, color: GREEN,
-                  textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 6,
-                }}>
-                  Platform Guide
-                </div>
-                <h1 style={{
-                  margin: 0, fontSize: 26, fontWeight: 900,
-                  color: TEXT, letterSpacing: "-0.02em",
-                }}>
-                  📖 Documentation
-                </h1>
-                <p style={{ margin: "6px 0 0", fontSize: 13, color: MUTED, fontWeight: 500 }}>
-                  Module documentation for traders, and application details for developers.
-                </p>
-              </div>
-            </div>
-            <button
-              className="docs-print-btn"
-              onClick={handlePrint}
-              style={{
-                flexShrink: 0,
-                fontFamily: FONT, fontSize: 12, fontWeight: 700,
-                padding: "8px 16px", borderRadius: 7,
-                border: `1.5px solid ${BORDER}`,
-                background: "#fff", color: MUTED,
-                cursor: "pointer", display: "flex",
-                alignItems: "center", gap: 7,
-                transition: "all 0.15s",
-              }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.borderColor = GREEN;
-                (e.currentTarget as HTMLButtonElement).style.color = GREEN;
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.borderColor = BORDER;
-                (e.currentTarget as HTMLButtonElement).style.color = MUTED;
-              }}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>
-              </svg>
-              Print / Save as PDF
-            </button>
-            
-          </div>
 
           {/* Search result hint */}
           {q && (
@@ -1050,7 +1087,7 @@ export function DocsPage() {
             Pivot Intelligence v1.0 · Authorised Access Only · Analysis tool — no orders placed
           </p>
         </main>
-        
+
       </div>
     </>
   );
