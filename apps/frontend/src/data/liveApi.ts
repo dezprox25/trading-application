@@ -1,26 +1,53 @@
 import { api } from "../utils/api";
 import type { Expiry, Strike } from "./models";
 
-// ── Live expiry/strike data ───────────────────────────────────────────────────
+// ── Live selection data (Exchange → Instrument → Symbol → Expiry → Strike) ───
 //
-// Backed by the real NFO instrument master Zebu already downloads for the live
-// feed (instrumentTokenService.ts on the backend) — not a synthetic generator.
-// Instrument-type/symbol lists live in ../data/tradingConfig.ts (data-driven,
-// no fetch needed).
+// Every level is backed by the real broker instrument master(s) Zebu downloads
+// (instrumentTokenService.ts on the backend) — nothing here is a static/hardcoded
+// catalog. Each fetch is filtered by the levels selected above it.
 
-/** Every real, currently-active expiry for the selected symbol, ascending. */
-export const fetchSymbolExpiries = async (instrument: string): Promise<Expiry[]> => {
-  if (!instrument) return [];
-  const data = await api.get(`/api/module1/expiries/${instrument}`);
+/** Every exchange the broker's live instrument masters actually have data for,
+ *  sorted — a pass-through of the broker's own Exchange field, never a
+ *  hardcoded/inferred list. First selector in the chain. */
+export const fetchExchanges = async (): Promise<string[]> => {
+  const data = await api.get(`/api/module1/exchanges`);
+  return Array.isArray(data?.exchanges) ? data.exchanges : [];
+};
+
+/** Every instrument type (OPTIDX, FUTCOM, EQ, INDEX, ...) the broker has under
+ *  the given exchange. */
+export const fetchInstrumentTypes = async (exchange: string): Promise<string[]> => {
+  if (!exchange) return [];
+  const data = await api.get(`/api/module1/instruments?exchange=${encodeURIComponent(exchange)}`);
+  return Array.isArray(data?.instruments) ? data.instruments : [];
+};
+
+/** Every symbol the broker has under the given exchange + instrument type. */
+export const fetchSymbols = async (exchange: string, instrument: string): Promise<string[]> => {
+  if (!exchange || !instrument) return [];
+  const params = new URLSearchParams({ exchange, instrument });
+  const data = await api.get(`/api/module1/symbols?${params.toString()}`);
+  return Array.isArray(data?.symbols) ? data.symbols : [];
+};
+
+/** Every real, currently-active expiry for the given exchange + instrument +
+ *  symbol, ascending. Empty for cash instruments (e.g. NSE EQ/INDEX) — no
+ *  separate "needs expiry" flag required, the data itself answers that. */
+export const fetchSymbolExpiries = async (exchange: string, instrument: string, symbol: string): Promise<Expiry[]> => {
+  if (!exchange || !instrument || !symbol) return [];
+  const params = new URLSearchParams({ exchange, instrument, symbol });
+  const data = await api.get(`/api/module1/expiries?${params.toString()}`);
   return Array.isArray(data?.expiries) ? data.expiries : [];
 };
 
-/** Every real strike price for the selected symbol + expiry, ascending. */
+/** Every real strike price for the given exchange + instrument + symbol +
+ *  expiry, ascending. */
 export const fetchStrikes = async (
-  instrument: string,
-  expiryId: string,
+  exchange: string, instrument: string, symbol: string, expiryId: string,
 ): Promise<Strike[]> => {
-  if (!instrument || !expiryId) return [];
-  const data = await api.get(`/api/module1/strikes/${instrument}/${expiryId}`);
+  if (!exchange || !instrument || !symbol || !expiryId) return [];
+  const params = new URLSearchParams({ exchange, instrument, symbol, expiryId });
+  const data = await api.get(`/api/module1/strikes?${params.toString()}`);
   return Array.isArray(data?.strikes) ? data.strikes : [];
 };

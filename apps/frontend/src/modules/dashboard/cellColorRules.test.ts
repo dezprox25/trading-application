@@ -39,7 +39,7 @@ describe("buildLiveColorGrid — Rule 1 applied literally: 'Current > Highest ->
   // clean rally being highlighted Blue is also standard "new session high"
   // trading-UI behavior. Flagged for the team in case the narrative
   // walkthroughs reflect a different intended nuance.
-  it("55,56,57,60,58,44,61 -> null,null,null,null,pink,black,blue (blue is singleton; pink/black split on the 15% drop threshold)", () => {
+  it("55,56,57,60,58,44,61 -> null,null,null,null,pink,black,blue (blue is singleton; pink/black split on whether the drop is a new all-time low)", () => {
     const values = [55, 56, 57, 60, 58, 44, 61];
     const rows = values.map(rowWithCallOpen);
     const grid = buildLiveColorGrid(rows);
@@ -78,13 +78,13 @@ describe("buildLiveColorGrid — Rule 1 applied literally: 'Current > Highest ->
     ]);
   });
 
-  it("black is a singleton: only the most recent >=15% drop row stays black, earlier ones are repainted null", () => {
+  it("black is a singleton: only the most recent new-lowest row stays black, earlier ones are repainted pink", () => {
     const values = [100, 80, 90, 70, 85, 60];
     const rows = values.map(rowWithCallOpen);
     const grid = buildLiveColorGrid(rows);
-    // Each drop (80,70,60) erases the PREVIOUS row's black as it's assigned,
-    // so only 60 (idx5), the final drop, survives.
-    expect(grid["ce-o"]).toEqual([null, null, "green", null, "green", "black"]);
+    // Each new low (80,70,60) repaints the PREVIOUS row's black to pink as
+    // it's assigned, so only 60 (idx5), the final new low, stays black.
+    expect(grid["ce-o"]).toEqual([null, "pink", "green", "pink", "green", "black"]);
   });
 
   it("Highest=100 / previous=82 / current=85 -> green (not a new high)", () => {
@@ -93,12 +93,13 @@ describe("buildLiveColorGrid — Rule 1 applied literally: 'Current > Highest ->
     expect(grid["ce-o"]).toEqual([null, "black", "green"]);
   });
 
-  it("a small drop (< 15%) stays pink, not black", () => {
-    // 100 -> 99 is a ~1% drop — well under the 15% threshold, so it must
-    // stay pink.
-    const rows = [100, 99].map(rowWithCallOpen);
+  it("a drop that is NOT a new all-time low stays pink, not black — and doesn't disturb the existing black", () => {
+    // 100 -> 90 is a new low -> black. 95 -> green (up, not a new high).
+    // 92 is a drop but 92 > 90 (the running lowest), so it's pink, not a
+    // new black — and the earlier black at idx1 is left untouched.
+    const rows = [100, 90, 95, 92].map(rowWithCallOpen);
     const grid = buildLiveColorGrid(rows);
-    expect(grid["ce-o"]).toEqual([null, "pink"]);
+    expect(grid["ce-o"]).toEqual([null, "black", "green", "pink"]);
   });
 
   it("equal values produce no color", () => {
@@ -121,7 +122,7 @@ describe("buildLiveColorGrid — Rule 1 applied literally: 'Current > Highest ->
     ];
     const grid = buildLiveColorGrid(rows);
     expect(grid["ce-o"][1]).toBe("blue"); // 60 > 50, new high
-    expect(grid["pe-o"][1]).toBe("pink"); // 80 < 90, drop = 11.1% < 15%
+    expect(grid["pe-o"][1]).toBe("black"); // 80 < 90, and it's a new low (first drop in the column)
   });
 
   it("isColorableValue treats 0/NaN/Infinity as invalid, negatives as valid", () => {

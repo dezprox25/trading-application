@@ -7,6 +7,8 @@ export interface Tick {
   timestamp: Date;
   volume?: number;
   oi?: number;
+  /** Broker's own exchange for this tick (e.g. "NFO"), pass-through — not inferred. */
+  exchange?: string;
 }
 
 export interface Candle {

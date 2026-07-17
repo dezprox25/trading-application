@@ -16,7 +16,10 @@ import {
   getMarketStatus,
   getModuleStatus,
   getModule1Expiries,
-  getModule1Strikes
+  getModule1Strikes,
+  getModule1Exchanges,
+  getModule1Instruments,
+  getModule1Symbols
 } from "../controllers/market";
 
 const router = Router();
@@ -41,8 +44,13 @@ router.get("/module/status", authenticate, getModuleStatus);
 router.get("/module1/indicators/:symbol", authenticate, getIndicatorsEndpoint);
 router.get("/module1/latest-oi", getModule1LatestOi);
 
-// Module 1 Expiry/Strike dropdowns (real NFO instrument-master data)
-router.get("/module1/expiries/:symbol", authenticate, getModule1Expiries);
-router.get("/module1/strikes/:symbol/:expiryId", authenticate, getModule1Strikes);
+// Module 1 dropdown discovery: Exchange → Instrument → Symbol → Expiry → Strike
+// (real broker instrument-master data; each is filtered by the levels above it,
+// via query params — no endpoint assumes a particular exchange/instrument)
+router.get("/module1/exchanges", authenticate, getModule1Exchanges);
+router.get("/module1/instruments", authenticate, getModule1Instruments);
+router.get("/module1/symbols", authenticate, getModule1Symbols);
+router.get("/module1/expiries", authenticate, getModule1Expiries);
+router.get("/module1/strikes", authenticate, getModule1Strikes);
 
 export default router;

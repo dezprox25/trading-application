@@ -9,8 +9,8 @@ import type { DashboardRow } from "../../calc";
 // Rules (evaluated per cell, against that SAME column's own running state):
 //   current > all-time-high-so-far   → "blue"  (new high), highest updates
 //   current > previous, not new high → "green"
-//   current < previous, drop < 15%   → "pink"
-//   current < previous, drop >= 15%  → "black"
+//   current < all-time-low-so-far    → "black" (new low), lowest updates
+//   current < previous, not new low  → "pink"
 //   current === previous             → null (no color change)
 //   first valid value in the column  → null (nothing to compare against yet)
 //
@@ -23,11 +23,14 @@ import type { DashboardRow } from "../../calc";
 // always recomputed from row 0 of the CURRENT `rows` array.
 //
 // Blue and Black are additionally "singleton" per column: only the MOST
-// RECENT new-high (blue) and the MOST RECENT >=15% drop (black) stay
-// highlighted. When a later row earns a fresh blue/black, the previous row
-// that held that color is repainted to null (see lastBlueIndex/lastBlackIndex
-// in buildLiveColorGrid below). Green/pink are unaffected and can appear on
-// any number of rows simultaneously.
+// RECENT new-high (blue) and the MOST RECENT new-low (black) stay
+// highlighted. When a later row earns a fresh blue, the previous row that
+// held it is repainted to null; when a later row earns a fresh black, the
+// previous row that held it is repainted to pink instead (see
+// lastBlueIndex/lastBlackIndex in buildLiveColorGrid below). Green is
+// unaffected and can appear on any number of rows simultaneously; pink can
+// appear on any number of rows too (both directly, for a drop that isn't a
+// new low, and via a black cell being repainted).
 
 // Single source of truth for "the number the trader actually sees" — the
 // Worksheet's p0()/fmtVwap() truncate to a whole number for display
@@ -61,22 +64,22 @@ const DEFAULT_STYLE: CellColorStyle = { bg: "#FFFFFF", textColor: "#000000" };
 //             reads more emphatically on these columns
 //   "dark"  — Call/Put/Future/Spot MMA/TLA + the Indicators section
 //             (stronger backgrounds, white text, throughout)
-// "black" (drop >= 15%) is intentionally identical across "hlc" and "dark" —
-// a large drop reads the same regardless of column group.
+// "black" (new lowest) is intentionally identical across "hlc" and "dark" —
+// a new low reads the same regardless of column group.
 export type ColorTheme = "light" | "hlc" | "dark";
 
 const LIGHT_THEME_STYLE: Record<Exclude<ColorClass, null>, CellColorStyle> = {
   blue:  { bg: "#BFDBFE", textColor: "#1E3A8A" }, // light blue — new highest
   green: { bg: "#BBF7D0", textColor: "#065F46" }, // light green — up, not a new highest
-  pink:  { bg: "#FBD5D5", textColor: "#7F1D1D" }, // light pink — down, drop < 15%
-  black: { bg: "#111827", textColor: "#FFFFFF" }, // down, drop >= 15%
+  pink:  { bg: "#FBD5D5", textColor: "#7F1D1D" }, // light pink — down, not a new lowest
+  black: { bg: "#111827", textColor: "#FFFFFF" }, // down, new lowest
 };
 
 const DARK_THEME_STYLE: Record<Exclude<ColorClass, null>, CellColorStyle> = {
   blue:  { bg: "#1E3A8A", textColor: "#FFFFFF" }, // dark blue — new highest
   green: { bg: "#065F46", textColor: "#FFFFFF" }, // dark green — up, not a new highest
-  pink:  { bg: "#7F1D1D", textColor: "#FFFFFF" }, // dark red — down, drop < 15%
-  black: { bg: "#111827", textColor: "#FFFFFF" }, // down, drop >= 15%
+  pink:  { bg: "#7F1D1D", textColor: "#FFFFFF" }, // dark red — down, not a new lowest
+  black: { bg: "#111827", textColor: "#FFFFFF" }, // down, new lowest
 };
 
 // Open/High/Low/Close: light green/pink (same as LIGHT_THEME_STYLE) but dark
@@ -181,20 +184,22 @@ export function isColorableValue(v: number | null | undefined): v is number {
 function nextColorStep(
   current: number,
   prevValue: number | null,
-  highestBefore: number | null
-): { colorClass: ColorClass; nextHighest: number } {
+  highestBefore: number | null,
+  lowestBefore: number | null
+): { colorClass: ColorClass; nextHighest: number; nextLowest: number } {
   const nextHighest = highestBefore === null ? current : Math.max(highestBefore, current);
+  const nextLowest = lowestBefore === null ? current : Math.min(lowestBefore, current);
 
   if (prevValue === null || current === prevValue) {
-    return { colorClass: null, nextHighest };
+    return { colorClass: null, nextHighest, nextLowest };
   }
   if (current > prevValue) {
     const isNewHigh = highestBefore === null || current > highestBefore;
-    return { colorClass: isNewHigh ? "blue" : "green", nextHighest };
+    return { colorClass: isNewHigh ? "blue" : "green", nextHighest, nextLowest };
   }
   // current < prevValue
-  const dropPct = ((prevValue - current) / prevValue) * 100;
-  return { colorClass: dropPct >= 15 ? "black" : "pink", nextHighest };
+  const isNewLow = lowestBefore === null || current < lowestBefore;
+  return { colorClass: isNewLow ? "black" : "pink", nextHighest, nextLowest };
 }
 
 // One left-to-right pass per tracked column (O(rows × columns), no
@@ -210,9 +215,12 @@ export function buildLiveColorGrid(rows: DashboardRow[]): Record<string, ColorCl
     const colColors: ColorClass[] = new Array(rows.length).fill(null);
     let prevValue: number | null = null;
     let highest: number | null = null;
+    let lowest: number | null = null;
     // Index of the row currently holding this column's blue/black — at most
-    // one of each may be lit at a time. When a later row earns a fresh
-    // blue/black, the row at the recorded index is repainted to null first.
+    // one of each may be lit at a time. When a later row earns a fresh blue,
+    // the row at the recorded index is repainted to null first. When a later
+    // row earns a fresh black, the row at the recorded index is repainted to
+    // pink first.
     let lastBlueIndex: number | null = null;
     let lastBlackIndex: number | null = null;
 
@@ -227,19 +235,20 @@ export function buildLiveColorGrid(rows: DashboardRow[]): Record<string, ColorCl
       }
       if (!isColorableValue(raw)) continue; // missing/invalid — no color, don't touch tracking
 
-      const step = nextColorStep(raw, prevValue, highest);
+      const step = nextColorStep(raw, prevValue, highest, lowest);
 
       if (step.colorClass === "blue") {
         if (lastBlueIndex !== null) colColors[lastBlueIndex] = null;
         lastBlueIndex = i;
       } else if (step.colorClass === "black") {
-        if (lastBlackIndex !== null) colColors[lastBlackIndex] = null;
+        if (lastBlackIndex !== null) colColors[lastBlackIndex] = "pink";
         lastBlackIndex = i;
       }
 
       colColors[i] = step.colorClass;
       prevValue = raw;
       highest = step.nextHighest;
+      lowest = step.nextLowest;
     }
 
     grid[colId] = colColors;

@@ -102,7 +102,7 @@ export const initSocketServer = (io: Server) => {
           const wantedSymbol = `${instrument.toUpperCase()}${expiry}${letter}${w.strike}`;
           const resolved = resolveOptionInstrument(instrument, expiry, w.strike, w.optionType);
           if (resolved) {
-            console.log(`[Feed:SUB] On-demand resolve OK — ${resolved.symbol} → NFO|${resolved.exchange}|${resolved.token} (requested by ${socket.id})`);
+            console.log(`[Feed:SUB] On-demand resolve OK — ${resolved.symbol} → ${resolved.exchange}|${resolved.token} (requested by ${socket.id})`);
             subscribeOptionTokens([resolved]);
           } else {
             // Distinguishes "we looked it up and it doesn't exist" (bad strike/expiry, or

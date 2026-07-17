@@ -2,9 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useDashStore } from "./store";
 import { useStore } from "../../store/useStore";
-import { fetchSymbolExpiries, fetchStrikes } from "../../data/liveApi";
+import { fetchExchanges, fetchInstrumentTypes, fetchSymbols, fetchSymbolExpiries, fetchStrikes } from "../../data/liveApi";
 import { formatExpiryDisplay } from "../../data/models";
-import { INSTRUMENT_TYPES, tradingConfig, requiresExpiry } from "../../data/tradingConfig";
 
 // ── Live price hook ───────────────────────────────────────────────────────────
 
@@ -133,10 +132,10 @@ function LivePrice({ label, value, dir }: { label: string; value: number | null;
 
 export function ConfigRow() {
   const {
-    instrumentType, instrument, type, callStrike, putStrike,
+    exchange, instrumentType, instrument, type, callStrike, putStrike,
     expiryDate,
     isGenerated,
-    setInstrumentType, setInstrument, setType,
+    setExchange, setInstrumentType, setInstrument, setType,
     setCallStrike, setPutStrike,
     setExpiryDate,
     generate, reset,
@@ -146,23 +145,47 @@ export function ConfigRow() {
   const { ltp: spotLtp,   dir: spotDir }   = useLivePrice("NIFTY-SPOT");
   const { ltp: futureLtp, dir: futureDir } = useLivePrice("NIFTY-FUT");
 
-  const needsExpiry = requiresExpiry(instrumentType);
+  // ── Dependent data (Exchange → Instrument type → Symbol → Expiry → Strike) ───
+  // Every level below is fetched live from the broker's instrument master via
+  // ../../data/liveApi.ts — nothing is a static/hardcoded catalog, and each
+  // query is filtered by every level selected above it.
 
-  // ── Dependent data (Instrument type → Symbol → Expiry → Strike) ──────────────
-
-  const symbols = tradingConfig[instrumentType]?.symbols ?? [];
-
-  const { data: expiries = [], isLoading: loadExp } = useQuery({
-    queryKey: ["expiries", instrument],
-    queryFn: () => fetchSymbolExpiries(instrument),
-    enabled: !!instrument && needsExpiry,
+  const { data: exchanges = [], isLoading: loadExch } = useQuery({
+    queryKey: ["exchanges"],
+    queryFn: fetchExchanges,
     staleTime: Infinity,
   });
 
+  const { data: instrumentTypes = [], isLoading: loadInst } = useQuery({
+    queryKey: ["instrumentTypes", exchange],
+    queryFn: () => fetchInstrumentTypes(exchange),
+    enabled: !!exchange,
+    staleTime: Infinity,
+  });
+
+  const { data: symbols = [], isLoading: loadSym } = useQuery({
+    queryKey: ["symbols", exchange, instrumentType],
+    queryFn: () => fetchSymbols(exchange, instrumentType),
+    enabled: !!exchange && !!instrumentType,
+    staleTime: Infinity,
+  });
+
+  const { data: expiries = [], isLoading: loadExp } = useQuery({
+    queryKey: ["expiries", exchange, instrumentType, instrument],
+    queryFn: () => fetchSymbolExpiries(exchange, instrumentType, instrument),
+    enabled: !!exchange && !!instrumentType && !!instrument,
+    staleTime: Infinity,
+  });
+
+  // Whether this symbol has an options/futures chain at all — derived from the
+  // live data itself (empty for cash instruments like NSE EQ/INDEX), not a
+  // hardcoded instrument-type set.
+  const expiryApplies = expiries.length > 0;
+
   const { data: strikes = [], isLoading: loadSt } = useQuery({
-    queryKey: ["strikes", instrument, expiryDate],
-    queryFn: () => fetchStrikes(instrument, expiryDate),
-    enabled: !!instrument && !!expiryDate,
+    queryKey: ["strikes", exchange, instrumentType, instrument, expiryDate],
+    queryFn: () => fetchStrikes(exchange, instrumentType, instrument, expiryDate),
+    enabled: !!exchange && !!instrumentType && !!instrument && !!expiryDate,
     staleTime: Infinity,
   });
 
@@ -170,23 +193,44 @@ export function ConfigRow() {
   // When a parent changes, a still-valid child selection is kept; an invalid
   // one is cleared (which cascades through the store resets).
 
+  // Exchange is the root selector — auto-select the first one the broker
+  // reports whenever the current selection is missing/invalid.
   useEffect(() => {
+    if (loadExch || exchanges.length === 0) return;
+    if (!exchange || !exchanges.includes(exchange)) {
+      setExchange(exchanges[0]);
+    }
+  }, [exchange, exchanges, loadExch, setExchange]);
+
+  // Instrument type auto-selects the first one the broker reports for the
+  // selected Exchange, same pattern as Exchange above.
+  useEffect(() => {
+    if (loadInst || instrumentTypes.length === 0) return;
+    if (!instrumentType || !instrumentTypes.includes(instrumentType)) {
+      setInstrumentType(instrumentTypes[0]);
+    }
+  }, [instrumentType, instrumentTypes, loadInst, setInstrumentType]);
+
+  // Symbol is left to manual selection (no auto-pick) — just cleared if it's
+  // no longer valid for the current Exchange/Instrument.
+  useEffect(() => {
+    if (loadSym) return;
     if (instrument && !symbols.includes(instrument)) {
       setInstrument("");
     }
-  }, [instrument, symbols, setInstrument]);
+  }, [instrument, symbols, loadSym, setInstrument]);
 
   // Nearest expiry is auto-selected whenever the current one is missing/invalid.
   useEffect(() => {
-    if (!needsExpiry || loadExp || expiries.length === 0) return;
+    if (loadExp || expiries.length === 0) return;
     if (!expiryDate || !expiries.some((e) => e.id === expiryDate)) {
       setExpiryDate(expiries[0].id);
     }
-  }, [needsExpiry, expiries, loadExp, expiryDate, setExpiryDate]);
+  }, [expiries, loadExp, expiryDate, setExpiryDate]);
 
   useEffect(() => {
-    if (!needsExpiry && expiryDate) setExpiryDate("");
-  }, [needsExpiry, expiryDate, setExpiryDate]);
+    if (!loadExp && !expiryApplies && expiryDate) setExpiryDate("");
+  }, [loadExp, expiryApplies, expiryDate, setExpiryDate]);
 
   useEffect(() => {
     if (loadSt || !expiryDate) return;
@@ -198,7 +242,7 @@ export function ConfigRow() {
   const includesPut  = type === "Put"  || type === "Call+Put";
 
   const canGenerate =
-    !!instrumentType && !!instrument && (!needsExpiry || !!expiryDate) &&
+    !!exchange && !!instrumentType && !!instrument && (!expiryApplies || !!expiryDate) &&
     (!includesCall || callStrike !== null) &&
     (!includesPut  || putStrike  !== null);
 
@@ -232,9 +276,10 @@ export function ConfigRow() {
       n != null ? Math.trunc(n).toLocaleString("en-IN") : "—";
 
     const summary = [
+      exchange,
       instrumentType,
       instrument,
-      needsExpiry && expiryDate ? formatExpiryDisplay(expiryDate) : null,
+      expiryApplies && expiryDate ? formatExpiryDisplay(expiryDate) : null,
     ].filter(Boolean).join(" › ");
 
     return (
@@ -280,32 +325,49 @@ export function ConfigRow() {
 
       <div style={{ width: 1, height: 44, background: "#BDC4CF", alignSelf: "center", margin: "0 2px" }} />
 
-      {/* Instrument (type) */}
+      {/* Exchange — sourced live from the broker's instrument master
+          (fetchExchanges), never hardcoded. First selector in the chain. */}
+      <Field label="Exchange">
+        <DepSelect
+          value={exchange}
+          onChange={setExchange}
+          disabled={false}
+          loading={loadExch}
+          options={exchanges.map((e) => ({ value: e, label: e }))}
+          minWidth={100}
+        />
+      </Field>
+
+      {/* Instrument (type) — sourced live from the broker's instrument master
+          (fetchInstrumentTypes), filtered by the selected Exchange. */}
       <Field label="Instrument">
         <DepSelect
           value={instrumentType}
           onChange={setInstrumentType}
-          disabled={false}
-          loading={false}
-          options={INSTRUMENT_TYPES}
+          disabled={!exchange}
+          loading={loadInst}
+          options={instrumentTypes.map((t) => ({ value: t, label: t }))}
           minWidth={144}
         />
       </Field>
 
-      {/* Symbol (underlying) */}
+      {/* Symbol (underlying) — sourced live (fetchSymbols), filtered by the
+          selected Exchange + Instrument. */}
       <Field label="Symbol">
         <DepSelect
           value={instrument}
           onChange={setInstrument}
-          disabled={false}
-          loading={false}
+          disabled={!instrumentType}
+          loading={loadSym}
           options={symbols.map((s) => ({ value: s, label: s }))}
         />
       </Field>
 
       {/* Expiry Date — internal value is ISO "YYYY-MM-DD"; display "DD Mon YYYY".
-          Hidden entirely for instrument types that don't settle (Cash Index, Equity). */}
-      {needsExpiry && (
+          Hidden for symbols with no options/futures chain (e.g. cash EQ/INDEX) —
+          derived from whether the broker actually returned any expiries, not a
+          hardcoded instrument-type set. */}
+      {(loadExp || expiryApplies) && (
         <Field label="Expiry Date">
           <DepSelect
             value={expiryDate}

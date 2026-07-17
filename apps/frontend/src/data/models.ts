@@ -1,13 +1,11 @@
 // ── Trading-selection data models ─────────────────────────────────────────────
 //
-// The selection UI (Instrument → Symbol → Expiry) consumes ONLY these models.
-// Whether the data comes from the static catalog in liveApi.ts/tradingConfig.ts
-// or the OpenAlgo/Zebu Instruments API, components must not care.
+// The selection UI (Exchange → Instrument → Symbol → Expiry → Strike) consumes
+// ONLY these models. All of it is fetched live from the broker's instrument
+// master via liveApi.ts — nothing is a static/hardcoded catalog.
 //
-// OpenAlgo mapping (future): exchange → symbol → expiry → strike →
-// instrumenttype → brsymbol → token. Broker symbols and tokens are internal —
-// never rendered in the UI; they are used for market-data subscriptions and
-// order placement only.
+// Broker symbols and tokens are internal — never rendered in the UI; they are
+// used for market-data subscriptions and order placement only.
 
 export interface Expiry {
   /** Internal ISO date "YYYY-MM-DD", e.g. "2026-07-07" */

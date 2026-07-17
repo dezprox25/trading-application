@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import type { DashboardRow, PivotMethod } from "../../calc";
 import { useStore } from "../../store/useStore";
-import { DEFAULT_INSTRUMENT_TYPE } from "../../data/tradingConfig";
 
 export type { PivotMethod };
 export type FeedStatus =
@@ -19,8 +18,12 @@ export type FeedStatus =
 
 interface DashboardStore {
   // Config selection — dependent chain:
-  // Instrument (type) → Symbol → Expiry Date → Strikes
-  /** Instrument type, e.g. "OPTIDX" — see ../../data/tradingConfig.ts */
+  // Exchange → Instrument (type) → Symbol → Expiry Date → Strikes
+  /** Broker-provided exchange, e.g. "NFO" — sourced live from the instrument
+   *  master via fetchExchanges(), never hardcoded. See ../../data/liveApi.ts. */
+  exchange: string;
+  /** Instrument type, e.g. "OPTIDX" — sourced live from the instrument master
+   *  via fetchInstrumentTypes(exchange), never hardcoded. */
   instrumentType: string;
   /** Underlying symbol, e.g. "NIFTY" */
   instrument: string;
@@ -51,6 +54,7 @@ interface DashboardStore {
   colOrder:   string[];
 
   // Actions
+  setExchange(v: string): void;
   setInstrumentType(v: string): void;
   setInstrument(v: string): void;
   setType(v: "Call" | "Put" | "Call+Put"): void;
@@ -92,7 +96,8 @@ export const scopedKey = (base: string) => {
 };
 
 export const useDashStore = create<DashboardStore>((set, get) => ({
-  instrumentType: DEFAULT_INSTRUMENT_TYPE, instrument: "",
+  exchange: "",
+  instrumentType: "", instrument: "",
   type: "Call+Put",
   callStrike: null, putStrike: null,
   expiryDate: "",
@@ -105,6 +110,7 @@ export const useDashStore = create<DashboardStore>((set, get) => ({
   colOrder: [],
 
   // Changing a parent selection resets every dependent selection below it.
+  setExchange: (v) => set({ exchange: v, instrumentType: "", instrument: "", expiryDate: "", callStrike: null, putStrike: null }),
   setInstrumentType: (v) => set({ instrumentType: v, instrument: "", expiryDate: "", callStrike: null, putStrike: null }),
   setInstrument:     (v) => set({ instrument: v, expiryDate: "", callStrike: null, putStrike: null }),
   setType:           (v) => set({ type: v }),
