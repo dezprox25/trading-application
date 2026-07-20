@@ -7,12 +7,12 @@ const TFS_HR  = ["1h", "2h", "3h", "4h"];
 
 // Ordered list of all toggleable column IDs — matches Worksheet ALL_COLS order (v2 31-col spec).
 const ALL_COL_IDS = [
-  // Date & Time (1 frozen)
+  // Time (1 frozen)
   "datetime",
-  // Call (6)
-  "ce-o", "ce-h", "ce-l", "ce-c", "mma-c", "tla-c",
-  // Put (6)
-  "pe-o", "pe-h", "pe-l", "pe-c", "mma-p", "tla-p",
+  // Call (7)
+  "ce-o", "ce-h", "ce-l", "ce-c", "mma-c", "tla-c", "c-sign",
+  // Put (7)
+  "pe-o", "pe-h", "pe-l", "pe-c", "mma-p", "tla-p", "p-sign",
   // Ranking (1)
   "ranking",
   // Future (6)
@@ -31,17 +31,17 @@ const ALL_COL_IDS = [
 ];
 
 const ALL_COL_LABELS: Record<string, string> = {
-  datetime: "Date & Time",
+  datetime: "Time",
   "ce-o": "Call Open",  "ce-h": "Call High", "ce-l": "Call Low",  "ce-c": "Call Close",
-  "mma-c": "Call MMA",  "tla-c": "Call TLA",
+  "mma-c": "Call MA",   "tla-c": "Call TMA", "c-sign": "C Sign",
   "pe-o": "Put Open",   "pe-h": "Put High",  "pe-l": "Put Low",   "pe-c": "Put Close",
-  "mma-p": "Put MMA",   "tla-p": "Put TLA",
+  "mma-p": "Put MA",    "tla-p": "Put TMA",  "p-sign": "P Sign",
   ranking: "Ranking",
   "fut-o": "Fut Open",  "fut-h": "Fut High", "fut-l": "Fut Low",  "fut-c": "Fut Close",
-  "fut-mma": "Fut MMA", "fut-tla": "Fut TLA",
+  "fut-mma": "Fut MA",  "fut-tla": "Fut TMA",
   space: "Space",
   "spot-o": "Spot Open","spot-h": "Spot High","spot-l": "Spot Low","spot-c": "Spot Close",
-  "spot-mma": "Spot MMA","spot-tla": "Spot TLA",
+  "spot-mma": "Spot MA","spot-tla": "Spot TMA",
   smc: "SMC", fib: "FIB", rsi: "RSI", ema: "EMA", vwap: "VWAP",
   ema200: "EMA200", "ema-score": "EMA Score", "vwap-score": "VWAP Score",
   "total-score": "Total Score", rating: "Rating", signal: "Signal",
@@ -49,11 +49,11 @@ const ALL_COL_LABELS: Record<string, string> = {
 
 // Group label for each column ID — used to render dividers in the panel.
 const COL_GROUP_LABEL: Record<string, string> = {
-  datetime: "Date & Time",
+  datetime: "Time",
   "ce-o": "Call", "ce-h": "Call", "ce-l": "Call", "ce-c": "Call",
-  "mma-c": "Call", "tla-c": "Call",
+  "mma-c": "Call", "tla-c": "Call", "c-sign": "Call",
   "pe-o": "Put",  "pe-h": "Put",  "pe-l": "Put",  "pe-c": "Put",
-  "mma-p": "Put", "tla-p": "Put",
+  "mma-p": "Put", "tla-p": "Put", "p-sign": "Put",
   ranking: "Ranking",
   "fut-o": "Future", "fut-h": "Future", "fut-l": "Future", "fut-c": "Future",
   "fut-mma": "Future", "fut-tla": "Future",

@@ -51,15 +51,15 @@ export interface DashboardRow {
   put:    OHLCBar;   // PE option premium
   future: OHLCBar;   // NIFTY-FUT
   spot:   OHLCBar;   // NIFTY-SPOT (falls back to NIFTY-FUT when Spot unavailable)
-  // Pre-computed MMA and TLA for all four sides
+  // Pre-computed MA (formerly MMA) and TMA for all four sides
   callMMA:   number;
-  callTLA:   number;
+  callTMA:   number;
   putMMA:    number;
-  putTLA:    number;
+  putTMA:    number;
   futureMMA: number;
-  futureTLA: number;
+  futureTMA: number;
   spotMMA:   number;
-  spotTLA:   number;
+  spotTMA:   number;
   // Ranking — the higher of Call MMA vs Put MMA, plus which side won (for cell colour)
   ranking:       number;
   rankingWinner: "call" | "put";
@@ -114,19 +114,49 @@ export function pivotForBar(method: PivotMethod, bar: OHLCBar): PivotLevels | nu
   return method === "classic" ? classicPivot(bar) : clientPivot4Bar(bar);
 }
 
-// ── MMA v2 / TLA v2 ──────────────────────────────────────────────────────────
-// Client formula (v2 spec): MMA = (O + H + L + (MMA_CLOSE_SIGN × C)) / 4
-// With MMA_CLOSE_SIGN = −1 (as written by the client) MMA ≈ half the price and
-// TLA = 2×MMA − H can be negative.  Change to +1 if confirmed a typo.
+// ── MA (formerly MMA) / TMA ──────────────────────────────────────────────────
+// Client formula (v2 spec): MA = (O + H + L + (MMA_CLOSE_SIGN × C)) / 4
+// With MMA_CLOSE_SIGN = −1 (as written by the client) MA ≈ half the price.
+// Change to +1 if confirmed a typo.
 export const MMA_CLOSE_SIGN = -1 as const;
 
 export function mmaBar(bar: OHLCBar): number {
   return (bar.o + bar.h + bar.l + MMA_CLOSE_SIGN * bar.c) / 4;
 }
 
-// TLA = 2 × MMA − High  (derived from MMA, not re-derived from the bar)
-export function tlaFromMMA(barMMA: number, barHigh: number): number {
-  return 2 * barMMA - barHigh;
+// TMA (replaces the old TLA = 2×MMA − H, removed per final client spec):
+//   TMA = Σ(i=1→N)(Oi + Hi + Li + Ci) / (4 × N)
+// cumulative from the first candle of the displayed series through candle N.
+// Bars with missing data (NaN OHLC) contribute nothing — neither to the sum
+// nor to N — so one missing option bar never poisons the rest of the column.
+export interface TmaState { sum: number; count: number; }
+
+export const newTmaState = (): TmaState => ({ sum: 0, count: 0 });
+
+const barOhlcSum = (bar: OHLCBar): number => bar.o + bar.h + bar.l + bar.c;
+
+// Folds a CLOSED bar into the running state (mutates the state).
+export function tmaAccumulate(state: TmaState, bar: OHLCBar): void {
+  const s = barOhlcSum(bar);
+  if (Number.isFinite(s)) {
+    state.sum += s;
+    state.count += 1;
+  }
+}
+
+// TMA over the accumulated closed bars, optionally including a still-forming
+// bar (which is NOT folded into the state — it changes every tick and is only
+// committed via tmaAccumulate once its window closes).
+export function tmaValue(state: TmaState, formingBar?: OHLCBar): number {
+  let { sum, count } = state;
+  if (formingBar) {
+    const s = barOhlcSum(formingBar);
+    if (Number.isFinite(s)) {
+      sum += s;
+      count += 1;
+    }
+  }
+  return count > 0 ? sum / (4 * count) : NaN;
 }
 
 // ── Ranking ───────────────────────────────────────────────────────────────────

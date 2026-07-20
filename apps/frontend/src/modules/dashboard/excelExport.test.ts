@@ -13,10 +13,10 @@ function mkRow(t: number, i: number): DashboardRow {
     put: bar(8 + i, 9 + i, 7 + i, 8.5 + i, t),
     future: bar(22000 + i, 22050 + i, 21950 + i, 22010 + i, t),
     spot: bar(22000 + i, 22050 + i, 21950 + i, 22010 + i, t),
-    callMMA: 10.5 + i, callTLA: 9.5 + i,
-    putMMA: 8.25 + i, putTLA: 7.25 + i,
-    futureMMA: 22015 + i, futureTLA: 21990 + i,
-    spotMMA: 22015 + i, spotTLA: 21990 + i,
+    callMMA: 10.5 + i, callTMA: 9.5 + i,
+    putMMA: 8.25 + i, putTMA: 7.25 + i,
+    futureMMA: 22015 + i, futureTMA: 21990 + i,
+    spotMMA: 22015 + i, spotTMA: 21990 + i,
     ranking: 10.5 + i, rankingWinner: i % 2 === 0 ? "call" : "put",
     smc: "Neutral", fib: "50%",
     rsi: 55 + i, ema: 22000 + i, vwap: 22005 + i,
@@ -49,10 +49,10 @@ describe("exportModule1Excel", () => {
 
     // header rows + 3 data rows
     expect(aoa.length).toBe(5);
-    expect(aoa[1][0]).toBe("Date & Time");
-    // chronological order preserved — oldest first, newest last
-    expect(aoa[2][0]).toMatch(/9:30 AM$/);
-    expect(aoa[4][0]).toMatch(/9:40 AM$/);
+    expect(aoa[1][0]).toBe("Time");
+    // chronological order preserved — oldest first, newest last (time-only display)
+    expect(aoa[2][0]).toBe("09:30");
+    expect(aoa[4][0]).toBe("09:40");
     // ranking column carries the +/- prefix like the live table
     const rankingColIdx = aoa[1].indexOf("Ranking");
     expect(aoa[3][rankingColIdx]).toMatch(/^\+/);

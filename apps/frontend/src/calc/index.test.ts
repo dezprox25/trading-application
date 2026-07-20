@@ -9,7 +9,9 @@ import {
   computeEMASeries,
   computeVWAPSeries,
   mmaBar,
-  tlaFromMMA,
+  newTmaState,
+  tmaAccumulate,
+  tmaValue,
   MMA_CLOSE_SIGN,
   compareScore,
   totalScoreFromParts,
@@ -249,13 +251,52 @@ describe("totalScoreFromParts / ratingFromTotalScore / signalFromRating", () => 
   });
 });
 
-// ── MMA / TLA (current client spec: MMA_CLOSE_SIGN = −1) ──────────────────────
+// ── MA / TMA (current client spec: MMA_CLOSE_SIGN = −1) ───────────────────────
 
-describe("mmaBar / tlaFromMMA", () => {
-  it("MMA = (O + H + L + sign×C) / 4 and TLA = 2×MMA − H", () => {
+describe("mmaBar / TMA", () => {
+  it("MA = (O + H + L + sign×C) / 4", () => {
     const b = bar(0, 100, 110, 95, 105);
     const expectedMMA = (100 + 110 + 95 + MMA_CLOSE_SIGN * 105) / 4;
     expect(mmaBar(b)).toBeCloseTo(expectedMMA, 10);
-    expect(tlaFromMMA(expectedMMA, b.h)).toBeCloseTo(2 * expectedMMA - 110, 10);
+  });
+
+  it("TMA over 1/2/3 candles = Σ(O+H+L+C) / (4×N), cumulative", () => {
+    const st = newTmaState();
+    const b1 = bar(0, 100, 110, 95, 105);
+    const b2 = bar(1, 105, 115, 100, 110);
+    const b3 = bar(2, 110, 120, 105, 115);
+
+    tmaAccumulate(st, b1);
+    expect(tmaValue(st)).toBeCloseTo((100 + 110 + 95 + 105) / 4, 10);
+
+    tmaAccumulate(st, b2);
+    expect(tmaValue(st)).toBeCloseTo((100 + 110 + 95 + 105 + 105 + 115 + 100 + 110) / 8, 10);
+
+    tmaAccumulate(st, b3);
+    expect(tmaValue(st)).toBeCloseTo(
+      (100 + 110 + 95 + 105 + 105 + 115 + 100 + 110 + 110 + 120 + 105 + 115) / 12, 10);
+  });
+
+  it("a forming bar is included in the value but never folded into the state", () => {
+    const st = newTmaState();
+    tmaAccumulate(st, bar(0, 100, 110, 95, 105)); // closed: sum 410, N=1
+    const forming = bar(1, 105, 115, 100, 110);   // sum 430
+
+    expect(tmaValue(st, forming)).toBeCloseTo((410 + 430) / 8, 10);
+    // State untouched — value without the forming bar is still the 1-candle TMA.
+    expect(tmaValue(st)).toBeCloseTo(410 / 4, 10);
+  });
+
+  it("NaN (missing) bars are skipped — no contribution to sum or N", () => {
+    const st = newTmaState();
+    tmaAccumulate(st, { t: 0, o: NaN, h: NaN, l: NaN, c: NaN });
+    expect(Number.isNaN(tmaValue(st))).toBe(true); // no valid bars yet
+
+    tmaAccumulate(st, bar(1, 100, 110, 95, 105));
+    tmaAccumulate(st, { t: 2, o: NaN, h: NaN, l: NaN, c: NaN });
+    expect(tmaValue(st)).toBeCloseTo(410 / 4, 10); // still N=1
+
+    // NaN forming bar falls back to closed-bars-only value.
+    expect(tmaValue(st, { t: 3, o: NaN, h: NaN, l: NaN, c: NaN })).toBeCloseTo(410 / 4, 10);
   });
 });

@@ -9,11 +9,13 @@ import { useStore } from "../../store/useStore";
 import { api } from "../../utils/api";
 import type { OHLCBar } from "../../calc";
 import {
-  mmaBar, tlaFromMMA, computeRanking,
+  mmaBar, computeRanking,
+  newTmaState, tmaAccumulate, tmaValue,
   computeRsiSeries, computeEMASeries, computeVWAPSeries,
   nearestFibLabel, smcNearest,
   compareScore, totalScoreFromParts, ratingFromTotalScore, signalFromRating,
 } from "../../calc";
+import type { TmaState } from "../../calc";
 import { formatExpiryForBroker } from "../../data/models";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -25,7 +27,8 @@ function tfToMs(tf: string): number {
 }
 
 // Sentinel for a bar with no data — p0(NaN) renders "—" and NaN propagates
-// cleanly through mmaBar/tlaFromMMA without polluting neighbouring values.
+// cleanly through mmaBar (and is skipped by tmaAccumulate/tmaValue) without
+// polluting neighbouring values.
 const MISSING_BAR = (t: number): OHLCBar => ({ t, o: NaN, h: NaN, l: NaN, c: NaN });
 
 function normalizeBar(raw: any): OHLCBar | null {
@@ -250,6 +253,12 @@ export function Dashboard() {
   const prevEma200Ref = useRef<number | null>(null);
   // True-VWAP running state: Σ(TP×Volume) and ΣVolume over Future bars.
   const vwapStateRef  = useRef<{ cumTPV: number; cumV: number }>({ cumTPV: 0, cumV: 0 });
+  // TMA running state per side: Σ(O+H+L+C) and bar count over CLOSED bars
+  // only — the forming bar's contribution is recomputed every tick via
+  // tmaValue(state, formingBar) and folded in once its window closes.
+  const tmaStatesRef  = useRef<{ call: TmaState; put: TmaState; fut: TmaState; spot: TmaState }>({
+    call: newTmaState(), put: newTmaState(), fut: newTmaState(), spot: newTmaState(),
+  });
   // Latest polled cumulative volume for the Future contract's forming bar
   // (see the getFuturesData poll in Effect 2) — read synchronously each tick.
   const liveFutVolumeRef = useRef<number>(0);
@@ -272,6 +281,7 @@ export function Dashboard() {
       prevEmaRef.current = null;
       prevEma200Ref.current = null;
       vwapStateRef.current = { cumTPV: 0, cumV: 0 };
+      tmaStatesRef.current = { call: newTmaState(), put: newTmaState(), fut: newTmaState(), spot: newTmaState() };
       liveFutVolumeRef.current = 0;
       return;
     }
@@ -290,6 +300,7 @@ export function Dashboard() {
     prevEmaRef.current = null;
     prevEma200Ref.current = null;
     vwapStateRef.current = { cumTPV: 0, cumV: 0 };
+    tmaStatesRef.current = { call: newTmaState(), put: newTmaState(), fut: newTmaState(), spot: newTmaState() };
     liveFutVolumeRef.current = 0;
 
     async function init() {
@@ -473,10 +484,22 @@ export function Dashboard() {
             const putBar:  OHLCBar = peMap.get(bar.t) ?? MISSING_BAR(bar.t);
             const spotBar: OHLCBar = spotMap.get(bar.t) ?? bar;
 
-            const cMMA = mmaBar(callBar);  const cTLA = tlaFromMMA(cMMA, callBar.h);
-            const pMMA = mmaBar(putBar);   const pTLA = tlaFromMMA(pMMA, putBar.h);
-            const fMMA = mmaBar(bar);      const fTLA = tlaFromMMA(fMMA, bar.h);
-            const sMMA = mmaBar(spotBar);  const sTLA = tlaFromMMA(sMMA, spotBar.h);
+            const cMMA = mmaBar(callBar);
+            const pMMA = mmaBar(putBar);
+            const fMMA = mmaBar(bar);
+            const sMMA = mmaBar(spotBar);
+            // TMA is cumulative — fold this closed bar into each side's
+            // running Σ(O+H+L+C)/count state, then read the value. The same
+            // state carries straight into the live-bar continuation below.
+            const tma = tmaStatesRef.current;
+            tmaAccumulate(tma.call, callBar);
+            tmaAccumulate(tma.put,  putBar);
+            tmaAccumulate(tma.fut,  bar);
+            tmaAccumulate(tma.spot, spotBar);
+            const cTMA = tmaValue(tma.call);
+            const pTMA = tmaValue(tma.put);
+            const fTMA = tmaValue(tma.fut);
+            const sTMA = tmaValue(tma.spot);
             const { value: rankVal, winner: rankWin } = computeRanking(cMMA, pMMA);
             const hRsi    = rsiSeries[i]    ?? null;
             const hEma    = emaSeries[i]    ?? null;
@@ -490,10 +513,10 @@ export function Dashboard() {
             appendRow({
               t: bar.t,
               call: callBar, put: putBar, future: bar, spot: spotBar,
-              callMMA: cMMA,   callTLA: cTLA,
-              putMMA:  pMMA,   putTLA:  pTLA,
-              futureMMA: fMMA, futureTLA: fTLA,
-              spotMMA:   sMMA, spotTLA:   sTLA,
+              callMMA: cMMA,   callTMA: cTMA,
+              putMMA:  pMMA,   putTMA:  pTMA,
+              futureMMA: fMMA, futureTMA: fTMA,
+              spotMMA:   sMMA, spotTMA:   sTMA,
               ranking: rankVal, rankingWinner: rankWin,
               oiMatrix: null,
               smc: smcNearest(bar.c, sessionHigh, sessionLow, pdh, pdl),
@@ -635,6 +658,14 @@ export function Dashboard() {
             vwapStateRef.current.cumTPV += ((pb.futH + pb.futL + pb.futC) / 3) * pb.futVolume;
             vwapStateRef.current.cumV   += pb.futVolume;
           }
+          // Fold the just-closed bar into each side's cumulative TMA state —
+          // tmaAccumulate itself skips NaN bars (e.g. no option tick arrived
+          // during the whole bar), matching the history builder's semantics.
+          const tmaFold = tmaStatesRef.current;
+          tmaAccumulate(tmaFold.call, { t: pb.windowStart, o: pb.callO, h: pb.callH, l: pb.callL, c: pb.callC });
+          tmaAccumulate(tmaFold.put,  { t: pb.windowStart, o: pb.putO,  h: pb.putH,  l: pb.putL,  c: pb.putC  });
+          tmaAccumulate(tmaFold.fut,  { t: pb.windowStart, o: pb.futO,  h: pb.futH,  l: pb.futL,  c: pb.futC  });
+          tmaAccumulate(tmaFold.spot, { t: pb.windowStart, o: pb.spotO, h: pb.spotH, l: pb.spotL, c: pb.spotC });
           // RSI closes and session high/low track the FUTURE series only —
           // option premiums must never feed either (history seeds them from
           // futCloses/fut H-L above, so live continuation must match).
@@ -673,10 +704,18 @@ export function Dashboard() {
         const sessHigh = Math.max(swHighRef.current, futLtp);
         const sessLow  = Math.min(swLowRef.current,  futLtp);
 
-        const cMMA = mmaBar(callBar);  const cTLA = tlaFromMMA(cMMA, callBar.h);
-        const pMMA = mmaBar(putBar);   const pTLA = tlaFromMMA(pMMA, putBar.h);
-        const fMMA = mmaBar(futBar);   const fTLA = tlaFromMMA(fMMA, futBar.h);
-        const sMMA = mmaBar(spotBar);  const sTLA = tlaFromMMA(sMMA, spotBar.h);
+        const cMMA = mmaBar(callBar);
+        const pMMA = mmaBar(putBar);
+        const fMMA = mmaBar(futBar);
+        const sMMA = mmaBar(spotBar);
+        // TMA = closed-bars cumulative state + this forming bar's current
+        // OHLC (recomputed from the state every tick, never folded in until
+        // the window closes — see the rollover block above).
+        const tmaSt = tmaStatesRef.current;
+        const cTMA = tmaValue(tmaSt.call, callBar);
+        const pTMA = tmaValue(tmaSt.put,  putBar);
+        const fTMA = tmaValue(tmaSt.fut,  futBar);
+        const sTMA = tmaValue(tmaSt.spot, spotBar);
         const { value: rankVal, winner: rankWin } = computeRanking(cMMA, pMMA);
 
         // RSI is always computed from Future closes — never option premiums.
@@ -704,10 +743,10 @@ export function Dashboard() {
         dash.appendRow({
           t: windowStart,
           call: callBar, put: putBar, future: futBar, spot: spotBar,
-          callMMA: cMMA,   callTLA: cTLA,
-          putMMA:  pMMA,   putTLA:  pTLA,
-          futureMMA: fMMA, futureTLA: fTLA,
-          spotMMA:   sMMA, spotTLA:   sTLA,
+          callMMA: cMMA,   callTMA: cTMA,
+          putMMA:  pMMA,   putTMA:  pTMA,
+          futureMMA: fMMA, futureTMA: fTMA,
+          spotMMA:   sMMA, spotTMA:   sTMA,
           ranking: rankVal, rankingWinner: rankWin,
           oiMatrix: { ...oi },
           smc: smcNearest(futLtp, sessHigh, sessLow, sessHigh, sessLow),
@@ -756,10 +795,16 @@ export function Dashboard() {
         const sessHigh = Math.max(swHighRef.current, b.futH);
         const sessLow  = Math.min(swLowRef.current,  b.futL);
 
-        const cMMA = mmaBar(callBar);  const cTLA = tlaFromMMA(cMMA, callBar.h);
-        const pMMA = mmaBar(putBar);   const pTLA = tlaFromMMA(pMMA, putBar.h);
-        const fMMA = mmaBar(futBar);   const fTLA = tlaFromMMA(fMMA, futBar.h);
-        const sMMA = mmaBar(spotBar);  const sTLA = tlaFromMMA(sMMA, spotBar.h);
+        const cMMA = mmaBar(callBar);
+        const pMMA = mmaBar(putBar);
+        const fMMA = mmaBar(futBar);
+        const sMMA = mmaBar(spotBar);
+        // TMA — closed-bars state + forming bar, same as the new-bar branch.
+        const tmaSt = tmaStatesRef.current;
+        const cTMA = tmaValue(tmaSt.call, callBar);
+        const pTMA = tmaValue(tmaSt.put,  putBar);
+        const fTMA = tmaValue(tmaSt.fut,  futBar);
+        const sTMA = tmaValue(tmaSt.spot, spotBar);
         const { value: rankVal, winner: rankWin } = computeRanking(cMMA, pMMA);
 
         // RSI is always computed from Future closes — never option premiums.
@@ -783,10 +828,10 @@ export function Dashboard() {
 
         dash.updateLatestRow({
           call: callBar, put: putBar, future: futBar, spot: spotBar,
-          callMMA: cMMA,   callTLA: cTLA,
-          putMMA:  pMMA,   putTLA:  pTLA,
-          futureMMA: fMMA, futureTLA: fTLA,
-          spotMMA:   sMMA, spotTLA:   sTLA,
+          callMMA: cMMA,   callTMA: cTMA,
+          putMMA:  pMMA,   putTMA:  pTMA,
+          futureMMA: fMMA, futureTMA: fTMA,
+          spotMMA:   sMMA, spotTMA:   sTMA,
           ranking: rankVal, rankingWinner: rankWin,
           oiMatrix: { ...oi },
           smc: smcNearest(futLtp, sessHigh, sessLow, sessHigh, sessLow),

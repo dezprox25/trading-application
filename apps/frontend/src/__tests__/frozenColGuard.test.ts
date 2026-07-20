@@ -6,7 +6,7 @@
  * OHLC data is unavailable.
  */
 import { describe, it, expect } from "vitest";
-import { mmaBar, tlaFromMMA, computeRanking } from "../calc";
+import { mmaBar, newTmaState, tmaAccumulate, tmaValue, computeRanking } from "../calc";
 import type { OHLCBar } from "../calc";
 
 // Local replicas of helpers in index.tsx and Worksheet.tsx (pure functions, no React deps)
@@ -38,9 +38,11 @@ describe("MISSING_BAR sentinel", () => {
     expect(p0(mmaBar(MISSING_BAR(0)))).toBe("—");
   });
 
-  it("tlaFromMMA(NaN, NaN) is NaN and renders as '—'", () => {
-    expect(isNaN(tlaFromMMA(NaN, NaN))).toBe(true);
-    expect(p0(tlaFromMMA(NaN, NaN))).toBe("—");
+  it("TMA over only MISSING_BARs is NaN and renders as '—'", () => {
+    const st = newTmaState();
+    tmaAccumulate(st, MISSING_BAR(0));
+    expect(isNaN(tmaValue(st))).toBe(true);
+    expect(p0(tmaValue(st))).toBe("—");
   });
 });
 

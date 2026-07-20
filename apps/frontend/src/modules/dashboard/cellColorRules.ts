@@ -153,15 +153,17 @@ const TRACKED_COLUMNS: Record<string, TrackedColumnDef> = {
   "spot-l": { accessor: (r) => r.spot.l, theme: "hlc", truncateForColor: true },
   "spot-c": { accessor: (r) => r.spot.c, theme: "hlc", truncateForColor: true },
 
-  // Group B — Call/Put/Future/Spot MMA/TLA (dark theme)
+  // Group B — Call/Put/Future/Spot MA/TMA (dark theme). C Sign / P Sign are
+  // deliberately NOT tracked here — they use their own fixed Dark-Green/Black
+  // text rule (see Worksheet getCellStyle), never this engine.
   "mma-c": { accessor: (r) => r.callMMA, theme: "dark", truncateForColor: true },
-  "tla-c": { accessor: (r) => r.callTLA, theme: "dark", truncateForColor: true },
+  "tla-c": { accessor: (r) => r.callTMA, theme: "dark", truncateForColor: true },
   "mma-p": { accessor: (r) => r.putMMA, theme: "dark", truncateForColor: true },
-  "tla-p": { accessor: (r) => r.putTLA, theme: "dark", truncateForColor: true },
+  "tla-p": { accessor: (r) => r.putTMA, theme: "dark", truncateForColor: true },
   "fut-mma": { accessor: (r) => r.futureMMA, theme: "dark", truncateForColor: true },
-  "fut-tla": { accessor: (r) => r.futureTLA, theme: "dark", truncateForColor: true },
+  "fut-tla": { accessor: (r) => r.futureTMA, theme: "dark", truncateForColor: true },
   "spot-mma": { accessor: (r) => r.spotMMA, theme: "dark", truncateForColor: true },
-  "spot-tla": { accessor: (r) => r.spotTLA, theme: "dark", truncateForColor: true },
+  "spot-tla": { accessor: (r) => r.spotTMA, theme: "dark", truncateForColor: true },
 
   // Group C — Indicators (dark theme)
   "smc": { accessor: (r) => parseTrailingNumber(r.smc), theme: "dark", truncateForColor: false },

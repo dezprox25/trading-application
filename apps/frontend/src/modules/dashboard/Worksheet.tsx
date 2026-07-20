@@ -30,8 +30,8 @@ interface WorksheetProps {
 }
 
 export const TYPE_HIDDEN: Record<string, string[]> = {
-  "Call":     ["pe-o", "pe-h", "pe-l", "pe-c", "mma-p", "tla-p"],
-  "Put":      ["ce-o", "ce-h", "ce-l", "ce-c", "mma-c", "tla-c"],
+  "Call":     ["pe-o", "pe-h", "pe-l", "pe-c", "mma-p", "tla-p", "p-sign"],
+  "Put":      ["ce-o", "ce-h", "ce-l", "ce-c", "mma-c", "tla-c", "c-sign"],
   "Call+Put": [],
 };
 
@@ -86,40 +86,43 @@ const isValidRawValue = (v: number | string | null): v is number | string => {
 // ── Column definitions (v2 — 31-column client spec) ───────────────────────────
 
 export const ALL_COLS: ColSpec[] = [
-  // Date & Time (1 frozen column — "DD Mon HH:MM")
-  { id: "datetime",  sub: "Date & Time", group: "datetime",   defaultW: 124, frozen: true, align: "center" },
-  // Call (CE) — 6 columns
+  // Time (1 frozen column — "HH:MM", date display removed per final client spec)
+  { id: "datetime",  sub: "Time",        group: "datetime",   defaultW: 80, frozen: true, align: "center" },
+  // Call (CE) — 7 columns (column ids keep the legacy mma/tla slugs so saved
+  // column-order/hidden-column prefs keep working; only the labels changed)
   { id: "ce-o",      sub: "Open",        group: "call",       defaultW: 88 },
   { id: "ce-h",      sub: "High",        group: "call",       defaultW: 88 },
   { id: "ce-l",      sub: "Low",         group: "call",       defaultW: 88 },
   { id: "ce-c",      sub: "Close",       group: "call",       defaultW: 88 },
-  { id: "mma-c",     sub: "Call MMA",    group: "call",       defaultW: 96 },
-  { id: "tla-c",     sub: "Call TLA",    group: "call",       defaultW: 96 },
-  // Put (PE) — 6 columns
+  { id: "mma-c",     sub: "MA",          group: "call",       defaultW: 96 },
+  { id: "tla-c",     sub: "TMA",         group: "call",       defaultW: 96 },
+  { id: "c-sign",    sub: "C Sign",      group: "call",       defaultW: 88 },
+  // Put (PE) — 7 columns
   { id: "pe-o",      sub: "Open",        group: "put",        defaultW: 88 },
   { id: "pe-h",      sub: "High",        group: "put",        defaultW: 88 },
   { id: "pe-l",      sub: "Low",         group: "put",        defaultW: 88 },
   { id: "pe-c",      sub: "Close",       group: "put",        defaultW: 88 },
-  { id: "mma-p",     sub: "Put MMA",     group: "put",        defaultW: 96 },
-  { id: "tla-p",     sub: "Put TLA",     group: "put",        defaultW: 96 },
+  { id: "mma-p",     sub: "MA",          group: "put",        defaultW: 96 },
+  { id: "tla-p",     sub: "TMA",         group: "put",        defaultW: 96 },
+  { id: "p-sign",    sub: "P Sign",      group: "put",        defaultW: 88 },
   // Ranking — 1 column
   { id: "ranking",   sub: "Ranking",     group: "ranking",    defaultW: 100, align: "center" },
-  // Future — 6 columns (full OHLC + MMA + TLA)
+  // Future — 6 columns (full OHLC + MA + TMA)
   { id: "fut-o",     sub: "Open",        group: "future",     defaultW: 88 },
   { id: "fut-h",     sub: "High",        group: "future",     defaultW: 88 },
   { id: "fut-l",     sub: "Low",         group: "future",     defaultW: 88 },
   { id: "fut-c",     sub: "Close",       group: "future",     defaultW: 88 },
-  { id: "fut-mma",   sub: "Future MMA",  group: "future",     defaultW: 96 },
-  { id: "fut-tla",   sub: "Future TLA",  group: "future",     defaultW: 96 },
+  { id: "fut-mma",   sub: "MA",          group: "future",     defaultW: 96 },
+  { id: "fut-tla",   sub: "TMA",         group: "future",     defaultW: 96 },
   // Space — 1 column (reserved placeholder, no data/logic — see PR notes)
   { id: "space",     sub: "",            group: "space",      defaultW: 88 },
-  // Spot — 6 columns (full OHLC + MMA + TLA)
+  // Spot — 6 columns (full OHLC + MA + TMA)
   { id: "spot-o",    sub: "Open",        group: "spot",       defaultW: 88 },
   { id: "spot-h",    sub: "High",        group: "spot",       defaultW: 88 },
   { id: "spot-l",    sub: "Low",         group: "spot",       defaultW: 88 },
   { id: "spot-c",    sub: "Close",       group: "spot",       defaultW: 88 },
-  { id: "spot-mma",  sub: "Spot MMA",    group: "spot",       defaultW: 96 },
-  { id: "spot-tla",  sub: "Spot TLA",    group: "spot",       defaultW: 96 },
+  { id: "spot-mma",  sub: "MA",          group: "spot",       defaultW: 96 },
+  { id: "spot-tla",  sub: "TMA",         group: "spot",       defaultW: 96 },
   // Indicators — 5 columns
   { id: "smc",       sub: "SMC",         group: "indicators", defaultW: 132, align: "left" },
   { id: "fib",       sub: "FIB",         group: "indicators", defaultW: 122, align: "left" },
@@ -152,7 +155,7 @@ export const ALL_COLS: ColSpec[] = [
 // ── Group display metadata ────────────────────────────────────────────────────
 
 export const GROUP_LABELS: Record<Group, string> = {
-  datetime:   "Date & Time",
+  datetime:   "Time",
   call:       "Call",
   put:        "Put",
   ranking:    "Ranking",
@@ -210,10 +213,23 @@ export function rankingDir(curr: number, prev: number | undefined): RankDir {
   return "flat";
 }
 
+// C Sign / P Sign color rule (final client spec) — applies ONLY to these two
+// columns, as a full CELL BACKGROUND with white text, using the same
+// truncated value the cell displays:
+//   value > 0            → dark green background
+//   value ≤ 0 (or missing) → black background
+const C_SIGN_POSITIVE:    CellColor = { bg: "#006400", textColor: "#FFFFFF" };
+const C_SIGN_NONPOSITIVE: CellColor = { bg: "#000000", textColor: "#FFFFFF" };
+
 function getCellStyle(colId: string, row: DashboardRow): CellColor {
   switch (colId) {
     case "ranking":
       return row.rankingWinner === "call" ? C_RANK_CALL : C_RANK_PUT;
+    case "c-sign":
+    case "p-sign": {
+      const v = colId === "c-sign" ? row.callMMA - row.callTMA : row.putMMA - row.putTMA;
+      return Number.isFinite(v) && truncateForDisplay(v) > 0 ? C_SIGN_POSITIVE : C_SIGN_NONPOSITIVE;
+    }
     default:
       return C_DEFAULT;
   }
@@ -226,6 +242,19 @@ function getCellStyle(colId: string, row: DashboardRow): CellColor {
 // only the rendered text is affected. Used for every price column.
 const p0 = (n: number | null | undefined): string =>
   n == null || !Number.isFinite(n) ? "—" : truncateForDisplay(n).toLocaleString("en-IN");
+
+// C Sign / P Sign: MA − TMA per the written spec, shown with an explicit "+"
+// prefix when positive (client example: "+5"), truncated like every other
+// price column. The same truncated value drives the Dark-Green/Black color
+// rule in getCellStyle. NOTE (accepted business reality): with the current
+// MA formula (MMA_CLOSE_SIGN = −1, i.e. (O+H+L−C)/4) MA sits at ~half the
+// TMA's price scale, so these values are negative on essentially every real
+// bar and render black — that is spec-compliant, not a styling defect.
+const fmtSign = (n: number): string => {
+  if (!Number.isFinite(n)) return "—";
+  const tr = truncateForDisplay(n);
+  return (tr > 0 ? "+" : "") + tr.toLocaleString("en-IN");
+};
 
 // VWAP-specific: null means "no Volume to weight by yet" (client spec) —
 // distinct from the generic "—" used for every other not-yet-available cell.
@@ -242,17 +271,17 @@ const fmtEmaSignal = (score: number | null | undefined): string => {
   return "NEUTRAL (0)";
 };
 
-// 12-hour display with AM/PM (e.g. "07 Jul, 1:04 PM"). Display-only — the
+// Time-only display, 24-hour "HH:MM" (e.g. "09:15") — the date is no longer
+// shown anywhere in the table per the final client spec. Display-only — the
 // row's millisecond timestamp stays the source of truth for ordering and
-// candle boundaries. ICU emits lowercase "am/pm"; the spec wants uppercase.
-const fmtDateTime = (ms: number) => {
+// candle boundaries.
+const fmtTime = (ms: number) => {
   const d = new Date(ms);
   const opts: Intl.DateTimeFormatOptions = {
-    day: "2-digit", month: "short",
-    hour: "numeric", minute: "2-digit",
-    hour12: true, timeZone: "Asia/Kolkata",
+    hour: "2-digit", minute: "2-digit",
+    hour12: false, timeZone: "Asia/Kolkata",
   };
-  return d.toLocaleString("en-IN", opts).replace(/\s?(am|pm)$/i, (m) => m.toUpperCase());
+  return d.toLocaleTimeString("en-GB", opts);
 };
 
 // ── Cell value resolver ───────────────────────────────────────────────────────
@@ -293,22 +322,24 @@ export function getVisibleColumns(type: string, hiddenCols: string[], colOrder: 
 
 export function getCellValue(row: DashboardRow, colId: string, pivotMethod: PivotMethod = "client"): string {
   switch (colId) {
-    // Date & Time (single frozen column)
-    case "datetime":  return fmtDateTime(row.t);
+    // Time (single frozen column)
+    case "datetime":  return fmtTime(row.t);
     // Call OHLC
     case "ce-o":      return p0(row.call.o);
     case "ce-h":      return p0(row.call.h);
     case "ce-l":      return p0(row.call.l);
     case "ce-c":      return p0(row.call.c);
     case "mma-c":     return p0(row.callMMA);
-    case "tla-c":     return p0(row.callTLA);
+    case "tla-c":     return p0(row.callTMA);
+    case "c-sign":    return fmtSign(row.callMMA - row.callTMA);
     // Put OHLC
     case "pe-o":      return p0(row.put.o);
     case "pe-h":      return p0(row.put.h);
     case "pe-l":      return p0(row.put.l);
     case "pe-c":      return p0(row.put.c);
     case "mma-p":     return p0(row.putMMA);
-    case "tla-p":     return p0(row.putTLA);
+    case "tla-p":     return p0(row.putTMA);
+    case "p-sign":    return fmtSign(row.putMMA - row.putTMA);
     // Ranking (compares option MMAs; coloured via getCellStyle)
     case "ranking":   return p0(row.ranking);
     // Future OHLC + indicators
@@ -317,7 +348,7 @@ export function getCellValue(row: DashboardRow, colId: string, pivotMethod: Pivo
     case "fut-l":     return p0(row.future.l);
     case "fut-c":     return p0(row.future.c);
     case "fut-mma":   return p0(row.futureMMA);
-    case "fut-tla":   return p0(row.futureTLA);
+    case "fut-tla":   return p0(row.futureTMA);
     // Space — reserved placeholder column, intentionally always blank
     case "space":     return "";
     // Spot OHLC + indicators
@@ -326,7 +357,7 @@ export function getCellValue(row: DashboardRow, colId: string, pivotMethod: Pivo
     case "spot-l":    return p0(row.spot.l);
     case "spot-c":    return p0(row.spot.c);
     case "spot-mma":  return p0(row.spotMMA);
-    case "spot-tla":  return p0(row.spotTLA);
+    case "spot-tla":  return p0(row.spotTMA);
     // Indicators
     case "smc":       return row.smc;
     case "fib":       return row.fib;
@@ -365,26 +396,28 @@ export function getCellRawValue(row: DashboardRow, colId: string, pivotMethod: P
     case "ce-l":      return row.call.l;
     case "ce-c":      return row.call.c;
     case "mma-c":     return row.callMMA;
-    case "tla-c":     return row.callTLA;
+    case "tla-c":     return row.callTMA;
+    case "c-sign":    return row.callMMA - row.callTMA;
     case "pe-o":      return row.put.o;
     case "pe-h":      return row.put.h;
     case "pe-l":      return row.put.l;
     case "pe-c":      return row.put.c;
     case "mma-p":     return row.putMMA;
-    case "tla-p":     return row.putTLA;
+    case "tla-p":     return row.putTMA;
+    case "p-sign":    return row.putMMA - row.putTMA;
     case "ranking":   return row.ranking;
     case "fut-o":     return row.future.o;
     case "fut-h":     return row.future.h;
     case "fut-l":     return row.future.l;
     case "fut-c":     return row.future.c;
     case "fut-mma":   return row.futureMMA;
-    case "fut-tla":   return row.futureTLA;
+    case "fut-tla":   return row.futureTMA;
     case "spot-o":    return row.spot.o;
     case "spot-h":    return row.spot.h;
     case "spot-l":    return row.spot.l;
     case "spot-c":    return row.spot.c;
     case "spot-mma":  return row.spotMMA;
-    case "spot-tla":  return row.spotTLA;
+    case "spot-tla":  return row.spotTMA;
     case "smc":       return row.smc;
     case "fib":       return row.fib;
     case "rsi":       return row.rsi;
@@ -858,7 +891,7 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
         fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
       }}>
         <span>{rows.length} bar{rows.length !== 1 ? "s" : ""} · Select range + Ctrl/Cmd-C to copy as TSV</span>
-        <span>MMA=(O+H+L−C)/4 · TLA=2×MMA−H · Ranking=max(CallMMA,PutMMA) · EMA=EMA20 vs EMA200 Spot signal · VWAP Σ(TP×Vol)/ΣVol Future · RSI Wilder(14)</span>
+        <span>MA=(O+H+L−C)/4 · TMA=Σ(O+H+L+C)/(4×N) · C/P Sign=MA−TMA · Ranking=max(CallMA,PutMA) · EMA=EMA20 vs EMA200 Spot signal · VWAP Σ(TP×Vol)/ΣVol Future · RSI Wilder(14)</span>
       </div>
     </div>
   );

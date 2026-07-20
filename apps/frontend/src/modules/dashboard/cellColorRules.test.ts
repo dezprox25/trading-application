@@ -10,8 +10,8 @@ function rowWithCallOpen(o: number): DashboardRow {
   return {
     t: 0,
     call: bar(o), put: bar(1), future: bar(1), spot: bar(1),
-    callMMA: 1, callTLA: 1, putMMA: 1, putTLA: 1,
-    futureMMA: 1, futureTLA: 1, spotMMA: 1, spotTLA: 1,
+    callMMA: 1, callTMA: 1, putMMA: 1, putTMA: 1,
+    futureMMA: 1, futureTMA: 1, spotMMA: 1, spotTMA: 1,
     ranking: 1, rankingWinner: "call",
     smc: "", fib: "", rsi: null, ema: null, vwap: null, ema200: null,
     emaScore: null, vwapScore: null, totalScore: null, rating: null, signal: null,
