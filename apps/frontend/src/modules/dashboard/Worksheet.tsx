@@ -243,6 +243,13 @@ function getCellStyle(colId: string, row: DashboardRow): CellColor {
 const p0 = (n: number | null | undefined): string =>
   n == null || !Number.isFinite(n) ? "—" : truncateForDisplay(n).toLocaleString("en-IN");
 
+// Future/Spot Open/High/Low/Close only (client spec): same truncation as p0,
+// but WITHOUT the thousands-separator grouping — e.g. 24210, not 24,210.
+// Every other column (Call/Put OHLC, MA, TMA, C Sign, P Sign, Ranking,
+// Indicators) keeps p0()'s comma formatting untouched.
+const p0NoGroup = (n: number | null | undefined): string =>
+  n == null || !Number.isFinite(n) ? "—" : String(truncateForDisplay(n));
+
 // C Sign / P Sign: MA − TMA per the written spec, shown with an explicit "+"
 // prefix when positive (client example: "+5"), truncated like every other
 // price column. The same truncated value drives the Dark-Green/Black color
@@ -342,20 +349,20 @@ export function getCellValue(row: DashboardRow, colId: string, pivotMethod: Pivo
     case "p-sign":    return fmtSign(row.putMMA - row.putTMA);
     // Ranking (compares option MMAs; coloured via getCellStyle)
     case "ranking":   return p0(row.ranking);
-    // Future OHLC + indicators
-    case "fut-o":     return p0(row.future.o);
-    case "fut-h":     return p0(row.future.h);
-    case "fut-l":     return p0(row.future.l);
-    case "fut-c":     return p0(row.future.c);
+    // Future OHLC (no thousands separator, client spec) + MA/TMA (unchanged)
+    case "fut-o":     return p0NoGroup(row.future.o);
+    case "fut-h":     return p0NoGroup(row.future.h);
+    case "fut-l":     return p0NoGroup(row.future.l);
+    case "fut-c":     return p0NoGroup(row.future.c);
     case "fut-mma":   return p0(row.futureMMA);
     case "fut-tla":   return p0(row.futureTMA);
     // Space — reserved placeholder column, intentionally always blank
     case "space":     return "";
-    // Spot OHLC + indicators
-    case "spot-o":    return p0(row.spot.o);
-    case "spot-h":    return p0(row.spot.h);
-    case "spot-l":    return p0(row.spot.l);
-    case "spot-c":    return p0(row.spot.c);
+    // Spot OHLC (no thousands separator, client spec) + MA/TMA (unchanged)
+    case "spot-o":    return p0NoGroup(row.spot.o);
+    case "spot-h":    return p0NoGroup(row.spot.h);
+    case "spot-l":    return p0NoGroup(row.spot.l);
+    case "spot-c":    return p0NoGroup(row.spot.c);
     case "spot-mma":  return p0(row.spotMMA);
     case "spot-tla":  return p0(row.spotTMA);
     // Indicators
