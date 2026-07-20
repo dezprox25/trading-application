@@ -36,6 +36,12 @@ interface DashboardStore {
   // Generated
   isGenerated:     boolean;
   generateKey:     number;
+  /** Bumped to force Effect 1 (history fetch + live-bar rebuild) in Dashboard
+   *  to re-run without changing any config — used by both the manual Retry
+   *  button and automatic recovery (socket reconnect / broker back online /
+   *  periodic retry while in an error state). See index.tsx. */
+  reloadKey:       number;
+  bumpReloadKey(): void;
   timeframe:       string;
   customRange:     { from: string; to: string; candleTf: string } | null;
   pivotMethod:     PivotMethod;
@@ -103,6 +109,7 @@ export const useDashStore = create<DashboardStore>((set, get) => ({
   expiryDate: "",
   isGenerated: false,
   generateKey: 0,
+  reloadKey: 0,
   timeframe: "5m", customRange: null, pivotMethod: savedPivot(), configCollapsed: false,
   rows: [], feedStatus: "idle",
   spotLtp: null, futureLtp: null, spotDir: null, futureDir: null,
@@ -119,6 +126,7 @@ export const useDashStore = create<DashboardStore>((set, get) => ({
   // Expiry change reloads strikes (ConfigRow prunes selections no longer valid)
   setExpiryDate:    (v) => set({ expiryDate: v }),
   generate:      ()  => set((s) => ({ isGenerated: true, rows: [], generateKey: s.generateKey + 1 })),
+  bumpReloadKey: ()  => set((s) => ({ reloadKey: s.reloadKey + 1 })),
   reset:         ()  => set({ isGenerated: false, rows: [], feedStatus: "idle" }),
   clearRows:     ()  => set({ rows: [] }),
   setTimeframe:  (tf) => set({ timeframe: tf }),

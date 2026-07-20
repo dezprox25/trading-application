@@ -90,6 +90,21 @@ export const useSocket = () => {
       const dashCfg = useDashStore.getState();
       if (dashCfg.isGenerated && dashCfg.expiryDate && (dashCfg.callStrike || dashCfg.putStrike)) {
         const exFmt = formatExpiryForBroker(dashCfg.expiryDate);
+
+        // Re-join the CE/PE tick rooms themselves. A reconnect hands the client a brand-new
+        // socket.io connection with none of the previous room memberships — the dedicated
+        // join/leave effect below only re-fires when the selected strikes CHANGE, so on a
+        // bare reconnect (same strikes) it never re-runs. Without this, `subscribe:options`
+        // still makes the backend receive and broadcast CE/PE ticks (server-side room), but
+        // this client is no longer in that room to hear them — Call/Put silently stop
+        // updating while Future/Spot (joined above) keep working, until a full page refresh.
+        if (dashCfg.type !== "Put" && dashCfg.callStrike) {
+          socket.emit("join:symbol", `${dashCfg.instrument}${exFmt}C${dashCfg.callStrike}`);
+        }
+        if (dashCfg.type !== "Call" && dashCfg.putStrike) {
+          socket.emit("join:symbol", `${dashCfg.instrument}${exFmt}P${dashCfg.putStrike}`);
+        }
+
         socket.emit("subscribe:options", {
           instrument: dashCfg.instrument,
           expiry: exFmt,
@@ -97,7 +112,7 @@ export const useSocket = () => {
           putStrike: dashCfg.type !== "Call" ? dashCfg.putStrike : null,
           type: dashCfg.type,
         });
-        console.log("[Socket] subscribe:options re-sent on (re)connect");
+        console.log("[Socket] subscribe:options + CE/PE room rejoin re-sent on (re)connect");
       }
 
       const room = module1IndicatorRoom;
@@ -179,12 +194,25 @@ export const useSocket = () => {
       const dash = useDashStore.getState();
       switch (data.status) {
         case "live":
-          if (
+          if (dash.feedStatus === "idle") {
+            // Nothing has been fetched yet (Generate hasn't run) — a plain
+            // flag flip is enough, Effect 1 will do the real fetch once it does.
+            dash.setFeedStatus("live");
+          } else if (
             dash.feedStatus === "reconnecting" ||
             dash.feedStatus === "broker-disconnected" ||
-            dash.feedStatus === "idle"
+            dash.feedStatus === "api-error" ||
+            dash.feedStatus === "auth-error" ||
+            dash.feedStatus === "no-network"
           ) {
-            dash.setFeedStatus("live");
+            // Effect 1 already ran and either exited early (api-error/auth-error/
+            // no-network — one bad point-in-time check) or was mid-fetch when the
+            // connection dropped (reconnecting/broker-disconnected). A bare status
+            // flip here would show "live" over whatever rows (none, or stale) Effect 1
+            // last produced. bumpReloadKey re-runs the full history fetch + live-bar
+            // rebuild — the same recovery the manual Retry button performs — so the
+            // dashboard actually reloads data instead of just relabelling itself.
+            dash.bumpReloadKey();
           }
           break;
         case "reconnecting":

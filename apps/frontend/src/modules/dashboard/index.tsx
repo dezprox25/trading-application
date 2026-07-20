@@ -236,13 +236,12 @@ export function Dashboard() {
     setFeedStatus, feedStatus,
     setLivePrices,
     hiddenCols, colOrder,
-    generateKey,
+    generateKey, reloadKey, bumpReloadKey,
     rehydratePrefs,
     pivotMethod,
   } = useDashStore();
 
   const [isLoading, setIsLoading] = useState(false);
-  const [retryKey, setRetryKey] = useState(0);
 
   const barRef        = useRef<ActiveBar | null>(null);
   const prevRsiCloses = useRef<number[]>([]);
@@ -566,7 +565,35 @@ export function Dashboard() {
     init();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isGenerated, instrument, timeframe, customRange, retryKey, generateKey, expiryDate, callStrike, putStrike, type]);
+  }, [isGenerated, instrument, timeframe, customRange, reloadKey, generateKey, expiryDate, callStrike, putStrike, type]);
+
+  // Effect 1b: automatic recovery from a stuck error state — no user interaction.
+  //
+  // Effect 1 above makes a single point-in-time judgement (one REST call to
+  // /api/market/status, or whatever exception a fetch throws) at the moment
+  // Generate fires. That snapshot can be wrong for reasons that are already
+  // transient by the time the user sees it: the broker finished connecting a
+  // moment after the check ran, a network blip had already recovered, etc.
+  // Previously the ONLY way out of api-error/auth-error/no-network was the
+  // manual Retry button. This mirrors that exact same action (bumpReloadKey,
+  // which re-runs Effect 1's full history fetch + live-bar rebuild) on a
+  // short timer so the dashboard heals itself. market-closed gets the same
+  // treatment on a longer interval purely so a tab left open across the
+  // 9:00 AM open transitions on its own (see "Long-running dashboard" /
+  // "Market open" acceptance scenarios) — it never touches formulas/UI.
+  useEffect(() => {
+    if (!isGenerated) return;
+
+    if (feedStatus === "api-error" || feedStatus === "auth-error" || feedStatus === "no-network") {
+      const t = setInterval(() => bumpReloadKey(), 5000);
+      return () => clearInterval(t);
+    }
+
+    if (feedStatus === "market-closed") {
+      const t = setInterval(() => bumpReloadKey(), 60000);
+      return () => clearInterval(t);
+    }
+  }, [isGenerated, feedStatus, bumpReloadKey]);
 
   // Effect 2: 500ms live OI polling — builds and updates the active bar.
   useEffect(() => {
@@ -920,7 +947,7 @@ export function Dashboard() {
       <ConfigRow />
       <TimeframeRow />
       {statusPanelKey ? (
-        <StatusPanel status={statusPanelKey} onRetry={() => setRetryKey(k => k + 1)} />
+        <StatusPanel status={statusPanelKey} onRetry={bumpReloadKey} />
       ) : (
         <Worksheet
           rows={rows}
