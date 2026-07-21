@@ -114,8 +114,8 @@ export const ALL_COLS: ColSpec[] = [
   { id: "fut-c",     sub: "Close",       group: "future",     defaultW: 88 },
   { id: "fut-mma",   sub: "MA",          group: "future",     defaultW: 96 },
   { id: "fut-tla",   sub: "TMA",         group: "future",     defaultW: 96 },
-  // Space — 1 column (reserved placeholder, no data/logic — see PR notes)
-  { id: "space",     sub: "",            group: "space",      defaultW: 88 },
+  // Space — 1 column: SPACE = C Sign − P Sign, colored via the OHLC engine
+  { id: "space",     sub: "Space",       group: "space",      defaultW: 88 },
   // Spot — 6 columns (full OHLC + MA + TMA)
   { id: "spot-o",    sub: "Open",        group: "spot",       defaultW: 88 },
   { id: "spot-h",    sub: "High",        group: "spot",       defaultW: 88 },
@@ -356,8 +356,8 @@ export function getCellValue(row: DashboardRow, colId: string, pivotMethod: Pivo
     case "fut-c":     return p0NoGroup(row.future.c);
     case "fut-mma":   return p0(row.futureMMA);
     case "fut-tla":   return p0(row.futureTMA);
-    // Space — reserved placeholder column, intentionally always blank
-    case "space":     return "";
+    // Space = C Sign − P Sign, formatted/colored exactly like the Sign columns
+    case "space":     return fmtSign((row.callMMA - row.callTMA) - (row.putMMA - row.putTMA));
     // Spot OHLC (no thousands separator, client spec) + MA/TMA (unchanged)
     case "spot-o":    return p0NoGroup(row.spot.o);
     case "spot-h":    return p0NoGroup(row.spot.h);

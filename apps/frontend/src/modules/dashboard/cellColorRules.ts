@@ -152,6 +152,9 @@ const TRACKED_COLUMNS: Record<string, TrackedColumnDef> = {
   "spot-h": { accessor: (r) => r.spot.h, theme: "hlc", truncateForColor: true },
   "spot-l": { accessor: (r) => r.spot.l, theme: "hlc", truncateForColor: true },
   "spot-c": { accessor: (r) => r.spot.c, theme: "hlc", truncateForColor: true },
+  // SPACE = C Sign − P Sign (C Sign = callMMA−callTMA, P Sign = putMMA−putTMA)
+  // — reuses the same OHLC "hlc" theme/engine per spec, not a new color rule.
+  "space": { accessor: (r) => (r.callMMA - r.callTMA) - (r.putMMA - r.putTMA), theme: "hlc", truncateForColor: true },
 
   // Group B — Call/Put/Future/Spot MA/TMA (dark theme). C Sign / P Sign are
   // deliberately NOT tracked here — they use their own fixed Dark-Green/Black
