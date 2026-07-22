@@ -1,13 +1,11 @@
 // DOM-level verification of the C Sign / P Sign column STYLING: renders the
-// REAL Worksheet component (same code path as the running UI) and asserts the
-// exact CELL BACKGROUND present in the produced markup — value > 0 → dark
-// green background (#006400), value ≤ 0 → black background (#000000), white
-// text in both cases — and that no other cell in the whole table picks up
-// the sign-column backgrounds. The sign value itself is MA − TMA exactly as
-// specified (driven here through callMMA/callTMA & putMMA/putTMA); with the
-// current business MA formula real data yields negative values (black cells),
-// which is spec-compliant — this test proves the green path renders correctly
-// whenever a positive value does occur.
+// REAL Worksheet component (same code path as the running UI) and asserts
+// the exact CELL BACKGROUND present in the produced markup now that C Sign /
+// P Sign use the SAME Blue/Green/Pink/Black live-color engine as every other
+// tracked column (see cellColorRules.ts TRACKED_COLUMNS "c-sign"/"p-sign"),
+// instead of their prior fixed Dark-Green/Black rule. The sign value itself
+// is MA − TMA exactly as specified (driven here through callMMA/callTMA &
+// putMMA/putTMA).
 
 import { describe, it, expect } from "vitest";
 import { createElement } from "react";
@@ -51,42 +49,40 @@ function cellStyle(html: string, text: string): string {
   return m![1];
 }
 
-describe("C Sign / P Sign rendered colors (final DOM output)", () => {
+describe("C Sign / P Sign rendered colors (final DOM output, shared 4-color engine)", () => {
   const t0 = Date.UTC(2026, 6, 20, 4, 0); // 09:30 IST
   const html = render([
-    // Row 1: C Sign = 120 − 115 = +5 (green) · P Sign = 80 − 84 = −4 (black)
+    // Row 1: C Sign = 120 − 115 = +5 (first value → no color yet)
+    //        P Sign = 80 − 84 = −4 (first value → no color yet)
     mkRow(t0, { callMMA: 120, callTMA: 115, putMMA: 80, putTMA: 84 }),
-    // Row 2: C Sign = 100 − 110 = −10 (black) · P Sign = 90 − 84 = +6 (green)
+    // Row 2: C Sign = 100 − 110 = −10 → drop below prior (+5) AND below the
+    //        running lowest → new-low → "black"
+    //        P Sign = 90 − 84 = +6 → rise above prior (−4) AND above the
+    //        running highest → new-high → "blue"
     mkRow(t0 + 300000, { callMMA: 100, callTMA: 110, putMMA: 90, putTMA: 84 }),
-    // Row 3: C Sign = 115 − 115 = 0 (black) · P Sign = 84 − 84 = 0 (black)
+    // Row 3: C Sign = 115 − 115 = 0 · P Sign = 84 − 84 = 0 — a colorable
+    // value of exactly 0 is treated as missing/invalid (isColorableValue),
+    // so neither cell gets a color and tracking state is untouched.
     mkRow(t0 + 600000, { callMMA: 115, callTMA: 115, putMMA: 84, putTMA: 84 }),
   ]);
 
-  it("value > 0 → entire cell dark green background with white text", () => {
-    expect(cellStyle(html, "+5")).toContain("background:#006400");
-    expect(cellStyle(html, "+5")).toContain("color:#FFFFFF");
-    expect(cellStyle(html, "+6")).toContain("background:#006400");
-    expect(cellStyle(html, "+6")).toContain("color:#FFFFFF");
+  it("first value in the column → no color (default white bg, black text)", () => {
+    expect(cellStyle(html, "+5")).toContain("background:#FFFFFF");
+    expect(cellStyle(html, "-4")).toContain("background:#FFFFFF");
   });
 
-  it("value < 0 → entire cell black background with white text", () => {
-    expect(cellStyle(html, "-4")).toContain("background:#000000");
-    expect(cellStyle(html, "-4")).toContain("color:#FFFFFF");
-    expect(cellStyle(html, "-10")).toContain("background:#000000");
+  it("C Sign new-low value → dark-theme black background, white text", () => {
+    expect(cellStyle(html, "-10")).toContain("background:#111827");
     expect(cellStyle(html, "-10")).toContain("color:#FFFFFF");
   });
 
-  it("value == 0 → black background, no + prefix", () => {
-    expect(cellStyle(html, "0")).toContain("background:#000000");
-    expect(cellStyle(html, "0")).toContain("color:#FFFFFF");
+  it("P Sign new-high value → dark-theme blue background, white text", () => {
+    expect(cellStyle(html, "+6")).toContain("background:#1E3A8A");
+    expect(cellStyle(html, "+6")).toContain("color:#FFFFFF");
   });
 
-  it("no other cell in the table uses the sign-column backgrounds", () => {
-    // Exactly the two positive sign cells are dark green, and exactly the
-    // four non-positive sign cells (−4, −10, 0, 0) are pure black — the
-    // OHLC/MA/TMA/Ranking/Indicators palettes never use #006400 or #000000
-    // as a background (the color engine's "black" is #111827).
-    expect(html.match(/background:#006400/g)?.length).toBe(2);
-    expect(html.match(/background:#000000/g)?.length).toBe(4);
+  it("value == 0 → treated as no color (default white bg, black text)", () => {
+    expect(cellStyle(html, "0")).toContain("background:#FFFFFF");
+    expect(cellStyle(html, "0")).toContain("color:#000000");
   });
 });

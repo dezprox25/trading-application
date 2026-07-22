@@ -115,10 +115,11 @@ export function pivotForBar(method: PivotMethod, bar: OHLCBar): PivotLevels | nu
 }
 
 // ── MA (formerly MMA) / TMA ──────────────────────────────────────────────────
-// Client formula (v2 spec): MA = (O + H + L + (MMA_CLOSE_SIGN × C)) / 4
-// With MMA_CLOSE_SIGN = −1 (as written by the client) MA ≈ half the price.
-// Change to +1 if confirmed a typo.
-export const MMA_CLOSE_SIGN = -1 as const;
+// Client formula (v3 spec, 2026-07-22): MA = (O + H + L + (MMA_CLOSE_SIGN × C)) / 4
+// with MMA_CLOSE_SIGN = +1, i.e. MA = (O + H + L + C) / 4 — an intentional
+// business-rule change from the prior (O + H + L − C) / 4. Applies uniformly
+// to Call/Put/Future/Spot MA since all four sides call this same function.
+export const MMA_CLOSE_SIGN = 1 as const;
 
 export function mmaBar(bar: OHLCBar): number {
   return (bar.o + bar.h + bar.l + MMA_CLOSE_SIGN * bar.c) / 4;
@@ -318,7 +319,9 @@ export function nearestFibLabel(price: number, high: number, low: number): strin
   const nearest = levels.reduce((best, lvl) =>
     Math.abs(lvl.value - price) < Math.abs(best.value - price) ? lvl : best
   );
-  return `${nearest.label} ${nearest.value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  // useGrouping: false — Indicator-section display spec: no thousands separators.
+  // Same precision/value as before; only the comma grouping is removed.
+  return `${nearest.label} ${nearest.value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: false })}`;
 }
 
 // ── SMC structural levels ─────────────────────────────────────────────────────
@@ -339,7 +342,9 @@ export function smcNearest(
   const nearest = candidates.reduce((best, c) =>
     Math.abs(c.value - close) < Math.abs(best.value - close) ? c : best
   );
-  return `${nearest.label} ${nearest.value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  // useGrouping: false — Indicator-section display spec: no thousands separators.
+  // Same precision/value as before; only the comma grouping is removed.
+  return `${nearest.label} ${nearest.value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: false })}`;
 }
 
 // ── Rating engine (kept for backward compat; not used in v2 DashboardRow) ─────

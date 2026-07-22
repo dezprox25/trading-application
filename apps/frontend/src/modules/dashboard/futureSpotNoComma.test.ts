@@ -1,8 +1,8 @@
-// DOM-level verification that Future/Spot Open/High/Low/Close render WITHOUT
-// a thousands-separator, while every other column (Call/Put OHLC, MA, TMA,
-// C Sign, P Sign, Ranking) keeps its existing comma formatting. Renders the
-// REAL Worksheet component so this checks actual produced markup, not just
-// the formatter function in isolation.
+// DOM-level verification that Future/Spot Open/High/Low/Close/MA/TMA render
+// WITHOUT a thousands-separator, while Call/Put OHLC/MA/TMA and Ranking keep
+// their existing comma formatting. Renders the REAL Worksheet component so
+// this checks actual produced markup, not just the formatter function in
+// isolation.
 
 import { describe, it, expect } from "vitest";
 import { createElement } from "react";
@@ -67,12 +67,17 @@ describe("Future/Spot OHLC render without thousands separator", () => {
     expect(html).toMatch(/>13,210</); // Put O/H/L/C
   });
 
-  it("MA, TMA, C Sign, P Sign, Ranking keep the comma (Future/Spot MA/TMA included)", () => {
+  it("Call/Put MA, TMA, Ranking keep the comma", () => {
     expect(html).toMatch(/>45,000</); // Call TMA
     expect(html).toMatch(/>51,340</); // Ranking (also covers Call MA, same value)
-    // Future/Spot MA/TMA are explicitly NOT part of the no-comma change —
-    // confirm they still render grouped, unlike Future/Spot O/H/L/C above.
-    expect(html).toMatch(/>90,000</); // Future/Spot MA
-    expect(html).toMatch(/>80,000</); // Future/Spot TMA
+  });
+
+  it("Future/Spot MA, TMA render WITHOUT a comma (client spec)", () => {
+    // Future/Spot MA/TMA were moved to the no-comma formatter (p0NoGroup),
+    // same as Future/Spot O/H/L/C — only Call/Put MA/TMA still group.
+    expect(html).not.toMatch(/90,000/);
+    expect(html).not.toMatch(/80,000/);
+    expect(html).toMatch(/>90000</); // Future/Spot MA
+    expect(html).toMatch(/>80000</); // Future/Spot TMA
   });
 });

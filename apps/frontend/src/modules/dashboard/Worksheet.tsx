@@ -192,6 +192,13 @@ const C_DEFAULT: CellColor = { bg: "#FFFFFF", textColor: "#000000" };
 const C_RANK_CALL: CellColor = { bg: "#FFFFFF", textColor: "#1E40AF" }; // white bg, blue text — call wins
 const C_RANK_PUT:  CellColor = { bg: "#FFFFFF", textColor: "#78350F" }; // white bg, amber text — put wins
 
+// Readability pass: every NUMERIC cell renders SemiBold instead of Regular.
+// The handful of text/label columns (frozen time, SMC/FIB nearest-level
+// labels, the EMA CALL/PUT/NEUTRAL label, Rating, Signal) are excluded so
+// only actual numbers get heavier — alignment/row height/column widths are
+// untouched, this only changes font-weight.
+const NON_NUMERIC_COLS = new Set(["datetime", "smc", "fib", "ema", "rating", "signal"]);
+
 // ── Ranking direction indicator (UI-only) ─────────────────────────────────────
 // Each Ranking cell is compared against the chronologically PREVIOUS bar's
 // Ranking (rankingDir) — this comparison is unchanged. Direction is now shown
@@ -213,23 +220,14 @@ export function rankingDir(curr: number, prev: number | undefined): RankDir {
   return "flat";
 }
 
-// C Sign / P Sign color rule (final client spec) — applies ONLY to these two
-// columns, as a full CELL BACKGROUND with white text, using the same
-// truncated value the cell displays:
-//   value > 0            → dark green background
-//   value ≤ 0 (or missing) → black background
-const C_SIGN_POSITIVE:    CellColor = { bg: "#006400", textColor: "#FFFFFF" };
-const C_SIGN_NONPOSITIVE: CellColor = { bg: "#000000", textColor: "#FFFFFF" };
-
+// C Sign / P Sign now use the same 4-color (Blue/Green/Pink/Black) live
+// engine as every other tracked column (see cellColorRules.ts's
+// TRACKED_COLUMNS "c-sign"/"p-sign" entries) — this function no longer
+// special-cases them.
 function getCellStyle(colId: string, row: DashboardRow): CellColor {
   switch (colId) {
     case "ranking":
       return row.rankingWinner === "call" ? C_RANK_CALL : C_RANK_PUT;
-    case "c-sign":
-    case "p-sign": {
-      const v = colId === "c-sign" ? row.callMMA - row.callTMA : row.putMMA - row.putTMA;
-      return Number.isFinite(v) && truncateForDisplay(v) > 0 ? C_SIGN_POSITIVE : C_SIGN_NONPOSITIVE;
-    }
     default:
       return C_DEFAULT;
   }
@@ -243,20 +241,18 @@ function getCellStyle(colId: string, row: DashboardRow): CellColor {
 const p0 = (n: number | null | undefined): string =>
   n == null || !Number.isFinite(n) ? "—" : truncateForDisplay(n).toLocaleString("en-IN");
 
-// Future/Spot Open/High/Low/Close only (client spec): same truncation as p0,
-// but WITHOUT the thousands-separator grouping — e.g. 24210, not 24,210.
-// Every other column (Call/Put OHLC, MA, TMA, C Sign, P Sign, Ranking,
-// Indicators) keeps p0()'s comma formatting untouched.
+// Future/Spot Open/High/Low/Close, and every numeric Indicator-section column
+// (client spec): same truncation as p0, but WITHOUT the thousands-separator
+// grouping — e.g. 24210, not 24,210. Call/Put OHLC, MA, TMA, C Sign, P Sign,
+// and Ranking keep p0()'s comma formatting untouched.
 const p0NoGroup = (n: number | null | undefined): string =>
   n == null || !Number.isFinite(n) ? "—" : String(truncateForDisplay(n));
 
 // C Sign / P Sign: MA − TMA per the written spec, shown with an explicit "+"
 // prefix when positive (client example: "+5"), truncated like every other
-// price column. The same truncated value drives the Dark-Green/Black color
-// rule in getCellStyle. NOTE (accepted business reality): with the current
-// MA formula (MMA_CLOSE_SIGN = −1, i.e. (O+H+L−C)/4) MA sits at ~half the
-// TMA's price scale, so these values are negative on essentially every real
-// bar and render black — that is spec-compliant, not a styling defect.
+// price column. The same truncated value drives the shared Blue/Green/Pink/
+// Black color engine (see cellColorRules.ts TRACKED_COLUMNS "c-sign"/
+// "p-sign"), same as every other tracked column — no separate color rule.
 const fmtSign = (n: number): string => {
   if (!Number.isFinite(n)) return "—";
   const tr = truncateForDisplay(n);
@@ -265,8 +261,10 @@ const fmtSign = (n: number): string => {
 
 // VWAP-specific: null means "no Volume to weight by yet" (client spec) —
 // distinct from the generic "—" used for every other not-yet-available cell.
+// Indicator-section spec: no thousands-separator grouping (e.g. 145200, not
+// 145,200) — same truncation/precision as before, comma removed only.
 const fmtVwap = (n: number | null | undefined): string =>
-  n == null || !Number.isFinite(n) ? "VWAP Not Available" : truncateForDisplay(n).toLocaleString("en-IN");
+  n == null || !Number.isFinite(n) ? "VWAP Not Available" : String(truncateForDisplay(n));
 
 // The single visible EMA column shows the EMA20-vs-EMA200 comparison label,
 // not a raw EMA number (client spec) — score is row.emaScore, already
@@ -354,8 +352,8 @@ export function getCellValue(row: DashboardRow, colId: string, pivotMethod: Pivo
     case "fut-h":     return p0NoGroup(row.future.h);
     case "fut-l":     return p0NoGroup(row.future.l);
     case "fut-c":     return p0NoGroup(row.future.c);
-    case "fut-mma":   return p0(row.futureMMA);
-    case "fut-tla":   return p0(row.futureTMA);
+    case "fut-mma":   return p0NoGroup(row.futureMMA);
+    case "fut-tla":   return p0NoGroup(row.futureTMA);
     // Space = C Sign − P Sign, formatted/colored exactly like the Sign columns
     case "space":     return fmtSign((row.callMMA - row.callTMA) - (row.putMMA - row.putTMA));
     // Spot OHLC (no thousands separator, client spec) + MA/TMA (unchanged)
@@ -363,31 +361,32 @@ export function getCellValue(row: DashboardRow, colId: string, pivotMethod: Pivo
     case "spot-h":    return p0NoGroup(row.spot.h);
     case "spot-l":    return p0NoGroup(row.spot.l);
     case "spot-c":    return p0NoGroup(row.spot.c);
-    case "spot-mma":  return p0(row.spotMMA);
-    case "spot-tla":  return p0(row.spotTMA);
-    // Indicators
+    case "spot-mma":  return p0NoGroup(row.spotMMA);
+    case "spot-tla":  return p0NoGroup(row.spotTMA);
+    // Indicators (no thousands-separator grouping on any numeric Indicator
+    // value, per client spec — p0NoGroup/fmtVwap, not p0)
     case "smc":       return row.smc;
     case "fib":       return row.fib;
-    case "rsi":       return p0(row.rsi);
+    case "rsi":       return p0NoGroup(row.rsi);
     case "ema":       return fmtEmaSignal(row.emaScore);
     case "vwap":      return fmtVwap(row.vwap);
     // EMA20 vs EMA200 / VWAP vs EMA20 scoring (client EMA & VWAP spec)
-    case "ema200":       return p0(row.ema200);
-    case "ema-score":    return p0(row.emaScore);
-    case "vwap-score":   return p0(row.vwapScore);
-    case "total-score":  return p0(row.totalScore);
+    case "ema200":       return p0NoGroup(row.ema200);
+    case "ema-score":    return p0NoGroup(row.emaScore);
+    case "vwap-score":   return p0NoGroup(row.vwapScore);
+    case "total-score":  return p0NoGroup(row.totalScore);
     case "rating":       return row.rating ?? "—";
     case "signal":       return row.signal ?? "—";
     // Pivot Points — computed on demand from the row's own Future candle so
     // switching pivotMethod recalculates every row immediately, live and
     // historical, without needing to rebuild the stored rows.
-    case "pp":        return p0(pivotForBar(pivotMethod, row.future)?.pp);
-    case "r1":        return p0(pivotForBar(pivotMethod, row.future)?.r1);
-    case "r2":        return p0(pivotForBar(pivotMethod, row.future)?.r2);
-    case "r3":        return p0(pivotForBar(pivotMethod, row.future)?.r3);
-    case "s1":        return p0(pivotForBar(pivotMethod, row.future)?.s1);
-    case "s2":        return p0(pivotForBar(pivotMethod, row.future)?.s2);
-    case "s3":        return p0(pivotForBar(pivotMethod, row.future)?.s3);
+    case "pp":        return p0NoGroup(pivotForBar(pivotMethod, row.future)?.pp);
+    case "r1":        return p0NoGroup(pivotForBar(pivotMethod, row.future)?.r1);
+    case "r2":        return p0NoGroup(pivotForBar(pivotMethod, row.future)?.r2);
+    case "r3":        return p0NoGroup(pivotForBar(pivotMethod, row.future)?.r3);
+    case "s1":        return p0NoGroup(pivotForBar(pivotMethod, row.future)?.s1);
+    case "s2":        return p0NoGroup(pivotForBar(pivotMethod, row.future)?.s2);
+    case "s3":        return p0NoGroup(pivotForBar(pivotMethod, row.future)?.s3);
     default:          return "—";
   }
 }
@@ -471,6 +470,43 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
   const [selRange, setSelRange]   = useState<SelRange | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
+  // ── Full Screen mode (UI-only — layout, no data/calc effect) ─────────────
+  // Expands ONLY this table's container to fill the viewport; the rest of
+  // the dashboard (InfoBar/ConfigRow/TimeframeRow) is simply visually
+  // covered (position: fixed, full viewport, opaque background, high
+  // z-index) — nothing outside this component is touched, no state/rows are
+  // reloaded or recalculated, no API calls are made.
+  const fullscreenContainerRef = useRef<HTMLDivElement>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const toggleFullscreen = useCallback(() => {
+    if (isFullscreen) {
+      if (document.fullscreenElement) {
+        document.exitFullscreen?.().catch(() => { /* ignore */ });
+      }
+      setIsFullscreen(false);
+      return;
+    }
+    const el = fullscreenContainerRef.current;
+    if (el?.requestFullscreen) {
+      el.requestFullscreen()
+        .then(() => setIsFullscreen(true))
+        .catch(() => setIsFullscreen(true)); // Fullscreen API blocked/unsupported → CSS-only fallback
+    } else {
+      setIsFullscreen(true);
+    }
+  }, [isFullscreen]);
+
+  // Keep state in sync when the user exits native fullscreen via the
+  // browser's own Esc-key handling (not our button).
+  useEffect(() => {
+    const onFsChange = () => {
+      if (!document.fullscreenElement) setIsFullscreen(false);
+    };
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => document.removeEventListener("fullscreenchange", onFsChange);
+  }, []);
+
   // Dev-only: detect columns whose values are identical across every visible row.
   const frozenWarnKeyRef = useRef<string>("");
   const [frozenWarn, setFrozenWarn] = useState<string[]>([]);
@@ -479,6 +515,30 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
   // the end) — display in that order so the earliest candle is the first row
   // and the live candle is always the last.
   const displayRows = rows;
+
+  // ── Auto-scroll to the latest candle (live-terminal behavior) ────────────
+  // Tracks whether the user is currently pinned to the bottom via a ref (not
+  // state) so scroll events never trigger a re-render. When a new row is
+  // appended, we only jump to the bottom if the user was already there —
+  // scrolling up to inspect history pauses auto-scroll until they scroll
+  // back down. Only scrollTop is touched, so horizontal scroll position,
+  // frozen columns, and sticky headers are all untouched.
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const isPinnedToBottomRef = useRef(true);
+  const BOTTOM_PIN_THRESHOLD_PX = 24;
+
+  const handleTableScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    isPinnedToBottomRef.current = distanceFromBottom <= BOTTOM_PIN_THRESHOLD_PX;
+  }, []);
+
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el || !isPinnedToBottomRef.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [displayRows.length]);
 
   // Column-independent Blue/Green/Pink/Black live coloring (see
   // ./cellColorRules) — one left-to-right pass per applicable column,
@@ -693,7 +753,30 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
   // ── Main Excel-style table ────────────────────────────────────────────────
 
   return (
-    <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+    <div
+      ref={fullscreenContainerRef}
+      style={{
+        flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column",
+        position: isFullscreen ? "fixed" : "relative",
+        ...(isFullscreen
+          ? { top: 0, left: 0, right: 0, bottom: 0, width: "100vw", height: "100vh", zIndex: 9999, background: "#FFFFFF" }
+          : {}),
+      }}
+    >
+      <button
+        type="button"
+        onClick={toggleFullscreen}
+        title={isFullscreen ? "Exit full screen" : "Full screen"}
+        aria-label={isFullscreen ? "Exit full screen" : "Full screen"}
+        style={{
+          position: "absolute", top: 6, right: 10, zIndex: 20,
+          width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center",
+          border: "1px solid #BDC4CF", borderRadius: 4, background: "#FFFFFF",
+          cursor: "pointer", fontSize: 13, lineHeight: 1, color: "#1A2533", padding: 0,
+        }}
+      >
+        {isFullscreen ? "✖" : "⛶"}
+      </button>
       {import.meta.env.DEV && frozenWarn.length > 0 && (
         <div style={{
           background: "#FEF2F2", borderBottom: "2px solid #EF4444",
@@ -721,7 +804,11 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
       )}
 
       {/* ── Scrollable table area ─────────────────────────────────────────── */}
-      <div style={{ flex: 1, minHeight: 0, overflow: "auto", background: "#FFFFFF" }}>
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleTableScroll}
+        style={{ flex: 1, minHeight: 0, overflow: "auto", background: "#FFFFFF" }}
+      >
         <table style={{
           borderCollapse: "collapse",
           tableLayout: "fixed",
@@ -827,7 +914,7 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                   let val = getCellValue(row, c.id, pivotMethod);
                   let bg         = cs.bg;
                   let textColor  = cs.textColor;
-                  let fontWeight = 400;
+                  let fontWeight = NON_NUMERIC_COLS.has(c.id) ? 400 : 600;
 
                   if (c.id === "ranking") {
                     // displayRows is chronological (oldest first), so the

@@ -11,7 +11,15 @@ import type { DashboardRow } from "../../calc";
 //   current > previous, not new high → "green"
 //   current < all-time-low-so-far    → "black" (new low), lowest updates
 //   current < previous, not new low  → "pink"
-//   current === previous             → null (no color change)
+//   current === previous             → same rule as "current > previous"
+//                                       (ties resolve to the non-decrease
+//                                       side, matching this codebase's other
+//                                       tie-break convention — see
+//                                       computeRanking's callMMA-putMMA>=0):
+//                                       "blue" if it's also a new all-time
+//                                       high, otherwise "green". A cell is
+//                                       never left uncolored once there is a
+//                                       previous value to compare against.
 //   first valid value in the column  → null (nothing to compare against yet)
 //
 // Missing/invalid values (null, undefined, 0, NaN, Infinity) never get a
@@ -156,9 +164,9 @@ const TRACKED_COLUMNS: Record<string, TrackedColumnDef> = {
   // — reuses the same OHLC "hlc" theme/engine per spec, not a new color rule.
   "space": { accessor: (r) => (r.callMMA - r.callTMA) - (r.putMMA - r.putTMA), theme: "hlc", truncateForColor: true },
 
-  // Group B — Call/Put/Future/Spot MA/TMA (dark theme). C Sign / P Sign are
-  // deliberately NOT tracked here — they use their own fixed Dark-Green/Black
-  // text rule (see Worksheet getCellStyle), never this engine.
+  // Group B — Call/Put/Future/Spot MA/TMA (dark theme). C Sign / P Sign now
+  // use this same engine (client spec update) instead of their prior fixed
+  // Dark-Green/Black rule.
   "mma-c": { accessor: (r) => r.callMMA, theme: "dark", truncateForColor: true },
   "tla-c": { accessor: (r) => r.callTMA, theme: "dark", truncateForColor: true },
   "mma-p": { accessor: (r) => r.putMMA, theme: "dark", truncateForColor: true },
@@ -167,6 +175,8 @@ const TRACKED_COLUMNS: Record<string, TrackedColumnDef> = {
   "fut-tla": { accessor: (r) => r.futureTMA, theme: "dark", truncateForColor: true },
   "spot-mma": { accessor: (r) => r.spotMMA, theme: "dark", truncateForColor: true },
   "spot-tla": { accessor: (r) => r.spotTMA, theme: "dark", truncateForColor: true },
+  "c-sign": { accessor: (r) => r.callMMA - r.callTMA, theme: "dark", truncateForColor: true },
+  "p-sign": { accessor: (r) => r.putMMA - r.putTMA, theme: "dark", truncateForColor: true },
 
   // Group C — Indicators (dark theme)
   "smc": { accessor: (r) => parseTrailingNumber(r.smc), theme: "dark", truncateForColor: false },
@@ -195,10 +205,16 @@ function nextColorStep(
   const nextHighest = highestBefore === null ? current : Math.max(highestBefore, current);
   const nextLowest = lowestBefore === null ? current : Math.min(lowestBefore, current);
 
-  if (prevValue === null || current === prevValue) {
+  if (prevValue === null) {
     return { colorClass: null, nextHighest, nextLowest };
   }
-  if (current > prevValue) {
+  // current === prevValue (a genuine tie) intentionally falls into this same
+  // branch as current > prevValue — see the rule-table comment above. A tie
+  // can never itself be a "new all-time high" here (highestBefore, tracked
+  // through every prior row including the one that set prevValue, can never
+  // be lower than prevValue === current), so this always resolves to
+  // "green" for equal values, never "blue".
+  if (current >= prevValue) {
     const isNewHigh = highestBefore === null || current > highestBefore;
     return { colorClass: isNewHigh ? "blue" : "green", nextHighest, nextLowest };
   }
