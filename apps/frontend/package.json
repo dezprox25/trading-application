@@ -12,6 +12,7 @@
   "dependencies": {
     "@stock/shared": "*",
     "@tanstack/react-query": "^5.45.0",
+    "exceljs": "^4.4.0",
     "lightweight-charts": "^5.2.0",
     "lucide-react": "^0.395.0",
     "react": "^19.0.0",

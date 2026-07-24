@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll } from "vitest";
-import * as XLSX from "xlsx";
+import { Workbook } from "exceljs";
 import * as fs from "fs";
 import type { DashboardRow } from "../../calc";
 import { buildModule1Workbook, exportModule1Excel, istDateStr } from "./excelExport";
@@ -29,7 +29,7 @@ describe("exportModule1Excel", () => {
   const outFile = "excelExport.verify.output.xlsx";
   afterAll(() => { try { fs.unlinkSync(outFile); } catch { /* noop */ } });
 
-  it("writes a workbook whose rows/columns/order match the visible table", () => {
+  it("writes a workbook whose rows, values, and colors match the visible table", async () => {
     const base = new Date(`${istDateStr()}T04:00:00.000Z`).getTime(); // ~09:30 IST
     const rows: DashboardRow[] = [mkRow(base, 0), mkRow(base + 300000, 1), mkRow(base + 600000, 2)];
 
@@ -40,22 +40,49 @@ describe("exportModule1Excel", () => {
     expect(built).not.toBeNull();
     expect(built!.filename).toBe(`Module1_NIFTY_5Min_${istDateStr()}.xlsx`);
 
-    XLSX.writeFile(built!.wb, outFile);
+    await built!.wb.xlsx.writeFile(outFile);
     expect(fs.existsSync(outFile)).toBe(true);
 
-    const wb = XLSX.readFile(outFile);
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1 }) as string[][];
+    const reloaded = new Workbook();
+    await reloaded.xlsx.readFile(outFile);
+    const ws = reloaded.getWorksheet("Module1");
 
-    // header rows + 3 data rows
-    expect(aoa.length).toBe(5);
-    expect(aoa[1][0]).toBe("Time");
+    expect(ws).toBeDefined();
+    expect(ws!.rowCount).toBe(5); // 2 header rows + 3 data rows
+    expect(ws!.getCell("A2").value).toBe("Time");
     // chronological order preserved — oldest first, newest last (time-only display)
-    expect(aoa[2][0]).toBe("09:30");
-    expect(aoa[4][0]).toBe("09:40");
+    expect(ws!.getCell("A3").value).toBe("09:30");
+    expect(ws!.getCell("A5").value).toBe("09:40");
     // ranking column carries the +/- prefix like the live table
-    const rankingColIdx = aoa[1].indexOf("Ranking");
-    expect(aoa[3][rankingColIdx]).toMatch(/^\+/);
+    expect(ws!.getCell("P4").value).toBe("+11");
+
+    // Group header styling matches the live table palette.
+    expect(ws!.getCell("B1").fill).toMatchObject({
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFDBEAFE" },
+    });
+
+    // Call Open's latest new high uses the existing dark-blue HLC palette.
+    expect(ws!.getCell("B5").fill).toMatchObject({
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF1E3A8A" },
+    });
+    expect(ws!.getCell("B5").font).toMatchObject({
+      color: { argb: "FFFFFFFF" },
+    });
+
+    // Ranking rises versus the previous row, so it exports with the dark-green fill.
+    expect(ws!.getCell("P5").fill).toMatchObject({
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF065F46" },
+    });
+    expect(ws!.getCell("P5").font).toMatchObject({
+      color: { argb: "FFFFFFFF" },
+      bold: true,
+    });
   });
 
   it("no-ops when there are no rows", () => {
