@@ -196,6 +196,17 @@ export function isColorableValue(v: number | null | undefined): v is number {
   return typeof v === "number" && Number.isFinite(v) && v !== 0;
 }
 
+const MA_TMA_PAIR_IDS: Record<string, string> = {
+  "mma-c": "tla-c",
+  "tla-c": "mma-c",
+  "mma-p": "tla-p",
+  "tla-p": "mma-p",
+  "fut-mma": "fut-tla",
+  "fut-tla": "fut-mma",
+  "spot-mma": "spot-tla",
+  "spot-tla": "spot-mma",
+};
+
 function nextColorStep(
   current: number,
   prevValue: number | null,
@@ -231,45 +242,125 @@ function nextColorStep(
 // only reruns when the data actually changes, not on every render.
 export function buildLiveColorGrid(rows: DashboardRow[]): Record<string, ColorClass[]> {
   const grid: Record<string, ColorClass[]> = {};
+  const normalizedValuesByColId: Record<string, Array<number | null>> = {};
 
   for (const [colId, def] of Object.entries(TRACKED_COLUMNS)) {
-    const colColors: ColorClass[] = new Array(rows.length).fill(null);
-    let prevValue: number | null = null;
-    let highest: number | null = null;
-    let lowest: number | null = null;
-    // Index of the row currently holding this column's blue/black — at most
-    // one of each may be lit at a time. When a later row earns a fresh blue,
-    // the row at the recorded index is repainted to null first. When a later
-    // row earns a fresh black, the row at the recorded index is repainted to
-    // pink first.
-    let lastBlueIndex: number | null = null;
-    let lastBlackIndex: number | null = null;
-
+    const values: Array<number | null> = new Array(rows.length).fill(null);
     for (let i = 0; i < rows.length; i++) {
       let raw = def.accessor(rows[i]);
-      // Compare the same value the cell displays — see truncateForColor's
-      // doc comment above. Applied before the invalid-value check so a raw
-      // value like 0.4 that displays as "0" is correctly excluded the same
-      // way a genuine 0 already is (unchanged rule: 0 -> no color).
       if (def.truncateForColor && typeof raw === "number" && Number.isFinite(raw)) {
         raw = truncateForDisplay(raw);
       }
-      if (!isColorableValue(raw)) continue; // missing/invalid — no color, don't touch tracking
+      values[i] = typeof raw === "number" && Number.isFinite(raw) ? raw : null;
+    }
+    normalizedValuesByColId[colId] = values;
+  }
 
-      const step = nextColorStep(raw, prevValue, highest, lowest);
+  for (const [colId] of Object.entries(TRACKED_COLUMNS)) {
+    const colColors: ColorClass[] = new Array(rows.length).fill(null);
 
-      if (step.colorClass === "blue") {
-        if (lastBlueIndex !== null) colColors[lastBlueIndex] = null;
-        lastBlueIndex = i;
-      } else if (step.colorClass === "black") {
-        if (lastBlackIndex !== null) colColors[lastBlackIndex] = "pink";
-        lastBlackIndex = i;
+    if (colId === "space") {
+      const values = normalizedValuesByColId[colId] ?? [];
+      const positiveValues = values.filter((v): v is number => v !== null && v > 0);
+      const negativeValues = values.filter((v): v is number => v !== null && v < 0);
+      const highestPositive = positiveValues.length > 0 ? Math.max(...positiveValues) : null;
+      const lowestNegative = negativeValues.length > 0 ? Math.min(...negativeValues) : null;
+
+      for (let i = 0; i < rows.length; i++) {
+        const raw = values[i];
+        if (raw === null) continue;
+
+        let color: ColorClass = null;
+        if (raw > 0) color = "green";
+        else if (raw < 0) color = "pink";
+
+        if (highestPositive !== null && raw === highestPositive) color = "blue";
+        if (lowestNegative !== null && raw === lowestNegative && color !== "blue") color = "black";
+
+        colColors[i] = color;
       }
+    } else if (colId === "c-sign" || colId === "p-sign") {
+      const values = normalizedValuesByColId[colId] ?? [];
+      const positiveValues = values.filter((v): v is number => v !== null && v > 0);
+      const lowestValue = values.filter((v): v is number => v !== null).length > 0
+        ? Math.min(...values.filter((v): v is number => v !== null))
+        : null;
+      const highestPositive = positiveValues.length > 0 ? Math.max(...positiveValues) : null;
 
-      colColors[i] = step.colorClass;
-      prevValue = raw;
-      highest = step.nextHighest;
-      lowest = step.nextLowest;
+      for (let i = 0; i < rows.length; i++) {
+        const raw = values[i];
+        if (raw === null) continue;
+
+        let color: ColorClass = null;
+        if (raw > 0) color = "green";
+        else color = "black";
+
+        if (highestPositive !== null && raw === highestPositive) color = "blue";
+        if (lowestValue !== null && raw === lowestValue && color !== "blue") color = "black";
+
+        colColors[i] = color;
+      }
+    } else if (colId in MA_TMA_PAIR_IDS) {
+      const values = normalizedValuesByColId[colId] ?? [];
+      const pairId = MA_TMA_PAIR_IDS[colId];
+      const pairValues = normalizedValuesByColId[pairId] ?? [];
+      const isMaColumn = colId.startsWith("mma") || colId.startsWith("fut-mma") || colId.startsWith("spot-mma");
+      const numericValues = values.filter((v): v is number => v !== null);
+      const highestValue = numericValues.length > 0 ? Math.max(...numericValues) : null;
+      const lowestValue = numericValues.length > 0 ? Math.min(...numericValues) : null;
+
+      for (let i = 0; i < rows.length; i++) {
+        const raw = values[i];
+        const pairRaw = pairValues[i];
+        if (raw === null || pairRaw === null) continue;
+
+        let color: ColorClass = null;
+        if (isMaColumn) {
+          if (raw > pairRaw) color = "green";
+          else if (raw < pairRaw) color = "pink";
+          else color = "green";
+        } else {
+          if (raw < pairRaw) color = "pink";
+          else if (raw > pairRaw) color = "green";
+          else color = "pink";
+        }
+
+        if (highestValue !== null && raw === highestValue) color = "blue";
+        if (lowestValue !== null && raw === lowestValue && color !== "blue") color = "black";
+
+        colColors[i] = color;
+      }
+    } else {
+      let prevValue: number | null = null;
+      let highest: number | null = null;
+      let lowest: number | null = null;
+      // Index of the row currently holding this column's blue/black — at most
+      // one of each may be lit at a time. When a later row earns a fresh blue,
+      // the row at the recorded index is repainted to null first. When a later
+      // row earns a fresh black, the row at the recorded index is repainted to
+      // pink first.
+      let lastBlueIndex: number | null = null;
+      let lastBlackIndex: number | null = null;
+
+      for (let i = 0; i < rows.length; i++) {
+        const raw = normalizedValuesByColId[colId]?.[i] ?? null;
+        if (!isColorableValue(raw)) continue; // missing/invalid — no color, don't touch tracking
+
+        const step = nextColorStep(raw, prevValue, highest, lowest);
+
+        if (step.colorClass === "blue") {
+          if (lastBlueIndex !== null) colColors[lastBlueIndex] = null;
+          lastBlueIndex = i;
+        } else if (step.colorClass === "black") {
+          if (lastBlackIndex !== null) colColors[lastBlackIndex] = "pink";
+          lastBlackIndex = i;
+        }
+
+        colColors[i] = step.colorClass;
+        prevValue = raw;
+        highest = step.nextHighest;
+        lowest = step.nextLowest;
+      }
     }
 
     grid[colId] = colColors;

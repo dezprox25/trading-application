@@ -52,37 +52,25 @@ function cellStyle(html: string, text: string): string {
 describe("C Sign / P Sign rendered colors (final DOM output, shared 4-color engine)", () => {
   const t0 = Date.UTC(2026, 6, 20, 4, 0); // 09:30 IST
   const html = render([
-    // Row 1: C Sign = 120 − 115 = +5 (first value → no color yet)
-    //        P Sign = 80 − 84 = −4 (first value → no color yet)
+    // Row 1: C Sign = 120 − 115 = +5 (positive → green)
+    //        P Sign = 80 − 84 = −4 (negative → black)
     mkRow(t0, { callMMA: 120, callTMA: 115, putMMA: 80, putTMA: 84 }),
-    // Row 2: C Sign = 100 − 110 = −10 → drop below prior (+5) AND below the
-    //        running lowest → new-low → "black"
-    //        P Sign = 90 − 84 = +6 → rise above prior (−4) AND above the
-    //        running highest → new-high → "blue"
+    // Row 2: C Sign = 100 − 110 = −10 (negative → black)
+    //        P Sign = 90 − 84 = +6 (highest positive → blue)
     mkRow(t0 + 300000, { callMMA: 100, callTMA: 110, putMMA: 90, putTMA: 84 }),
-    // Row 3: C Sign = 115 − 115 = 0 · P Sign = 84 − 84 = 0 — a colorable
-    // value of exactly 0 is treated as missing/invalid (isColorableValue),
-    // so neither cell gets a color and tracking state is untouched.
+    // Row 3: C Sign = 115 − 115 = 0 (zero → black)
+    //        P Sign = 84 − 84 = 0 (zero → black)
     mkRow(t0 + 600000, { callMMA: 115, callTMA: 115, putMMA: 84, putTMA: 84 }),
   ]);
 
-  it("first value in the column → no color (default white bg, black text)", () => {
-    expect(cellStyle(html, "+5")).toContain("background:#FFFFFF");
-    expect(cellStyle(html, "-4")).toContain("background:#FFFFFF");
-  });
-
-  it("C Sign new-low value → dark-theme black background, white text", () => {
-    expect(cellStyle(html, "-10")).toContain("background:#111827");
-    expect(cellStyle(html, "-10")).toContain("color:#FFFFFF");
-  });
-
-  it("P Sign new-high value → dark-theme blue background, white text", () => {
+  it("positive values use green, and the highest positive becomes blue", () => {
+    expect(cellStyle(html, "+5")).toContain("background:#1E3A8A");
     expect(cellStyle(html, "+6")).toContain("background:#1E3A8A");
-    expect(cellStyle(html, "+6")).toContain("color:#FFFFFF");
   });
 
-  it("value == 0 → treated as no color (default white bg, black text)", () => {
-    expect(cellStyle(html, "0")).toContain("background:#FFFFFF");
-    expect(cellStyle(html, "0")).toContain("color:#000000");
+  it("negative and zero values use black", () => {
+    expect(cellStyle(html, "-10")).toContain("background:#111827");
+    expect(cellStyle(html, "-4")).toContain("background:#111827");
+    expect(cellStyle(html, "0")).toContain("background:#111827");
   });
 });

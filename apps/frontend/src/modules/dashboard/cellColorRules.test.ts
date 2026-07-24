@@ -134,6 +134,43 @@ describe("buildLiveColorGrid — Rule 1 applied literally: 'Current > Highest ->
   });
 });
 
+describe("special-column color rules for MA/TMA, Space, and Sign columns", () => {
+  it("MA/TMA compare per row and then apply column-wide blue/black overrides", () => {
+    const rows: DashboardRow[] = [
+      { ...rowWithCallOpen(1), callMMA: 10, callTMA: 5 },
+      { ...rowWithCallOpen(1), callMMA: 2, callTMA: 4 },
+      { ...rowWithCallOpen(1), callMMA: 9, callTMA: 7 },
+    ];
+
+    const grid = buildLiveColorGrid(rows);
+    expect(grid["mma-c"]).toEqual(["blue", "black", "green"]);
+    expect(grid["tla-c"]).toEqual(["pink", "black", "blue"]);
+  });
+
+  it("SPACE uses positive/negative logic with blue/black overrides", () => {
+    const rows: DashboardRow[] = [
+      { ...rowWithCallOpen(1), callMMA: 10, callTMA: 5, putMMA: 1, putTMA: 1 },
+      { ...rowWithCallOpen(1), callMMA: 1, callTMA: 1, putMMA: 1, putTMA: 1 },
+      { ...rowWithCallOpen(1), callMMA: 3, callTMA: 1, putMMA: 1, putTMA: 1 },
+    ];
+
+    const grid = buildLiveColorGrid(rows);
+    expect(grid["space"]).toEqual(["blue", null, "green"]);
+  });
+
+  it("C Sign / P Sign use green/blue/black only", () => {
+    const rows: DashboardRow[] = [
+      { ...rowWithCallOpen(1), callMMA: 5, callTMA: 0, putMMA: 1, putTMA: 2 },
+      { ...rowWithCallOpen(1), callMMA: 6, callTMA: 0, putMMA: 2, putTMA: 1 },
+      { ...rowWithCallOpen(1), callMMA: 0, callTMA: 0, putMMA: 0, putTMA: 0 },
+    ];
+
+    const grid = buildLiveColorGrid(rows);
+    expect(grid["c-sign"]).toEqual(["green", "blue", "black"]);
+    expect(grid["p-sign"]).toEqual(["black", "blue", "black"]);
+  });
+});
+
 // ── High/Low/Close dark blue/black theme ──────────────────────────────────────
 // Client revision: High/Low/Close (and now Open too — see the TRACKED_COLUMN_THEME
 // check below) keep light green/pink but switch blue/black to the darker
