@@ -308,7 +308,7 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                   <th key={i} colSpan={gs.span} style={{
                     border: "1px solid #BDC4CF", padding: "6px 10px",
                     fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
-                    fontSize: 13, fontWeight: 700, height: GROUP_ROW_H,
+                    fontSize: 13.5, fontWeight: 700, height: GROUP_ROW_H,
                     whiteSpace: "nowrap", textAlign: "center", letterSpacing: "0.04em",
                     textTransform: "uppercase", userSelect: "none",
                     position: "sticky", top: 0, zIndex: gs.frozen ? 7 : 5,
@@ -327,7 +327,7 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                   <th key={c.id} style={{
                     border: "1px solid #BDC4CF", padding: "5px 10px",
                     fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
-                    fontSize: 12, fontWeight: 600, whiteSpace: "nowrap",
+                    fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap",
                     textAlign: "center", userSelect: "none",
                     position: "sticky", top: GROUP_ROW_H, zIndex: 4,
                     background: gc.subBg, color: gc.text,
@@ -542,7 +542,7 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                       style={{
                         border: "1px solid #BDC4CF",
                         padding: "6px 10px",
-                        fontSize: 13,
+                        fontSize: 13.5,
                         height: 32,
                         whiteSpace: "nowrap",
                         userSelect: "none",

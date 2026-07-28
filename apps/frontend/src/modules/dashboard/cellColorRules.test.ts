@@ -204,6 +204,10 @@ describe("High/Low/Close use light green/pink but dark blue/black (\"hlc\" theme
     expect(colorClassStyle("blue", "light")).toEqual({ bg: "#BFDBFE", textColor: "#1E3A8A" });
   });
 
+  it("dark-theme pink uses the requested dark red token", () => {
+    expect(colorClassStyle("pink", "dark")).toEqual({ bg: "#B10202", textColor: "#FFFFFF" });
+  });
+
   it("Open now uses the SAME 'hlc' theme as High/Low/Close (client revision), not the plain 'light' theme", () => {
     expect(TRACKED_COLUMN_THEME["ce-o"]).toBe("hlc");
     expect(TRACKED_COLUMN_THEME["pe-o"]).toBe("hlc");

@@ -86,7 +86,7 @@ const LIGHT_THEME_STYLE: Record<Exclude<ColorClass, null>, CellColorStyle> = {
 const DARK_THEME_STYLE: Record<Exclude<ColorClass, null>, CellColorStyle> = {
   blue:  { bg: "#1E3A8A", textColor: "#FFFFFF" }, // dark blue — new highest
   green: { bg: "#065F46", textColor: "#FFFFFF" }, // dark green — up, not a new highest
-  pink:  { bg: "#7F1D1D", textColor: "#FFFFFF" }, // dark red — down, not a new lowest
+  pink:  { bg: "#B10202", textColor: "#FFFFFF" }, // dark red — down, not a new lowest
   black: { bg: "#111827", textColor: "#FFFFFF" }, // down, new lowest
 };
 
