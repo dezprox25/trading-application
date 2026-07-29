@@ -78,14 +78,14 @@ export type ColorTheme = "light" | "hlc" | "dark";
 
 const LIGHT_THEME_STYLE: Record<Exclude<ColorClass, null>, CellColorStyle> = {
   blue:  { bg: "#BFDBFE", textColor: "#1E3A8A" }, // light blue — new highest
-  green: { bg: "#BBF7D0", textColor: "#065F46" }, // light green — up, not a new highest
+  green: { bg: "#BBF7D0", textColor: "#22C063" }, // light green — up, not a new highest
   pink:  { bg: "#FBD5D5", textColor: "#7F1D1D" }, // light pink — down, not a new lowest
   black: { bg: "#111827", textColor: "#FFFFFF" }, // down, new lowest
 };
 
 const DARK_THEME_STYLE: Record<Exclude<ColorClass, null>, CellColorStyle> = {
   blue:  { bg: "#1E3A8A", textColor: "#FFFFFF" }, // dark blue — new highest
-  green: { bg: "#065F46", textColor: "#FFFFFF" }, // dark green — up, not a new highest
+  green: { bg: "#22C063", textColor: "#FFFFFF" }, // dark green — up, not a new highest
   pink:  { bg: "#B10202", textColor: "#FFFFFF" }, // dark red — down, not a new lowest
   black: { bg: "#111827", textColor: "#FFFFFF" }, // down, new lowest
 };

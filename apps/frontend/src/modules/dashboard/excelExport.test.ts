@@ -77,7 +77,7 @@ describe("exportModule1Excel", () => {
     expect(ws!.getCell("P5").fill).toMatchObject({
       type: "pattern",
       pattern: "solid",
-      fgColor: { argb: "FF065F46" },
+      fgColor: { argb: "FF22C063" },
     });
     expect(ws!.getCell("P5").font).toMatchObject({
       color: { argb: "FFFFFFFF" },

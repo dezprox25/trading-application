@@ -43,11 +43,11 @@
   --m1-put-tint: #FBE2CE;
   --m1-put-tint-2: #FDF1E7;
   --m1-hi: #1F6FEB;
-  --m1-high: #2E9E4F;
-  --m1-low: #D8403C;
+  --m1-high: #22C063; 
+  --m1-low: #B10202; 
   --m1-lowest: #7A8A9F;
-  --m1-buy: #2E9E4F;
-  --m1-sell: #D8403C;
+  --m1-buy: #22C063;
+  --m1-sell: #B10202; 
   --m1-hold: #8A93A3;
 }
 
