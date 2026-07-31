@@ -36,6 +36,7 @@ describe("exportModule1Excel", () => {
     const built = buildModule1Workbook({
       rows, hiddenCols: [], colOrder: [],
       type: "Call+Put", instrument: "NIFTY", timeframe: "5m",
+      callStrike: 24300, putStrike: 24000,
     });
     expect(built).not.toBeNull();
     expect(built!.filename).toBe(`Module1_NIFTY_5Min_${istDateStr()}.xlsx`);
@@ -53,8 +54,11 @@ describe("exportModule1Excel", () => {
     // chronological order preserved — oldest first, newest last (time-only display)
     expect(ws!.getCell("A3").value).toBe("09:30");
     expect(ws!.getCell("A5").value).toBe("09:40");
-    // ranking column carries the +/- prefix like the live table
-    expect(ws!.getCell("P4").value).toBe("+11");
+    // ranking column display formatting (no leading +)
+    expect(ws!.getCell("P4").value).toBe("11");
+    // section titles include selected strike values
+    expect(ws!.getCell("B1").value).toBe("24300Call");
+    expect(ws!.getCell("I1").value).toBe("24000Put");
 
     // Group header styling matches the live table palette.
     expect(ws!.getCell("B1").fill).toMatchObject({
@@ -91,5 +95,15 @@ describe("exportModule1Excel", () => {
       type: "Call+Put", instrument: "NIFTY", timeframe: "5m",
     });
     expect(ok).toBe(false);
+  });
+
+  it("exportModule1Excel succeeds when rows are provided", async () => {
+    const base = Date.now();
+    const rows = [mkRow(base, 0)];
+    const result = exportModule1Excel({
+      rows, hiddenCols: [], colOrder: [],
+      type: "Call+Put", instrument: "NIFTY", timeframe: "5m",
+    });
+    expect(result).toBe(true);
   });
 });

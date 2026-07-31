@@ -86,6 +86,7 @@ export function TimeframeRow() {
     feedStatus, hiddenCols, toggleColumn,
     colOrder, setColOrder,
     rows, type, instrument, pivotMethod,
+    callStrike, putStrike,
   } = useDashStore();
 
   const [colsOpen, setColsOpen] = useState(false);
@@ -266,7 +267,7 @@ export function TimeframeRow() {
 
         {/* Download Excel button */}
         <button
-          onClick={() => exportModule1Excel({ rows, hiddenCols, colOrder, type, instrument, timeframe, pivotMethod })}
+          onClick={() => exportModule1Excel({ rows, hiddenCols, colOrder, type, instrument, timeframe, pivotMethod, callStrike, putStrike })}
           disabled={rows.length === 0}
           title={rows.length === 0 ? "No data to export yet" : "Download the full table as an Excel file"}
           style={{

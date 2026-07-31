@@ -64,8 +64,8 @@ describe("C Sign / P Sign rendered colors (final DOM output, shared 4-color engi
   ]);
 
   it("positive values use green, and the highest positive becomes blue", () => {
-    expect(cellStyle(html, "+5")).toContain("background:#1E3A8A");
-    expect(cellStyle(html, "+6")).toContain("background:#1E3A8A");
+    expect(cellStyle(html, "5")).toContain("background:#1E3A8A");
+    expect(cellStyle(html, "6")).toContain("background:#1E3A8A");
   });
 
   it("negative and zero values use black", () => {

@@ -909,6 +909,7 @@ export function Dashboard() {
         rows: dash.rows, hiddenCols: dash.hiddenCols, colOrder: dash.colOrder,
         type: dash.type, instrument: dash.instrument, timeframe: dash.timeframe,
         pivotMethod: dash.pivotMethod,
+        callStrike: dash.callStrike, putStrike: dash.putStrike,
       });
       if (exported) {
         try { localStorage.setItem(flagKey, "1"); } catch { /* noop */ }

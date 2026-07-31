@@ -145,7 +145,7 @@ const p0NoGroup = (n: number | null | undefined): string =>
 const fmtSign = (n: number): string => {
   if (!Number.isFinite(n)) return "—";
   const tr = truncateForDisplay(n);
-  return (tr > 0 ? "+" : "") + tr.toLocaleString("en-IN");
+  return tr.toLocaleString("en-IN");
 };
 
 const fmtVwap = (n: number | null | undefined): string =>
@@ -172,8 +172,8 @@ const fmtTime = (ms: number): string => {
 export function rankingDisplayValue(row: DashboardRow, prevRow: DashboardRow | undefined): string {
   const dir = rankingDir(row.ranking, prevRow?.ranking);
   let val = p0(row.ranking);
-  if ((dir === "up" || dir === "down") && row.ranking >= 0) {
-    val = (dir === "up" ? "+" : "-") + val;
+  if (dir === "down" && row.ranking >= 0) {
+    val = "-" + val;
   }
   return val;
 }
@@ -182,13 +182,13 @@ export function getVisibleColumns(type: string, hiddenCols: string[], colOrder: 
   const typeHidden = TYPE_HIDDEN[type] ?? [];
   const sortedBase = colOrder.length > 0
     ? [...ALL_COLS].sort((a, b) => {
-        const ai = colOrder.indexOf(a.id);
-        const bi = colOrder.indexOf(b.id);
-        if (ai === -1 && bi === -1) return 0;
-        if (ai === -1) return 1;
-        if (bi === -1) return -1;
-        return ai - bi;
-      })
+      const ai = colOrder.indexOf(a.id);
+      const bi = colOrder.indexOf(b.id);
+      if (ai === -1 && bi === -1) return 0;
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    })
     : ALL_COLS;
 
   return sortedBase.filter(c =>

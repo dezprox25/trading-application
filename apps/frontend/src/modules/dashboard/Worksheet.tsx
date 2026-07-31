@@ -283,9 +283,9 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
   })();
 
   // ── Shared header heights ──────────────────────────────────────────────────
-  // Row 1 (group header) is 34 px; row 2 (column sub-header) is sticky at top: 34.
+  // Row 1 (group header) is 40 px; row 2 (column sub-header) is sticky at top: 40.
 
-  const GROUP_ROW_H = 34;
+  const GROUP_ROW_H = 40;
 
   // ── Skeleton rows ─────────────────────────────────────────────────────────
 
@@ -306,9 +306,9 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                 const gc = GROUP_COLORS[gs.group];
                 return (
                   <th key={i} colSpan={gs.span} style={{
-                    border: "1px solid #BDC4CF", padding: "6px 10px",
+                    border: "1px solid #BDC4CF", padding: "4px 10px",
                     fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
-                    fontSize: 13.5, fontWeight: 700, height: GROUP_ROW_H,
+                    fontSize: 24, lineHeight: 1, fontWeight: 700, height: GROUP_ROW_H,
                     whiteSpace: "nowrap", textAlign: "center", letterSpacing: "0.04em",
                     textTransform: "uppercase", userSelect: "none",
                     position: "sticky", top: 0, zIndex: gs.frozen ? 7 : 5,
@@ -325,9 +325,9 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                 const gc = GROUP_COLORS[c.group];
                 return (
                   <th key={c.id} style={{
-                    border: "1px solid #BDC4CF", padding: "5px 10px",
+                    border: "1px solid #BDC4CF", padding: "4px 10px",
                     fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
-                    fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap",
+                    fontSize: 24, lineHeight: 1, fontWeight: 600, whiteSpace: "nowrap",
                     textAlign: "center", userSelect: "none",
                     position: "sticky", top: GROUP_ROW_H, zIndex: 4,
                     background: gc.subBg, color: gc.text,
@@ -344,7 +344,7 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                 {cols.map(c => (
                   <td key={c.id} style={{
                     border: "1px solid #BDC4CF", padding: "6px 10px",
-                    height: 32, background: "#FFFFFF",
+                    height: 42, background: "#FFFFFF", fontSize: 24,
                   }}>
                     <span style={SHIMMER_STYLE} />
                   </td>
@@ -411,7 +411,8 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
           0%  { background-position: 200% 0 }
           100%{ background-position: -200% 0 }
         }
-        .ws-row:hover td { background: #F0F4F8 !important; }
+        .ws-row:hover td:not([data-colored="true"]) { background: #EBF3FA !important; }
+        .ws-row:hover td[data-colored="true"] { filter: brightness(0.96); }
       `}</style>
 
       {feedStatus === "interrupted" && (
@@ -453,8 +454,9 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                     style={{
                       border: "1px solid #BDC4CF",
                       borderBottom: `2px solid ${gc.text}40`,
-                      padding: "6px 10px",
-                      fontSize: 13,
+                      padding: "4px 10px",
+                      fontSize: 24,
+                      lineHeight: 1,
                       fontWeight: 700,
                       height: GROUP_ROW_H,
                       whiteSpace: "nowrap",
@@ -487,8 +489,9 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                     key={c.id}
                     style={{
                       border: "1px solid #BDC4CF",
-                      padding: "5px 10px",
-                      fontSize: 12,
+                      padding: "4px 10px",
+                      fontSize: 24,
+                      lineHeight: 1,
                       fontWeight: 600,
                       whiteSpace: "nowrap",
                       textAlign: "center",
@@ -535,15 +538,17 @@ export function Worksheet({ rows, hiddenCols, colOrder, feedStatus, isLoading, t
                     pivotMethod,
                     colorClass: liveColorGrid[c.id]?.[ri] ?? null,
                   });
+                  const isColored = presentation.bg !== "#FFFFFF" && presentation.bg !== "transparent";
 
                   return (
                     <td
                       key={c.id}
+                      data-colored={isColored ? "true" : undefined}
                       style={{
                         border: "1px solid #BDC4CF",
                         padding: "6px 10px",
-                        fontSize: 16,
-                        height: 32,
+                        fontSize: 24,
+                        height: 42,
                         whiteSpace: "nowrap",
                         userSelect: "none",
                         textAlign: (c.align ?? "center") as "left" | "right" | "center",
