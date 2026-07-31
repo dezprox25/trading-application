@@ -70,8 +70,7 @@ function getGroupLabel(group: string, callStrike?: number | null, putStrike?: nu
 function triggerBrowserDownload(buffer: ArrayBuffer | Uint8Array, filename: string): void {
   if (typeof window === "undefined" || typeof document === "undefined") return;
 
-  const uint8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
-  const blob = new Blob([uint8], { type: EXCEL_MIME });
+  const blob = new Blob([buffer as any], { type: EXCEL_MIME });
   const url = window.URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
