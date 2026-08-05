@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getModuleStatus = exports.getMarketStatus = exports.isMarketOpenTime = exports.updateCustomTimeframe = exports.getOptionChain = exports.getModule1LatestOi = exports.getIndicatorsEndpoint = exports.getPivotLevelsEndpoint = exports.getHistoricalOHLCBars = exports.getOHLCBars = exports.getFuturesData = exports.getSpotPrice = exports.updateWatchlist = exports.getWatchlist = void 0;
+exports.getModuleStatus = exports.getMarketStatus = exports.isMarketOpenTime = exports.updateCustomTimeframe = exports.getModule1Strikes = exports.getModule1Expiries = exports.getModule1Symbols = exports.getModule1Instruments = exports.getModule1Exchanges = exports.getOptionChain = exports.getModule1LatestOi = exports.getIndicatorsEndpoint = exports.getPivotLevelsEndpoint = exports.getHistoricalOHLCBars = exports.getWarmupOHLCBars = exports.getOHLCBars = exports.getFuturesData = exports.getSpotPrice = exports.updateWatchlist = exports.getWatchlist = void 0;
 const Watchlist_1 = require("../models/Watchlist");
 const FuturesOHLC_1 = require("../models/FuturesOHLC");
 const redis_1 = __importDefault(require("../config/redis"));
@@ -14,6 +14,7 @@ const pivotService_1 = require("../services/pivotService");
 const module1OiService_1 = require("../services/module1OiService");
 const zebuMarketDataClient_1 = require("../services/zebuMarketDataClient");
 const aetramMarketDataService_1 = require("../services/aetramMarketDataService");
+const instrumentTokenService_1 = require("../services/instrumentTokenService");
 // Returns the start of the current NSE trading session in UTC.
 // NSE opens at 09:15 IST = 03:45 UTC. If it's currently before 03:45 UTC,
 // the active session is from the previous calendar day.
@@ -206,6 +207,39 @@ const getOHLCBars = async (req, res) => {
     return res.status(200).json(bars);
 };
 exports.getOHLCBars = getOHLCBars;
+// Get up to `count` finalized candles strictly BEFORE today's session open —
+// used only to seed indicator warm-up (e.g. EMA200) on connect, never for
+// worksheet display. Ascending order (oldest first) so callers can prepend
+// directly to today's series. Backed by the 45-day retention window in
+// FuturesOHLCSchema.ts / ohlcAggregator.ts; on a fresh symbol or before that
+// history has accumulated, this may return fewer than `count` bars — callers
+// must treat the result as best-effort, not a guaranteed full window.
+const getWarmupOHLCBars = async (req, res) => {
+    const { symbol, tf } = req.params;
+    const count = req.query.count ? parseInt(req.query.count) : 200;
+    try {
+        const sessionOpen = getTodaySessionOpenUTC();
+        const dbBars = await FuturesOHLC_1.FuturesOHLC.find({ symbol, timeframe: tf, bar_time: { $lt: sessionOpen } })
+            .sort({ bar_time: -1 })
+            .limit(count);
+        const bars = dbBars.reverse().map((b) => ({
+            symbol: b.symbol,
+            timeframe: b.timeframe,
+            open: b.bar_open,
+            high: b.bar_high,
+            low: b.bar_low,
+            close: b.bar_close,
+            openTime: new Date(b.bar_time).getTime(),
+            volume: b.volume,
+        }));
+        return res.status(200).json(bars);
+    }
+    catch (error) {
+        console.error("[OHLC Warmup] Query error:", error);
+        return res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+exports.getWarmupOHLCBars = getWarmupOHLCBars;
 // Get historical OHLC candles within a date/time range.
 // Accepts either:
 //   ?date=YYYY-MM-DD           — returns bars for that trading day (NSE market hours)
@@ -341,6 +375,117 @@ const getOptionChain = async (req, res) => {
     }
 };
 exports.getOptionChain = getOptionChain;
+const MONTHS_TITLE = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// ── Module 1 dropdown discovery: Exchange → Instrument → Symbol → Expiry → Strike ──────────────
+// Every endpoint below is a thin pass-through over instrumentTokenService's cachedRows (the
+// broker's own instrument masters, downloaded once and cached — see instrumentTokenService.ts).
+// Each level is filtered by the levels selected above it; none of them assume a particular
+// exchange or instrument type.
+// GET /module1/exchanges
+// Every distinct exchange present in the live instrument masters Zebu has
+// already provided — a straight pass-through of the broker's own `Exchange`
+// column, nothing hardcoded or inferred. First selector in the chain.
+const getModule1Exchanges = async (_req, res) => {
+    try {
+        const exchanges = await (0, instrumentTokenService_1.getAvailableExchanges)();
+        return res.status(200).json({ exchanges });
+    }
+    catch (error) {
+        console.error("Get Module1 Exchanges Error:", error);
+        return res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+exports.getModule1Exchanges = getModule1Exchanges;
+// GET /module1/instruments?exchange=NSE
+// Every distinct instrumentType (OPTIDX, FUTCOM, EQ, INDEX, ...) the broker has
+// under the given exchange.
+const getModule1Instruments = async (req, res) => {
+    try {
+        const exchange = String(req.query.exchange || "").trim();
+        if (!exchange)
+            return res.status(400).json({ error: "exchange query parameter is required" });
+        const instruments = await (0, instrumentTokenService_1.getAvailableInstrumentTypes)(exchange);
+        return res.status(200).json({ exchange: exchange.toUpperCase(), instruments });
+    }
+    catch (error) {
+        console.error("Get Module1 Instruments Error:", error);
+        return res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+exports.getModule1Instruments = getModule1Instruments;
+// GET /module1/symbols?exchange=NSE&instrument=EQ
+// Every distinct symbol the broker has under the given exchange + instrument type.
+const getModule1Symbols = async (req, res) => {
+    try {
+        const exchange = String(req.query.exchange || "").trim();
+        const instrument = String(req.query.instrument || "").trim();
+        if (!exchange || !instrument) {
+            return res.status(400).json({ error: "exchange and instrument query parameters are required" });
+        }
+        const symbols = await (0, instrumentTokenService_1.getAvailableSymbols)(exchange, instrument);
+        return res.status(200).json({ exchange: exchange.toUpperCase(), instrument: instrument.toUpperCase(), symbols });
+    }
+    catch (error) {
+        console.error("Get Module1 Symbols Error:", error);
+        return res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+exports.getModule1Symbols = getModule1Symbols;
+// GET /module1/expiries?exchange=NFO&instrument=OPTIDX&symbol=NIFTY
+// Real expiry dates from the live instrument master — not a synthetic
+// count-limited generator. Every active expiry, ascending, for the given
+// exchange + instrument type + symbol. Naturally empty for cash instruments
+// (e.g. NSE EQ/INDEX) since those rows carry no expiry.
+const getModule1Expiries = async (req, res) => {
+    try {
+        const exchange = String(req.query.exchange || "").trim();
+        const instrument = String(req.query.instrument || "").trim();
+        const symbol = String(req.query.symbol || "").trim();
+        if (!exchange || !instrument || !symbol) {
+            return res.status(400).json({ error: "exchange, instrument and symbol query parameters are required" });
+        }
+        const isoDates = await (0, instrumentTokenService_1.getAvailableExpiries)(exchange, instrument, symbol);
+        const expiries = isoDates.map((iso) => {
+            const d = new Date(`${iso}T00:00:00.000Z`);
+            const expiry = `${String(d.getUTCDate()).padStart(2, "0")} ${MONTHS_TITLE[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+            return { id: iso, expiry };
+        });
+        return res.status(200).json({
+            exchange: exchange.toUpperCase(), instrument: instrument.toUpperCase(), symbol: symbol.toUpperCase(),
+            expiries,
+        });
+    }
+    catch (error) {
+        console.error("Get Module1 Expiries Error:", error);
+        return res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+exports.getModule1Expiries = getModule1Expiries;
+// GET /module1/strikes?exchange=NFO&instrument=OPTIDX&symbol=NIFTY&expiryId=2026-07-30
+// Real strike prices for the given exchange + instrument type + symbol + expiry
+// (ISO YYYY-MM-DD) from the live instrument master — full chain, no ATM-band limiting.
+const getModule1Strikes = async (req, res) => {
+    try {
+        const exchange = String(req.query.exchange || "").trim();
+        const instrument = String(req.query.instrument || "").trim();
+        const symbol = String(req.query.symbol || "").trim();
+        const expiryId = String(req.query.expiryId || "").trim();
+        if (!exchange || !instrument || !symbol || !expiryId) {
+            return res.status(400).json({ error: "exchange, instrument, symbol and expiryId query parameters are required" });
+        }
+        const values = await (0, instrumentTokenService_1.getAvailableStrikes)(exchange, instrument, symbol, expiryId);
+        const strikes = values.map((value) => ({ value }));
+        return res.status(200).json({
+            exchange: exchange.toUpperCase(), instrument: instrument.toUpperCase(), symbol: symbol.toUpperCase(), expiryId,
+            strikes,
+        });
+    }
+    catch (error) {
+        console.error("Get Module1 Strikes Error:", error);
+        return res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+exports.getModule1Strikes = getModule1Strikes;
 // Update custom timeframe config
 const updateCustomTimeframe = async (req, res) => {
     try {

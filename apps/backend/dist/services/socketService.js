@@ -89,7 +89,7 @@ const initSocketServer = (io) => {
                 const wantedSymbol = `${instrument.toUpperCase()}${expiry}${letter}${w.strike}`;
                 const resolved = (0, instrumentTokenService_1.resolveOptionInstrument)(instrument, expiry, w.strike, w.optionType);
                 if (resolved) {
-                    console.log(`[Feed:SUB] On-demand resolve OK — ${resolved.symbol} → NFO|${resolved.exchange}|${resolved.token} (requested by ${socket.id})`);
+                    console.log(`[Feed:SUB] On-demand resolve OK — ${resolved.symbol} → ${resolved.exchange}|${resolved.token} (requested by ${socket.id})`);
                     (0, dataFeed_1.subscribeOptionTokens)([resolved]);
                 }
                 else {

@@ -32,6 +32,7 @@ export interface MarketDataLoginResult {
   expiresAt?: string;
   error?: string;
   httpStatus?: number;
+  rawResponse?: any;
 }
 
 export interface MarketDataAuthHealth {
@@ -159,20 +160,31 @@ export const loginMarketData = async (
     };
   }
 
-  console.log("[Module2Auth] Authentication started.");
+  const maskedSecret = secret.length > 6 
+    ? `${secret.slice(0, 3)}***${secret.slice(-3)}`
+    : "***";
+  
+  const reqBody = { secretKey: secret, appKey: key, source: "WEBAPI" };
+  const reqHeaders = { "Content-Type": "application/json" };
+
+  console.log(`----------------------------------------------------
+[Module2/Login] Starting broker authentication...
+API URL: ${authUrl}
+HTTP Method: POST
+Request Headers: ${JSON.stringify(reqHeaders)}
+Request Body: ${JSON.stringify({ ...reqBody, secretKey: maskedSecret })}
+Timestamp: ${new Date().toISOString()}
+----------------------------------------------------`);
 
   try {
     const response = await axios.post(
       authUrl,
-      { secretKey: secret, appKey: key, source: "WEBAPI" },
-      { headers: { "Content-Type": "application/json" }, timeout: 15000 }
+      reqBody,
+      { headers: reqHeaders, timeout: 15000 }
     );
 
     const body = response.data;
-    // XTS wraps every response as { type: "success"|"error", code: "<granular-code>", ... } —
-    // e.g. a successful login carries code "s-response-0001", never the literal string
-    // "success". "type" is the actual success/failure discriminant (verified against the
-    // official symphonyfintech/xts-binary-marketdata-nodeJS-api SDK + public API docs).
+    
     if (body?.type === "success" && body?.result?.token) {
       const now = new Date();
       session = {
@@ -182,9 +194,19 @@ export const loginMarketData = async (
         expiresAt: new Date(now.getTime() + getSessionTtlMs()),
       };
       sessionEnded = null;
-      console.log(
-        `[Module2Auth] Authentication success. User: ${session.userID} | Session valid until ${session.expiresAt.toISOString()}`
-      );
+      
+      console.log(`----------------------------------------------------
+[Module2/Login] Authentication Success
+
+HTTP Status: ${response.status}
+Response Headers: ${JSON.stringify(response.headers)}
+Raw Response Body: ${typeof body === 'object' ? JSON.stringify(body) : body}
+Parsed JSON: ${typeof body === 'object' ? JSON.stringify(body, null, 2) : 'N/A'}
+Token: ${session.token}
+UserID: ${session.userID}
+Description: ${body?.description || 'N/A'}
+----------------------------------------------------`);
+
       return {
         ok: true,
         status: "AUTHENTICATED",
@@ -193,37 +215,77 @@ export const loginMarketData = async (
       };
     }
 
-    console.warn(
-      "[Module2Auth] Authentication failed — unexpected response:",
-      JSON.stringify(sanitizeUpstreamBody(body))
-    );
+    console.log(`----------------------------------------------------
+[Module2/Login] Authentication Failed
+
+HTTP Status: ${response.status}
+Status Text: ${response.statusText}
+Response Headers: ${JSON.stringify(response.headers)}
+Raw Response Body: ${typeof body === 'object' ? JSON.stringify(body) : body}
+Parsed JSON: ${typeof body === 'object' ? JSON.stringify(body, null, 2) : 'N/A'}
+
+type: ${body?.type}
+code: ${body?.code}
+description: ${body?.description}
+message: ${body?.message}
+errors: ${JSON.stringify(body?.errors)}
+stack: ${body?.stack}
+requestId: ${body?.requestId}
+
+Axios Error: undefined
+Axios Code: undefined
+Axios Message: undefined
+Axios Config: undefined
+Axios URL: undefined
+----------------------------------------------------`);
+    
     return {
       ok: false,
       status: "NOT_AUTHENTICATED",
-      error: body?.description || "Authentication rejected by Market Data API.",
+      error: body?.description || JSON.stringify(body) || "Authentication rejected by Market Data API.",
       httpStatus: response.status,
-    };
+      rawResponse: body
+    } as any;
   } catch (error: any) {
     const httpStatus: number | undefined = error?.response?.status;
-    let reason: string;
+    const body = error?.response?.data;
+    
+    console.error(`----------------------------------------------------
+[Module2/Login] Authentication Failed
 
-    if (error?.code === "ECONNABORTED") {
-      reason = "Market Data API request timed out.";
-    } else if (httpStatus) {
-      const upstream = sanitizeUpstreamBody(error.response?.data) as any;
-      reason = upstream?.description || `Market Data API rejected the request (HTTP ${httpStatus}).`;
-      console.warn(
-        `[Module2Auth] Authentication failed — HTTP ${httpStatus}:`,
-        JSON.stringify(upstream)
-      );
-    } else {
-      reason = "Could not reach the Market Data API (network error).";
-    }
+HTTP Status: ${httpStatus || 'N/A'}
+Status Text: ${error?.response?.statusText || 'N/A'}
+Response Headers: ${JSON.stringify(error?.response?.headers || {})}
+Raw Response Body: ${typeof body === 'object' ? JSON.stringify(body) : (body || 'N/A')}
+Parsed JSON: ${typeof body === 'object' ? JSON.stringify(body, null, 2) : 'N/A'}
 
-    if (!httpStatus) {
-      console.error(`[Module2Auth] Authentication failed — ${reason} (${error?.message || error})`);
-    }
-    return { ok: false, status: "NOT_AUTHENTICATED", error: reason, httpStatus };
+type: ${body?.type}
+code: ${body?.code}
+description: ${body?.description}
+message: ${body?.message}
+errors: ${JSON.stringify(body?.errors)}
+stack: ${body?.stack}
+requestId: ${body?.requestId}
+
+Axios Error: ${error}
+Axios Code: ${error?.code}
+Axios Message: ${error?.message}
+Axios Config: ${JSON.stringify(error?.config || {})}
+Axios URL: ${error?.config?.url}
+----------------------------------------------------`, error);
+
+    let reason: string = "Market Data API request failed.";
+    if (body?.description) reason = body.description;
+    else if (error?.code === "ECONNABORTED") reason = "Market Data API request timed out.";
+    else if (httpStatus) reason = body ? JSON.stringify(body) : `Market Data API rejected the request (HTTP ${httpStatus}).`;
+
+    return { 
+      ok: false, 
+      status: "NOT_AUTHENTICATED", 
+      error: reason, 
+      httpStatus,
+      rawResponse: body
+    } as any;
   }
 };
 

@@ -39,7 +39,20 @@ export function Module2LoginPanel() {
       setModule2Token(token);
       setModule2Status("authenticated");
     } catch (err: any) {
-      const errMsg = err?.message || String(err);
+      console.error(`----------------------------------------------------
+[Module2/UI]
+
+Broker Login Failed
+
+HTTP Status: ${err?.status || 'N/A'}
+Response JSON: ${JSON.stringify(err?.rawResponse || err?.details || err || {})}
+Backend Error: ${err?.error || err?.message || 'N/A'}
+Reason: ${err?.reason || 'N/A'}
+Description: ${err?.rawResponse?.description || err?.details?.description || 'N/A'}
+Code: ${err?.code || 'N/A'}
+----------------------------------------------------`, err);
+
+      const errMsg = err?.error || err?.message || String(err);
       setError(errMsg);
       setModule2Status("error", errMsg);
     } finally {

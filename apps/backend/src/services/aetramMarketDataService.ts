@@ -382,13 +382,14 @@ export const getAetramExpiryDates = async (indexSymbol: string, exchangeSegment 
   return computeUpcomingThursdays(5);
 };
 
+import { MarketDataLoginResult } from "./marketDataSessionService";
+
 /**
  * Login using credentials provided at runtime by the user.
  * Called by module2BrokerLogin controller — never called on server startup.
  */
-export const loginToAetramWithCredentials = async (appKey: string, secretKey: string): Promise<boolean> => {
-  const result = await loginMarketData(appKey, secretKey);
-  return result.ok;
+export const loginToAetramWithCredentials = async (appKey: string, secretKey: string): Promise<MarketDataLoginResult> => {
+  return await loginMarketData(appKey, secretKey);
 };
 
 /**

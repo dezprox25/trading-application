@@ -26,4 +26,7 @@ router.get("/me", auth_2.authenticate, auth_1.me);
 // Broker auth — standalone (no app JWT required, rate-limited)
 router.post("/module1-broker-login", authRateLimiter, brokerAuth_1.module1BrokerLogin);
 router.post("/module2-broker-login", authRateLimiter, brokerAuth_1.module2BrokerLogin);
+// Session-restore reconnection — no credentials accepted, same standalone
+// pattern as module1-broker-login (see brokerAuth.ts for why).
+router.post("/module1-resume-session", authRateLimiter, brokerAuth_1.module1ResumeSession);
 exports.default = router;

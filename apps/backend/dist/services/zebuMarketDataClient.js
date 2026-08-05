@@ -137,6 +137,7 @@ const toTick = (payload, symbolByKey) => {
         timestamp: payload.ft ? new Date(Number(payload.ft) * 1000) : new Date(),
         volume: payload.v ? Number(payload.v) : payload.volume ? Number(payload.volume) : 0,
         oi: rawOi !== undefined ? Number(rawOi) : undefined,
+        exchange: exchange ? String(exchange) : undefined,
     };
 };
 const startZebuMarketDataFeed = (onTick, onDataSource, onFallback) => {

@@ -1,14 +1,43 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.processIncomingTick = exports.stopDataFeed = exports.startDataFeedWithCredentials = exports.setOnTickReceived = exports.subscribeOptionTokens = void 0;
+exports.processIncomingTick = exports.resumeDataFeedFromPersistedSession = exports.stopDataFeed = exports.startDataFeedWithCredentials = exports.setOnTickReceived = exports.subscribeOptionTokens = void 0;
 const redisWriteBuffer_1 = require("./redisWriteBuffer");
 const ohlcAggregator_1 = require("./ohlcAggregator");
 const module1OiService_1 = require("./module1OiService");
 const monitoringService_1 = require("./monitoringService");
+const redis_1 = __importDefault(require("../config/redis"));
 const zebuMarketDataClient_1 = require("./zebuMarketDataClient");
 const socketService_1 = require("./socketService");
 const instrumentTokenService_1 = require("./instrumentTokenService");
 let zebuClient = null;
+// ── Broker-session persistence (for reconnection, not authentication) ─────────
+//
+// dataFeed's own storedUserId/storedSessionToken below are process-memory
+// only — lost on a backend restart AND once handleFeedDisconnect exhausts its
+// 5 reconnect attempts. The frontend's cached module1Token (sessionStorage,
+// 8h JWT) has no idea either of those happened: it still shows "Active
+// session" and renders the dashboard directly, skipping Module1LoginPanel —
+// so nothing ever calls startDataFeedWithCredentials again and the dashboard
+// sits Offline until the user manually "Switch Credentials"es back through a
+// fresh login. This mirror lets a session be resumed (see
+// resumeDataFeedFromPersistedSession) without asking for credentials again —
+// the actual Zebu QuickAuth handshake is untouched; this only persists its
+// *result* long enough to restart the feed with it later.
+const BROKER_SESSION_REDIS_KEY = "module1:broker-session";
+// Matches the module1 JWT's own 8h expiry (see brokerAuth.ts) — once the
+// frontend's cached token would no longer be considered "active" anyway,
+// there is nothing left worth resuming.
+const BROKER_SESSION_TTL_SECONDS = 8 * 60 * 60;
+const persistBrokerSession = (userId, sessionToken) => {
+    redis_1.default.setex(BROKER_SESSION_REDIS_KEY, BROKER_SESSION_TTL_SECONDS, JSON.stringify({ userId, sessionToken }))
+        .catch((err) => console.warn("[DataFeed] Failed to persist broker session for later resume:", err?.message || err));
+};
+const clearPersistedBrokerSession = () => {
+    redis_1.default.del(BROKER_SESSION_REDIS_KEY).catch(() => { });
+};
 // True once the ATM band used at connect time was seeded from a real Redis price rather
 // than the hardcoded fallback (see instrumentTokenService.ts). When false, the very first
 // genuine NIFTY-SPOT/NIFTY-FUT tick this session triggers a one-time ATM-band recompute +
@@ -125,6 +154,9 @@ const startDataFeedWithCredentials = async (userId, sessionToken) => {
     storedSessionToken = sessionToken;
     sessionExpired = false;
     reconnectAttempts = 0;
+    // Best-effort durable copy so a later resume (session-restore path) can
+    // restart the feed even after this process-memory copy is gone.
+    persistBrokerSession(userId, sessionToken);
     // Clear stale market_ready flag from any previous session. Without this a
     // newly connected frontend socket receives a replay that sets marketDataReady=true
     // before any real ticks exist, triggering auto-generate against empty OHLC.
@@ -181,8 +213,41 @@ const stopDataFeed = () => {
     }
     (0, module1OiService_1.setModule1OiDataSource)("SIMULATOR");
     (0, socketService_1.resetMarketReady)();
+    // Explicit stop (logout) means the next login should be a real one — don't
+    // let a stale cached module1Token silently resume this session later.
+    clearPersistedBrokerSession();
 };
 exports.stopDataFeed = stopDataFeed;
+/**
+ * Resume the live feed from a previously persisted broker session — used
+ * when the frontend has a still-valid cached module1Token ("Active session")
+ * but the backend has no live connection for it (process restart, exhausted
+ * reconnect attempts, etc). Never prompts for credentials: if nothing
+ * resumable is on record, the caller (module1ResumeSession) reports that and
+ * the existing dashboard status/retry UI takes over, same as any other
+ * disconnected state.
+ */
+const resumeDataFeedFromPersistedSession = async () => {
+    if ((0, zebuMarketDataClient_1.isZebuLiveConnected)())
+        return "already-live";
+    try {
+        const raw = await redis_1.default.get(BROKER_SESSION_REDIS_KEY);
+        if (!raw)
+            return "no-session";
+        const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+        const { userId, sessionToken } = parsed || {};
+        if (!userId || !sessionToken)
+            return "no-session";
+        console.log(`[DataFeed] Resuming persisted broker session for user: ${userId}`);
+        await (0, exports.startDataFeedWithCredentials)(userId, sessionToken);
+        return "resumed";
+    }
+    catch (err) {
+        console.warn("[DataFeed] Resume from persisted session failed:", err?.message || err);
+        return "no-session";
+    }
+};
+exports.resumeDataFeedFromPersistedSession = resumeDataFeedFromPersistedSession;
 // ── Tick processing ───────────────────────────────────────────────────────────
 let _totalTickCount = 0;
 let _firstTickLogged = false;

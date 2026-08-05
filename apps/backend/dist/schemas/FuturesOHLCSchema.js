@@ -45,6 +45,10 @@ exports.FuturesOHLCSchema = new mongoose_1.Schema({
 // racing upserts can never insert duplicates. Also serves the latest-candles
 // query for pivot calculation (replaces the old non-unique bar_time:-1 index).
 exports.FuturesOHLCSchema.index({ symbol: 1, timeframe: 1, bar_time: 1 }, { unique: true });
-// TTL index: MongoDB auto-deletes candles older than 25 hours (90000 seconds).
-// This ensures previous-day bars are purged automatically without a cron job.
-exports.FuturesOHLCSchema.index({ bar_time: 1 }, { expireAfterSeconds: 90000 });
+// TTL index: MongoDB auto-deletes candles older than 45 days.
+// Extended from the original 25h so coarser timeframes (15m and up) have
+// enough retained history to seed a best-effort EMA200 warm-up on connect
+// (see ohlc-warmup endpoint) — reads elsewhere stay scoped to "today only"
+// via explicit bar_time filters (getOHLCBars, getCachedOHLCBars), so this
+// longer retention never leaks prior-session rows into the live worksheet.
+exports.FuturesOHLCSchema.index({ bar_time: 1 }, { expireAfterSeconds: 45 * 24 * 60 * 60 });

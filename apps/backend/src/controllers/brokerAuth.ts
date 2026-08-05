@@ -186,11 +186,17 @@ export const module2BrokerLogin = async (req: Request, res: Response) => {
     console.log(`[Module2/BrokerLogin] secretKey : ${"*".repeat(8)}`);
 
     console.log("[Module2/BrokerLogin] Calling Aetram auth endpoint...");
-    const success = await loginToAetramWithCredentials(appKey, secretKey);
+    const result = await loginToAetramWithCredentials(appKey, secretKey);
 
-    if (!success) {
+    if (!result.ok) {
       console.warn("[Module2/BrokerLogin] Aetram auth rejected.");
-      return res.status(401).json({ error: "Aetram authentication failed. Check your App Key and Secret Key." });
+      return res.status(result.httpStatus || 401).json({ 
+        error: result.error || "Aetram authentication failed.",
+        reason: result.error,
+        code: result.httpStatus,
+        details: result.rawResponse || null,
+        rawResponse: result.rawResponse || null
+      });
     }
 
     console.log("[Module2/BrokerLogin] Aetram auth success. Connecting WebSocket...");

@@ -17,6 +17,7 @@ dotenv_1.default.config();
 const startupCheck_1 = require("./utils/startupCheck");
 const db_1 = require("./config/db");
 const FuturesOHLC_1 = require("./models/FuturesOHLC");
+const module1DataCleanupService_1 = require("./services/module1DataCleanupService");
 const redis_1 = __importDefault(require("./config/redis"));
 const redisWriteBuffer_1 = require("./services/redisWriteBuffer");
 const auth_1 = __importDefault(require("./routes/auth"));
@@ -27,6 +28,13 @@ const zebuOAuth_1 = require("./controllers/zebuOAuth");
 const pivotService_1 = require("./services/pivotService");
 const socketService_1 = require("./services/socketService");
 const trackerService_1 = require("./services/trackerService");
+const subscriptionSyncService_1 = require("./services/subscriptionSyncService");
+const marketDataCacheService_1 = require("./services/marketDataCacheService");
+const minuteAggregationService_1 = require("./services/minuteAggregationService");
+const redisService_1 = require("./services/redisService");
+const candleHistoryService_1 = require("./services/candleHistoryService");
+const candleArchiveService_1 = require("./services/candleArchiveService");
+const marketBroadcastService_1 = require("./services/marketBroadcastService");
 const module1OiService_1 = require("./services/module1OiService");
 const monitoringService_1 = require("./services/monitoringService");
 const dataFeed_1 = require("./services/dataFeed");
@@ -67,6 +75,20 @@ const globalLimiter = (0, express_rate_limit_1.default)({
     message: { error: "Too many requests, please try again later." },
     standardHeaders: true,
     legacyHeaders: false,
+    // Module 1's live dashboard polls GET /api/market/futures/:symbol every
+    // 500ms (Dashboard Effect 2, index.tsx) for the active candle's running
+    // volume — ~120 requests/minute by design, already gated behind auth. That
+    // alone exhausts this shared 200-per-15-min budget in under 100 seconds of
+    // any session, after which the NEXT unrelated call (e.g. /api/market/status
+    // on a timeframe change) gets a 429 the frontend correctly — but
+    // confusingly — surfaces as a fatal "API Error", even though nothing is
+    // actually wrong. Excluded here rather than raising `max` globally, so
+    // every other route keeps the exact same protection it had before.
+    // req.originalUrl (not req.path) — this middleware is mounted at "/api/",
+    // and Express rebases req.path relative to the mount point for plain
+    // middleware, so matching the always-absolute originalUrl avoids any
+    // ambiguity about that rebasing.
+    skip: (req) => req.originalUrl.startsWith("/api/market/futures/"),
 });
 app.use("/api/", globalLimiter);
 app.get("/api/module1/zebu/oauth/callback", zebuOAuth_1.zebuOAuthCallback);
@@ -173,6 +195,18 @@ const startServer = async () => {
         catch (error) {
             console.error("[Server] Candle index sync failed (will retry on next restart):", error?.message || error);
         }
+        try {
+            // Storage-lifecycle requirement: MongoDB must hold ONLY the current
+            // trading session's Module 1 market data. Purge everything from before
+            // today's session on every boot — covers the "server restarted this
+            // morning" case — then start the rollover scheduler for a server that
+            // stays running across a midnight boundary without restarting.
+            await (0, module1DataCleanupService_1.cleanupPreviousModule1SessionData)();
+            (0, module1DataCleanupService_1.startModule1DailyCleanupScheduler)();
+        }
+        catch (error) {
+            console.error("[Server] Module 1 daily cleanup failed (will retry on next restart):", error?.message || error);
+        }
     }
     catch (error) {
         console.error("[Server] MongoDB connection failed:", error?.message || error);
@@ -206,6 +240,22 @@ const startServer = async () => {
     // ── Step 2: Initialize infrastructure (no DB queries here) ───────────────
     (0, pivotService_1.initPivotService)();
     (0, socketService_1.initSocketServer)(io);
+    // Reuses the exact same io instance above — registers its own independent
+    // "connection" listener rather than a second Socket.IO server.
+    (0, marketBroadcastService_1.initMarketBroadcast)(io);
+    (0, subscriptionSyncService_1.initSubscriptionSync)();
+    (0, marketDataCacheService_1.initMarketDataCache)();
+    (0, minuteAggregationService_1.initMinuteAggregation)();
+    // Module 2's own Redis connection (candle history) — independent of the
+    // Module 1 client above. A failed/absent connection degrades gracefully;
+    // it never blocks startup.
+    try {
+        await (0, redisService_1.connectRedis)();
+    }
+    catch (err) {
+        console.warn("[Server] Module 2 Redis connection warning:", err);
+    }
+    (0, candleHistoryService_1.initCandleHistory)();
     // ── Step 3: Initialize services that depend on DB being ready ────────────
     // Only start these after the DB connection is confirmed.
     if (dbReady) {
@@ -215,9 +265,15 @@ const startServer = async () => {
         catch (err) {
             console.warn("[Server] TrackerEngine init warning:", err);
         }
+        try {
+            (0, candleArchiveService_1.initCandleArchive)();
+        }
+        catch (err) {
+            console.warn("[Server] CandleArchive init warning:", err);
+        }
     }
     else {
-        console.warn("[Server] Skipping TrackerEngine init — DB not ready.");
+        console.warn("[Server] Skipping TrackerEngine/CandleArchive init — DB not ready.");
     }
     // Warm up in-memory OI state from Redis (safe to run even if Redis is offline)
     try {

@@ -159,10 +159,10 @@ services:
         sync: false
 
       - key: AETRAM_MARKETDATA_AUTH_URL
-        value: https://developers.symphonyfintech.in/apibinarymarketdata/auth/login
+        value: https://secure.aetramtrades.in/apimarketdata/auth/login
 
       - key: AETRAM_MARKETDATA_API_BASE_URL
-        value: https://developers.symphonyfintech.in/apibinarymarketdata
+        value: https://secure.aetramtrades.in/apimarketdata
 
       - key: AETRAM_INTERACTIVE_AUTH_URL
         value: https://developers.symphonyfintech.in/1interactive/user/session

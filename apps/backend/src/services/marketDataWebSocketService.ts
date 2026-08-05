@@ -209,17 +209,43 @@ const attemptConnect = async (): Promise<boolean> => {
   if (!connectionStartedAt) connectionStartedAt = new Date();
 
   const attemptLabel = reconnectAttempts > 0 ? `reconnect attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}` : "initial attempt";
-  console.log(`[MarketDataWS] Connection Started — connecting to ${host} (${attemptLabel}).`);
+  const maskedToken = token.length > 8 ? `${token.substring(0, 4)}...${token.substring(token.length - 4)}` : "***";
+  
+  let socketPath = "/apimarketdata/socket.io";
+  try {
+    const parsedPath = new URL(getBaseUrl()).pathname.replace(/\/$/, "");
+    if (parsedPath) socketPath = `${parsedPath}/socket.io`;
+  } catch {}
+
+  const fullUrl = `${host}${socketPath}?token=${maskedToken}&userID=${userID}&apiType=MARKETDATA&publishFormat=JSON`;
+
+  console.log(`----------------------------------------------------
+[MarketDataWS/Debug] Initiating Socket.IO Connection
+Timestamp     : ${new Date().toISOString()}
+Socket Host   : ${host}
+Socket Path   : ${socketPath}
+Full Conn URL : ${fullUrl}
+Token (masked): ${maskedToken}
+UserID        : ${userID}
+publishFormat : JSON
+apiType       : MARKETDATA
+Attempt       : ${attemptLabel}
+----------------------------------------------------`);
 
   socket = io(host, {
-    path: "/apibinarymarketdata/socket.io",
+    path: socketPath,
     query: { token, userID, apiType: "MARKETDATA", publishFormat: "JSON" },
     transports: ["polling", "websocket"],
-    reconnection: false, // manual reconnect strategy owns retries, not socket.io's built-in one
+    reconnection: false,
     timeout: CONNECT_TIMEOUT_MS,
   });
 
+  socket.on("connect", () => {
+    console.log(`[MarketDataWS/Debug] EVENT: connect (Socket ID: ${socket?.id})`);
+  });
+
   socket.on("disconnect", (reason: string) => {
+    console.log(`[MarketDataWS/Debug] EVENT: disconnect (Reason: ${reason})`);
     if (manualTeardown) {
       console.log(`[MarketDataWS] Socket closed (${reason}) — manual/graceful, no auto-reconnect.`);
       return;
@@ -229,7 +255,11 @@ const attemptConnect = async (): Promise<boolean> => {
 
   socket.on("error", (err: any) => {
     lastError = err?.message || String(err);
-    console.error("[MarketDataWS] Socket error:", lastError);
+    console.error("[MarketDataWS/Debug] EVENT: error:", lastError, err);
+  });
+
+  socket.on("joined", (data: any) => {
+    console.log("[MarketDataWS/Debug] EVENT: joined:", JSON.stringify(data));
   });
 
   // Low-level engine.io ping/pong is the actual heartbeat transport-layer signal.
@@ -238,6 +268,7 @@ const attemptConnect = async (): Promise<boolean> => {
     engine.on("packet", (packet: any) => {
       if (packet?.type === "ping" || packet?.type === "pong") {
         lastHeartbeatAt = new Date();
+        console.log(`[MarketDataWS/Debug] Heartbeat packet: ${packet.type}`);
       }
     });
   }
@@ -257,10 +288,19 @@ const attemptConnect = async (): Promise<boolean> => {
       resolve(true);
     });
 
-    socket!.once("connect_error", (err: Error) => {
+    socket!.once("connect_error", (err: any) => {
       clearTimeout(timer);
-      lastError = err.message;
-      console.error("[MarketDataWS] Connect error:", err.message);
+      lastError = err?.message || String(err);
+      const reqStatus = err?.req?.status || err?.status || err?.context?.status;
+      const respData = err?.req?.responseText || err?.data || err?.context?.data;
+      console.error(`----------------------------------------------------
+[MarketDataWS/Debug] EVENT: connect_error
+Error Message : ${err?.message || err}
+HTTP Status   : ${reqStatus || 'N/A'}
+Namespace     : ${(socket as any)?.nsp || '/'}
+Path          : ${socketPath}
+Response Body : ${respData || 'N/A'}
+----------------------------------------------------`);
       resolve(false);
     });
   });
