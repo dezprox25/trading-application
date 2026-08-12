@@ -7,10 +7,10 @@ const BLUE_BG = "#eff6ff";
 const BLUE_BORDER = "#bfdbfe";
 
 export function Module2LoginPanel() {
-  const [appKey, setAppKey] = useState(() => localStorage.getItem("m2_app_key") || "");
-  const [secretKey, setSecretKey] = useState("");
-  const [remember, setRemember] = useState(() => !!localStorage.getItem("m2_app_key"));
-  const [showSecret, setShowSecret] = useState(false);
+  const [username, setUsername] = useState("ATM013924");
+  const [password, setPassword] = useState("");
+  const [otp, setOtp] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,15 +25,9 @@ export function Module2LoginPanel() {
     setModule2Status("authenticating");
 
     try {
-      const res = await api.post("/auth/module2-broker-login", { appKey, secretKey }, { skipAuth: true });
+      const res = await api.post("/auth/module2-broker-login", { username, password, otp }, { skipAuth: true });
       const token = res?.moduleToken;
       if (!token) throw new Error(res?.error || "Authentication failed");
-
-      if (remember) {
-        localStorage.setItem("m2_app_key", appKey);
-      } else {
-        localStorage.removeItem("m2_app_key");
-      }
 
       setSuccess(true);
       setModule2Token(token);
@@ -216,62 +210,66 @@ Code: ${err?.code || 'N/A'}
               ) : (
                 <form onSubmit={handleSubmit} noValidate style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
-                  {/* App Key */}
+                  {/* Broker Username */}
                   <div>
                     <label style={{
                       display: "block", fontSize: 11, fontWeight: 600,
                       color: "#5b6b82", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6,
                     }}>
-                      App Key
+                      Broker Username
                     </label>
                     <input
                       className={`m2lp-input${error ? " err" : ""}`}
                       type="text"
-                      placeholder="Aetram MarketData App Key"
-                      value={appKey}
-                      onChange={(e) => setAppKey(e.target.value)}
+                      placeholder="Aetram Client ID (e.g. ATM013924)"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
                       disabled={loading}
                       autoComplete="username"
                     />
                   </div>
 
-                  {/* Secret Key */}
+                  {/* Broker Password */}
                   <div>
                     <label style={{
                       display: "block", fontSize: 11, fontWeight: 600,
                       color: "#5b6b82", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6,
                     }}>
-                      Secret Key
+                      Broker Password
                     </label>
                     <div className="m2lp-pw-wrap">
                       <input
                         className={`m2lp-input${error ? " err" : ""}`}
-                        type={showSecret ? "text" : "password"}
-                        placeholder="Aetram MarketData Secret Key"
-                        value={secretKey}
-                        onChange={(e) => setSecretKey(e.target.value)}
+                        type={showPassword ? "text" : "password"}
+                        placeholder="Aetram trading password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
                         disabled={loading}
                         autoComplete="current-password"
                       />
-                      <button type="button" className="m2lp-pw-toggle" onClick={() => setShowSecret((v) => !v)}>
-                        {showSecret ? "Hide" : "Show"}
+                      <button type="button" className="m2lp-pw-toggle" onClick={() => setShowPassword((v) => !v)}>
+                        {showPassword ? "Hide" : "Show"}
                       </button>
                     </div>
                   </div>
 
-                  {/* Remember */}
-                  <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}>
+                  {/* Daily OTP */}
+                  <div>
+                    <label style={{
+                      display: "block", fontSize: 11, fontWeight: 600,
+                      color: "#5b6b82", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6,
+                    }}>
+                      Daily OTP
+                    </label>
                     <input
-                      type="checkbox"
-                      checked={remember}
-                      onChange={(e) => {
-                        setRemember(e.target.checked);
-                        if (!e.target.checked) localStorage.removeItem("m2_app_key");
-                      }}
-                      style={{ width: 15, height: 15, cursor: "pointer", accentColor: BLUE }}
+                      className={`m2lp-input${error ? " err" : ""}`}
+                      type="text"
+                      placeholder="Daily OTP / TOTP code"
+                      value={otp}
+                      onChange={(e) => setOtp(e.target.value)}
+                      disabled={loading}
                     />
-                    <span style={{ fontSize: 13, fontWeight: 500, color: "#5b6b82" }}>Remember App Key</span>
-                  </label>
+                  </div>
 
                   {/* Error */}
                   {error && (

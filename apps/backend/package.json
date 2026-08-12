@@ -31,6 +31,7 @@
     "resend": "^6.12.4",
     "socket.io": "^4.7.5",
     "socket.io-client": "^4.7.5",
+    "socket.io-client-v2": "npm:socket.io-client@^2.4.0",
     "ws": "^8.21.0",
     "zod": "^3.23.8"
   },

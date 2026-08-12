@@ -96,21 +96,40 @@ const decodeMarketDepth1502: PacketDecoder = (payload) => {
   };
 };
 
+const parseStringPayload = (str: string): Record<string, any> => {
+  const result: Record<string, any> = {};
+  const parts = str.split(",");
+  for (const part of parts) {
+    const colonIndex = part.indexOf(":");
+    if (colonIndex !== -1) {
+      const key = part.substring(0, colonIndex).trim();
+      const val = part.substring(colonIndex + 1).trim();
+      result[key] = val;
+    }
+  }
+  if (result.t) {
+    const [seg, tok] = result.t.split("_");
+    if (seg) result.exchangeSegment = seg;
+    if (tok) result.exchangeInstrumentID = tok;
+  }
+  return result;
+};
+
 /** 1510 — Open Interest updates. Field names match aetramMarketDataService's existing handleOiTick. */
 const decodeOpenInterest1510: PacketDecoder = (payload) => ({
   exchangeSegment: numOrUndef(payload.exchangeSegment ?? payload.ExchangeSegment),
   exchangeInstrumentID: strOrUndef(payload.exchangeInstrumentID ?? payload.ExchangeInstrumentID),
-  openInterest: numOrUndef(payload.openInterest ?? payload.oi),
-  timestamp: payload.timestamp ?? payload.LastUpdateTime,
+  openInterest: numOrUndef(payload.openInterest ?? payload.OpenInterest ?? payload.oi),
+  timestamp: payload.timestamp ?? payload.LastUpdateTime ?? payload.lut,
 });
 
 /** 1512 — LTP updates. Field names match aetramMarketDataService's existing handleLtpTick. */
 const decodeLtp1512: PacketDecoder = (payload) => ({
   exchangeSegment: numOrUndef(payload.exchangeSegment ?? payload.ExchangeSegment),
   exchangeInstrumentID: strOrUndef(payload.exchangeInstrumentID ?? payload.ExchangeInstrumentID),
-  lastPrice: numOrUndef(payload.lastTradedPrice ?? payload.lastPrice ?? payload.ltp ?? payload.close),
-  volume: numOrUndef(payload.totalTradedQuantity ?? payload.volume),
-  timestamp: payload.lastTradedTime ?? payload.timestamp ?? payload.LastUpdateTime,
+  lastPrice: numOrUndef(payload.lastTradedPrice ?? payload.LastTradedPrice ?? payload.lastPrice ?? payload.ltp ?? payload.close ?? payload.c),
+  volume: numOrUndef(payload.totalTradedQuantity ?? payload.TotalTradedQuantity ?? payload.volume ?? payload.ltq),
+  timestamp: payload.lastTradedTime ?? payload.timestamp ?? payload.LastUpdateTime ?? payload.lut,
 });
 
 const DECODERS: Record<string, PacketDecoder> = {
@@ -134,8 +153,9 @@ const normalizePacket = (packetType: string, decoded: DecodedFields): Normalized
     const raw = decoded.timestamp;
     // XTS sometimes sends epoch seconds, sometimes milliseconds — treat anything
     // shorter than a millisecond-epoch (< 1e12) as seconds.
-    const asDate = typeof raw === "number"
-      ? new Date(raw < 1e12 ? raw * 1000 : raw)
+    const numRaw = Number(raw);
+    const asDate = !isNaN(numRaw)
+      ? new Date(numRaw < 1e12 ? numRaw * 1000 : numRaw)
       : new Date(raw);
     timestamp = isNaN(asDate.getTime()) ? null : asDate.toISOString();
   }
@@ -168,14 +188,17 @@ export const processRawPacket = (packetType: string, raw: unknown): void => {
   try {
     let payload: any = raw;
 
-    // Defensive: publishFormat=JSON means Socket.IO should already hand us an
-    // object, but guard against a stringified payload rather than assume.
     if (typeof payload === "string") {
-      try {
-        payload = JSON.parse(payload);
-      } catch {
-        publishError(packetType, "Corrupted payload — string could not be parsed as JSON.");
-        return;
+      const trimmed = payload.trim();
+      if (trimmed.startsWith("{")) {
+        try {
+          payload = JSON.parse(trimmed);
+        } catch {
+          publishError(packetType, "Corrupted payload — string could not be parsed as JSON.");
+          return;
+        }
+      } else if (trimmed.includes(":") || trimmed.includes(",")) {
+        payload = parseStringPayload(trimmed);
       }
     }
 

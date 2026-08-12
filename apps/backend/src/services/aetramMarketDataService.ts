@@ -10,6 +10,7 @@ import {
 import { onRawSocketEvent, disconnect as disconnectMarketDataWebSocket, getStatus as getWebSocketStatus } from "./marketDataWebSocketService";
 import { marketDataEvents } from "./marketDataEvents";
 import { processRawPacket, NormalizedMarketEvent } from "./marketDataPipelineService";
+import { recordTickReceived } from "./monitoringService";
 
 // Session state (token, userID, expiry) lives in marketDataSessionService.
 // The socket connection itself lives ONLY in marketDataWebSocketService
@@ -131,16 +132,18 @@ export const searchInstruments = async (searchString: string): Promise<AetramIns
     if (response.data?.type !== "success" || !Array.isArray(response.data.result)) return [];
 
     return response.data.result.map((inst: any) => ({
-      exchangeSegment: Number(inst.exchangeSegment ?? 2),
-      exchangeInstrumentID: String(inst.exchangeInstrumentID ?? ""),
-      name: String(inst.name ?? inst.symbol ?? ""),
-      tradingSymbol: String(inst.tradingSymbol ?? inst.displayName ?? ""),
-      series: String(inst.series ?? ""),
-      instrumentType: String(inst.instrumentType ?? inst.series ?? ""),
-      expiryDate: inst.expiryDate || inst.expiry || undefined,
-      strikePrice: inst.strikePrice !== undefined ? Number(inst.strikePrice)
+      exchangeSegment: Number(inst.ExchangeSegment ?? inst.exchangeSegment ?? 2),
+      exchangeInstrumentID: String(inst.ExchangeInstrumentID ?? inst.exchangeInstrumentID ?? ""),
+      name: String(inst.Name ?? inst.name ?? inst.symbol ?? ""),
+      tradingSymbol: String(inst.TradingSymbol ?? inst.tradingSymbol ?? inst.DisplayName ?? inst.displayName ?? ""),
+      series: String(inst.Series ?? inst.series ?? ""),
+      instrumentType: String(inst.InstrumentType ?? inst.instrumentType ?? inst.Series ?? inst.series ?? ""),
+      expiryDate: inst.ContractExpiration || inst.contractExpiration || inst.ExpiryDate || inst.expiryDate || inst.Expiry || inst.expiry || undefined,
+      strikePrice: inst.StrikePrice !== undefined ? Number(inst.StrikePrice)
+        : inst.strikePrice !== undefined ? Number(inst.strikePrice)
+        : inst.Strike !== undefined ? Number(inst.Strike)
         : inst.strike !== undefined ? Number(inst.strike) : undefined,
-      optionType: inst.optionType || inst.type || undefined,
+      optionType: inst.OptionType || inst.optionType || inst.Type || inst.type || undefined,
     }));
   } catch (error: any) {
     if (error?.response?.status === 401) {
@@ -177,16 +180,28 @@ export const resolveOptionStrikeToken = async (
 
   const indexShort = index.replace("50", "").replace("fifty", "").toUpperCase(); // e.g. "NIFTY"
 
-  const searchString = `${indexShort} ${strikePrice} ${optionType}`;
+  const months = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+  const d = new Date(expiryDate);
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mmm = months[d.getMonth()];
+  const yyyy = d.getFullYear();
+  const displayExpiry = `${dd}${mmm}${yyyy}`; 
+
+  const searchString = `${indexShort} ${displayExpiry} ${optionType} ${strikePrice}`;
+  console.log(`[AetramMD] searchString: '${searchString}'`);
   const results = await searchInstruments(searchString);
   const targetYmd = parseDateToYMD(expiryDate);
 
   // Filter list in-memory for the closest match
   for (const inst of results) {
-    const instExpiryYmd = parseDateToYMD(inst.expiryDate || "");
-    const instStrike = Math.round(inst.strikePrice || 0);
+    const rawExpiry = inst.expiryDate || "";
+    const instExpiryYmd = parseDateToYMD(rawExpiry);
+    
+    const instStrike = Math.round(Number(inst.strikePrice ?? 0));
     const instOptType = String(inst.optionType || "").toUpperCase();
-    const isOptCE = instOptType.startsWith("C") || instOptType.includes("CE");
+    
+    // In XTS, OptionType 3 = CE, 4 = PE
+    const isOptCE = instOptType.startsWith("C") || instOptType.includes("CE") || instOptType === "3";
     const targetCE = optionType.startsWith("C");
 
     if (
@@ -259,6 +274,10 @@ export const subscribeToInstruments = async (
  * decodes the raw packet and publishes LTP_UPDATED/OI_UPDATED. This service
  * only reacts to those normalized events; it no longer parses raw packets.
  */
+marketDataEvents.on("MARKET_DATA", (event: NormalizedMarketEvent) => {
+  recordTickReceived("module2");
+});
+
 marketDataEvents.on("LTP_UPDATED", (event: NormalizedMarketEvent) => {
   if (!event.exchangeInstrumentID || event.lastPrice === null) return;
   const symbol = tokenToSymbolMap.get(event.exchangeInstrumentID);
@@ -359,18 +378,30 @@ export const getAetramExpiryDates = async (indexSymbol: string, exchangeSegment 
   if (baseUrl && getMarketDataToken()) {
     try {
       const name = indexSymbol.replace(/50$/i, "").replace(/FIFTY$/i, "").toUpperCase();
-      const url = `${baseUrl}/instruments/expiry?exchangeSegment=${exchangeSegment}&series=OPT&name=${encodeURIComponent(name)}`;
-      const response = await axios.get(url, { headers: getHeaders(), timeout: 8000 });
+      // Aetram's Market Data API returns 404 for /instruments/expiry.
+      // Instead, we fetch the instruments for the index and extract the unique expiries.
+      const results = await searchInstruments(name);
+      
+      const uniqueExpiries = new Set<string>();
+      for (const inst of results) {
+        // Only look at options (OptionType 3 = CE, 4 = PE, or strings like "CE"/"PE")
+        const optType = String(inst.optionType || "");
+        if (!optType || (optType !== "3" && optType !== "4" && !optType.toUpperCase().includes("E"))) {
+          continue;
+        }
 
-      if (response.data?.type === "success" && Array.isArray(response.data.result)) {
-        const dates = response.data.result
-          .map((r: any) => parseDateToYMD(r.expiryDate || r.expiry || ""))
-          .filter(Boolean)
-          .sort();
-        if (dates.length > 0) return dates;
+        const expiry = inst.expiryDate || "";
+        const expiryDateObj = new Date(expiry);
+        if (!isNaN(expiryDateObj.getTime())) {
+          uniqueExpiries.add(expiryDateObj.toISOString().slice(0, 10));
+        }
       }
-    } catch {
-      // Fall through to config fallback
+
+      if (uniqueExpiries.size > 0) {
+        return Array.from(uniqueExpiries).sort();
+      }
+    } catch (e: any) {
+      console.warn(`[AetramMD] Failed to fetch real expiries for ${indexSymbol}: ${e.message}. Falling back.`);
     }
   }
 

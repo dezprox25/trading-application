@@ -28,23 +28,36 @@ const getFuturesSymbol = (index: string): string => {
  * Synchronizes active option strike subscriptions with AETRAM MarketData API
  */
 export const syncAetramSubscriptions = async () => {
+  console.log("[MODULE2][TRACKER] syncAetramSubscriptions started");
   const resolvedInstruments: Array<{ segment: number; token: string }> = [];
   
   for (const session of Object.values(activeSessions)) {
     for (const strike of session.selectedStrikes) {
       try {
+        console.log(`[MODULE2][TRACKER][INSTRUMENT] Resolving strike ${strike} for ${session.indexSymbol} ${session.expiryDate}`);
         const inst = await resolveOptionStrikeToken(session.indexSymbol, session.expiryDate, strike);
         if (inst) {
+          console.log(`[MODULE2][TRACKER][INSTRUMENT] Resolved ${strike} -> Token: ${inst.token}, Segment: ${inst.segment}`);
           resolvedInstruments.push(inst);
+        } else {
+          console.error(`[MODULE2][TRACKER][INSTRUMENT] Failed to resolve strike ${strike}`);
         }
       } catch (err) {
-        console.error(`[Tracker] Error resolving Aetram strike ${strike}:`, err);
+        console.error(`[MODULE2][TRACKER][INSTRUMENT] Error resolving Aetram strike ${strike}:`, err);
       }
     }
   }
   
   if (resolvedInstruments.length > 0) {
-    await subscribeToInstruments(resolvedInstruments);
+    console.log(`[MODULE2][SUBSCRIPTION] Request for ${resolvedInstruments.length} instruments`);
+    try {
+      await subscribeToInstruments(resolvedInstruments);
+      console.log(`[MODULE2][SUBSCRIPTION] Response success`);
+    } catch (error) {
+      console.error(`[MODULE2][SUBSCRIPTION] Error:`, error);
+    }
+  } else {
+    console.log("[MODULE2][SUBSCRIPTION] No valid instruments to subscribe to.");
   }
 };
 
@@ -182,8 +195,8 @@ const executeMinuteBoundary = async () => {
         strikeState = {
           strike,
           dayOpen,
-          dayHigh: dayOpen || 100,
-          dayLow: dayOpen || 100,
+          dayHigh: dayOpen,
+          dayLow: dayOpen,
           grid: [],
           trendBadge: "FLAT",
           isDowntrendActive: false,
@@ -221,7 +234,7 @@ const executeMinuteBoundary = async () => {
       if (ltp === 0 && strikeState.grid.length > 0) {
         ltp = strikeState.grid[strikeState.grid.length - 1].ltp;
       } else if (ltp === 0) {
-        ltp = strikeState.dayOpen || 100;
+        ltp = strikeState.dayOpen || 0;
       }
 
       // If OI is 0, fallback to previous OI
@@ -251,11 +264,13 @@ const executeMinuteBoundary = async () => {
       }
 
       // Update High/Low boundaries for Price
-      strikeState.dayHigh = Math.max(strikeState.dayHigh || ltp, ltp);
-      strikeState.dayLow = Math.min(strikeState.dayLow || ltp, ltp);
+      if (ltp > 0) {
+        strikeState.dayHigh = strikeState.dayHigh ? Math.max(strikeState.dayHigh, ltp) : ltp;
+        strikeState.dayLow = (strikeState.dayLow && strikeState.dayLow > 0) ? Math.min(strikeState.dayLow, ltp) : ltp;
+      }
       
-      const denominator = strikeState.dayOpen || 100;
-      strikeState.pctChange = Number((((ltp - denominator) / denominator) * 100).toFixed(2));
+      const denominator = strikeState.dayOpen || ltp;
+      strikeState.pctChange = denominator > 0 ? Number((((ltp - denominator) / denominator) * 100).toFixed(2)) : 0;
 
       // Update boundaries for OI
       if (isFirstRow) {
@@ -403,6 +418,7 @@ export const startTrackerSession = async (
   expiryDate: string,
   selectedStrikes: string[]
 ): Promise<Module2SessionData> => {
+  console.log("[MODULE2][TRACKER] startTrackerSession execution started");
   // Capture Day Open prices and OI for each selected strike from Redis
   const dayOpenPrices: Record<string, number> = {};
   const strikes: Record<string, Module2StrikeState> = {};
@@ -468,8 +484,8 @@ export const startTrackerSession = async (
     });
     sessionId = doc._id.toString();
     createdAt = doc.created_at;
-  } catch (dbErr) {
-    console.warn("[TrackerEngine] MongoDB offline. Creating tracker session in-memory only.");
+  } catch (dbErr: any) {
+    console.warn(`[TrackerEngine] DB save error (${dbErr?.message || dbErr}). Fallback to in-memory session.`);
     sessionId = "mock-session-" + Date.now() + "-" + Math.random().toString(36).substring(2, 9);
     createdAt = new Date();
   }

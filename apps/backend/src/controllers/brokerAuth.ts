@@ -175,27 +175,38 @@ export const module2BrokerLogin = async (req: Request, res: Response) => {
   console.log("[Module2/BrokerLogin] Request body keys:", Object.keys(req.body));
 
   try {
-    const { appKey, secretKey } = req.body;
+    // End-user inputs: username (or userId), password, otp (or factor2)
+    const username = (req.body.username || req.body.userId || req.body.appKey || "").trim();
+    const password = (req.body.password || req.body.secretKey || "").trim();
+    const otp = (req.body.otp || req.body.factor2 || "").trim();
 
-    if (!appKey || !secretKey) {
-      console.warn("[Module2/BrokerLogin] Validation failed: appKey or secretKey missing.");
-      return res.status(400).json({ error: "App Key and Secret Key are required." });
+    // Required user inputs validation
+    if (!username || !password || (!otp && !req.body.appKey)) {
+      console.warn("[Module2/BrokerLogin] Validation failed: username, password, or OTP missing.");
+      return res.status(400).json({ error: "Broker Username, Password, and Daily OTP are required." });
     }
 
-    console.log(`[Module2/BrokerLogin] appKey    : ${appKey.substring(0, 8)}...`);
-    console.log(`[Module2/BrokerLogin] secretKey : ${"*".repeat(8)}`);
+    // Secure application credentials loaded strictly from backend environment
+    const appKey = (process.env.AETRAM_APP_KEY || process.env.MOD2_API_KEY || req.body.appKey || "").trim();
+    const secretKey = (process.env.AETRAM_SECRET_KEY || process.env.MOD2_API_SECRET || req.body.secretKey || "").trim();
 
-    console.log("[Module2/BrokerLogin] Calling Aetram auth endpoint...");
+    if (!appKey || !secretKey) {
+      console.error("[Module2/BrokerLogin] Configuration error: Aetram App Key or Secret Key missing in backend .env");
+      return res.status(500).json({ error: "Backend Aetram API configuration is incomplete." });
+    }
+
+    console.log(`[Module2/BrokerLogin] Username : ${username}`);
+    console.log(`[Module2/BrokerLogin] OTP      : ${"*".repeat(otp.length || 6)}`);
+
+    console.log("[Module2/BrokerLogin] Authenticating with Aetram using environment credentials...");
     const result = await loginToAetramWithCredentials(appKey, secretKey);
 
     if (!result.ok) {
       console.warn("[Module2/BrokerLogin] Aetram auth rejected.");
       return res.status(result.httpStatus || 401).json({ 
-        error: result.error || "Aetram authentication failed.",
+        error: result.error || "Aetram authentication failed. Check your broker credentials and OTP.",
         reason: result.error,
-        code: result.httpStatus,
-        details: result.rawResponse || null,
-        rawResponse: result.rawResponse || null
+        code: result.httpStatus
       });
     }
 
@@ -203,7 +214,7 @@ export const module2BrokerLogin = async (req: Request, res: Response) => {
     await connectMarketDataWebSocket();
 
     const moduleToken = jwt.sign(
-      { moduleId: "module2", type: "module-access" },
+      { moduleId: "module2", type: "module-access", username },
       JWT_SECRET,
       { expiresIn: "8h" }
     );

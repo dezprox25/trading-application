@@ -29,22 +29,38 @@ const getFuturesSymbol = (index) => {
  * Synchronizes active option strike subscriptions with AETRAM MarketData API
  */
 const syncAetramSubscriptions = async () => {
+    console.log("[MODULE2][TRACKER] syncAetramSubscriptions started");
     const resolvedInstruments = [];
     for (const session of Object.values(exports.activeSessions)) {
         for (const strike of session.selectedStrikes) {
             try {
+                console.log(`[MODULE2][TRACKER][INSTRUMENT] Resolving strike ${strike} for ${session.indexSymbol} ${session.expiryDate}`);
                 const inst = await (0, aetramMarketDataService_1.resolveOptionStrikeToken)(session.indexSymbol, session.expiryDate, strike);
                 if (inst) {
+                    console.log(`[MODULE2][TRACKER][INSTRUMENT] Resolved ${strike} -> Token: ${inst.token}, Segment: ${inst.segment}`);
                     resolvedInstruments.push(inst);
+                }
+                else {
+                    console.error(`[MODULE2][TRACKER][INSTRUMENT] Failed to resolve strike ${strike}`);
                 }
             }
             catch (err) {
-                console.error(`[Tracker] Error resolving Aetram strike ${strike}:`, err);
+                console.error(`[MODULE2][TRACKER][INSTRUMENT] Error resolving Aetram strike ${strike}:`, err);
             }
         }
     }
     if (resolvedInstruments.length > 0) {
-        await (0, aetramMarketDataService_1.subscribeToInstruments)(resolvedInstruments);
+        console.log(`[MODULE2][SUBSCRIPTION] Request for ${resolvedInstruments.length} instruments`);
+        try {
+            await (0, aetramMarketDataService_1.subscribeToInstruments)(resolvedInstruments);
+            console.log(`[MODULE2][SUBSCRIPTION] Response success`);
+        }
+        catch (error) {
+            console.error(`[MODULE2][SUBSCRIPTION] Error:`, error);
+        }
+    }
+    else {
+        console.log("[MODULE2][SUBSCRIPTION] No valid instruments to subscribe to.");
     }
 };
 exports.syncAetramSubscriptions = syncAetramSubscriptions;
@@ -164,8 +180,8 @@ const executeMinuteBoundary = async () => {
                 strikeState = {
                     strike,
                     dayOpen,
-                    dayHigh: dayOpen || 100,
-                    dayLow: dayOpen || 100,
+                    dayHigh: dayOpen,
+                    dayLow: dayOpen,
                     grid: [],
                     trendBadge: "FLAT",
                     isDowntrendActive: false,
@@ -203,7 +219,7 @@ const executeMinuteBoundary = async () => {
                 ltp = strikeState.grid[strikeState.grid.length - 1].ltp;
             }
             else if (ltp === 0) {
-                ltp = strikeState.dayOpen || 100;
+                ltp = strikeState.dayOpen || 0;
             }
             // If OI is 0, fallback to previous OI
             if (oi === 0 && strikeState.grid.length > 0) {
@@ -231,10 +247,12 @@ const executeMinuteBoundary = async () => {
                 oiSell = oiDelta < 0 ? oiDelta : 0;
             }
             // Update High/Low boundaries for Price
-            strikeState.dayHigh = Math.max(strikeState.dayHigh || ltp, ltp);
-            strikeState.dayLow = Math.min(strikeState.dayLow || ltp, ltp);
-            const denominator = strikeState.dayOpen || 100;
-            strikeState.pctChange = Number((((ltp - denominator) / denominator) * 100).toFixed(2));
+            if (ltp > 0) {
+                strikeState.dayHigh = strikeState.dayHigh ? Math.max(strikeState.dayHigh, ltp) : ltp;
+                strikeState.dayLow = (strikeState.dayLow && strikeState.dayLow > 0) ? Math.min(strikeState.dayLow, ltp) : ltp;
+            }
+            const denominator = strikeState.dayOpen || ltp;
+            strikeState.pctChange = denominator > 0 ? Number((((ltp - denominator) / denominator) * 100).toFixed(2)) : 0;
             // Update boundaries for OI
             if (isFirstRow) {
                 // First row: seed High and Low from initial OI value
@@ -368,6 +386,7 @@ const executeMinuteBoundary = async () => {
  * Starts a new Module 2 tracking session
  */
 const startTrackerSession = async (userId, sessionType, indexSymbol, expiryDate, selectedStrikes) => {
+    console.log("[MODULE2][TRACKER] startTrackerSession execution started");
     // Capture Day Open prices and OI for each selected strike from Redis
     const dayOpenPrices = {};
     const strikes = {};
@@ -429,7 +448,7 @@ const startTrackerSession = async (userId, sessionType, indexSymbol, expiryDate,
         createdAt = doc.created_at;
     }
     catch (dbErr) {
-        console.warn("[TrackerEngine] MongoDB offline. Creating tracker session in-memory only.");
+        console.warn(`[TrackerEngine] DB save error (${dbErr?.message || dbErr}). Fallback to in-memory session.`);
         sessionId = "mock-session-" + Date.now() + "-" + Math.random().toString(36).substring(2, 9);
         createdAt = new Date();
     }

@@ -41,3 +41,7 @@ Module2CandleArchiveSchema.index(
   { instrumentId: 1, timeframe: 1, minuteStart: 1 },
   { unique: true }
 );
+
+// Step 4: TTL index to automatically purge archived 1-minute candles after 48 hours (172,800 seconds)
+Module2CandleArchiveSchema.index({ createdAt: 1 }, { expireAfterSeconds: 172800 });
+

@@ -34,9 +34,11 @@ const MODULE1_FIELDS: FieldDef[] = [
 ];
 
 const MODULE2_FIELDS: FieldDef[] = [
-  { key: "appKey",    label: "App Key",    type: "text",     placeholder: "Aetram MarketData App Key"    },
-  { key: "secretKey", label: "Secret Key", type: "password", placeholder: "Aetram MarketData Secret Key" },
+  { key: "username", label: "Broker Username", type: "text",     placeholder: "Aetram Client ID (e.g. ATM013924)" },
+  { key: "password", label: "Broker Password", type: "password", placeholder: "Aetram trading password"           },
+  { key: "otp",      label: "Daily OTP",       type: "text",     placeholder: "Daily OTP / TOTP code"             },
 ];
+
 
 // Debug trace entry
 interface TraceEntry { ts: string; label: string; value: string; level: "info" | "warn" | "error" | "ok"; }

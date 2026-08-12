@@ -3,8 +3,7 @@ import { Schema } from "mongoose";
 export const Module2SessionSchema = new Schema(
   {
     user_id: {
-      type: Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
       required: true,
       index: true,
     },

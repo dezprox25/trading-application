@@ -145,6 +145,11 @@ export const initCandleArchive = (): void => {
   if (initialized) return;
   initialized = true;
 
+  // Sync schema indexes (ensures the 48-hour TTL index is created/updated in MongoDB)
+  Module2CandleArchive.syncIndexes().catch((err: any) => {
+    console.error("[CandleArchive] Failed to sync indexes:", err?.message || err);
+  });
+
   marketDataEvents.on("CANDLE_COMPLETED", (candle: MinuteCandle) => {
     // Fire-and-forget: never await here, so a slow/down MongoDB can never
     // block the event bus other CANDLE_COMPLETED consumers rely on.
@@ -153,5 +158,6 @@ export const initCandleArchive = (): void => {
     });
   });
 
-  console.log("[CandleArchive] Initialized — persisting CANDLE_COMPLETED events to MongoDB.");
+  console.log("[CandleArchive] Initialized — persisting CANDLE_COMPLETED events to MongoDB with 48h TTL retention.");
 };
+

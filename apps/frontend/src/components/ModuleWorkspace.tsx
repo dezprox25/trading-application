@@ -59,6 +59,9 @@ function useResumeModule1Session(active: boolean, module1Token: string | null) {
 
 const GREEN = "#047857";
 
+// Toggle SHOW_LIVE_INSTRUMENT_WATCH_TAB to true if client wants to re-enable "Live Instrument Watch" tab UI
+const SHOW_LIVE_INSTRUMENT_WATCH_TAB = false;
+
 // Module2.tsx (Strike Tracker) is untouched — built on trackerService's
 // session/grid model. Module2Live.tsx (Live Instrument Watch) is a separate
 // screen wired to the Phase 3-12 instrument/subscription/socket backend.
@@ -74,6 +77,10 @@ function Module2Tabs() {
     background: tab === key ? GREEN : "transparent",
     color: tab === key ? "#fff" : "var(--trading-text-muted)",
   });
+
+  if (!SHOW_LIVE_INSTRUMENT_WATCH_TAB) {
+    return <Module2 />;
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>

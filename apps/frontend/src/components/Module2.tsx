@@ -207,8 +207,33 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
   }, [initialSession, setActiveSession]);
 
   const startSessionMutation = useMutation({
-    mutationFn: () => api.post("/api/module2/session/start", { sessionType, indexSymbol, expiryDate, selectedStrikes }),
-    onSuccess: (data) => setActiveSession(data),
+    mutationFn: async () => {
+      console.log("[MODULE2][TRACKER] Start button clicked");
+      console.log("[MODULE2][TRACKER] selected index:", indexSymbol);
+      console.log("[MODULE2][TRACKER] expiry:", expiryDate);
+      console.log("[MODULE2][TRACKER] session type:", sessionType);
+      console.log("[MODULE2][TRACKER] selected strikes:", selectedStrikes);
+      console.log("[MODULE2][TRACKER] current Module 2 auth/session state:", useStore.getState().module2Status);
+
+      console.log("[MODULE2][TRACKER] Starting tracker request");
+      console.log("[MODULE2][TRACKER] Endpoint: /api/module2/session/start");
+      console.log("[MODULE2][TRACKER] Method: POST");
+      console.log("[MODULE2][TRACKER] Payload:", { sessionType, indexSymbol, expiryDate, selectedStrikes });
+
+      const res = await api.post("/api/module2/session/start", { sessionType, indexSymbol, expiryDate, selectedStrikes });
+      
+      console.log("[MODULE2][TRACKER] Response status: success");
+      console.log("[MODULE2][TRACKER] Response:", res);
+      
+      return res;
+    },
+    onSuccess: (data) => {
+      console.log("[MODULE2][TRACKER] Mutation success, active session updated");
+      setActiveSession(data);
+    },
+    onError: (error) => {
+      console.error("[MODULE2][TRACKER] Request failed:", error);
+    }
   });
 
   const { data: marketStatus } = useQuery<{ status: "LIVE" | "CLOSED" }>({

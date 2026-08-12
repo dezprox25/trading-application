@@ -62,8 +62,8 @@ const getSessionTtlMs = (): number => {
 
 const getAuthUrl = () => (process.env.AETRAM_MARKETDATA_AUTH_URL || "").trim();
 const getBaseUrl = () => (process.env.AETRAM_MARKETDATA_API_BASE_URL || "").trim();
-const getEnvAppKey = () => (process.env.MOD2_API_KEY || "").trim();
-const getEnvSecret = () => (process.env.MOD2_API_SECRET || "").trim();
+const getEnvAppKey = () => (process.env.AETRAM_APP_KEY || process.env.MOD2_API_KEY || "").trim();
+const getEnvSecret = () => (process.env.AETRAM_SECRET_KEY || process.env.MOD2_API_SECRET || "").trim();
 
 const isTtlElapsed = (): boolean =>
   !!session && Date.now() >= session.expiresAt.getTime();

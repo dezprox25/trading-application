@@ -4,8 +4,7 @@ exports.Module2SessionSchema = void 0;
 const mongoose_1 = require("mongoose");
 exports.Module2SessionSchema = new mongoose_1.Schema({
     user_id: {
-        type: mongoose_1.Schema.Types.ObjectId,
-        ref: "User",
+        type: String,
         required: true,
         index: true,
     },

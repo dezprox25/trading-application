@@ -162,13 +162,11 @@ let draining = false;
 // Tracks the session-open ms already pruned per "symbol|timeframe" so the
 // deleteMany cleanup runs once per pair per session instead of per candle.
 const prunedSessions = new Map();
-// Rolling retention window for the prune below — matches the TTL index in
-// FuturesOHLCSchema.ts (45 days). Kept as an explicit deleteMany (rather than
+// Rolling retention window for the prune below — matches the 24-hour TTL index in
+// FuturesOHLCSchema.ts (86,400 seconds). Kept as an explicit deleteMany (rather than
 // relying on the TTL alone) so the collection stays bounded even if the TTL
-// background task lags. Deliberately NOT "before today's session open" —
-// that used to wipe yesterday's candles every morning, which left no history
-// for the EMA200 warm-up (ohlc-warmup endpoint) to read.
-const HISTORY_RETENTION_MS = 45 * 24 * 60 * 60 * 1000;
+// background task lags.
+const HISTORY_RETENTION_MS = 24 * 60 * 60 * 1000;
 let _persistErrCount = 0;
 let _persistErrLastLog = 0;
 // Single source of truth for the candle upsert op — the initial bulk write and

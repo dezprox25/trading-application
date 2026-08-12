@@ -1,4 +1,4 @@
-import { io, Socket } from "socket.io-client";
+import io from "socket.io-client-v2";
 import { getMarketDataToken, getMarketDataUser, isMarketDataAuthenticated } from "./marketDataSessionService";
 import { marketDataEvents } from "./marketDataEvents";
 
@@ -52,7 +52,7 @@ const HEARTBEAT_CHECK_INTERVAL_MS = Number(process.env.MOD2_WS_HEARTBEAT_CHECK_I
 const getBaseUrl = () => (process.env.AETRAM_MARKETDATA_API_BASE_URL || "").trim();
 
 // ── Internal state ──────────────────────────────────────────────────────────
-let socket: Socket | null = null;
+let socket: any = null;
 let state: ConnectionState = "DISCONNECTED";
 let connectionStartedAt: Date | null = null;
 let connectedAt: Date | null = null;
@@ -85,7 +85,7 @@ export const onRawSocketEvent = (event: string, handler: (...args: any[]) => voi
   if (socket) socket.on(event, handler);
 };
 
-const attachRawListeners = (target: Socket) => {
+const attachRawListeners = (target: any) => {
   for (const { event, handler } of rawListeners) {
     target.on(event, handler);
   }
@@ -262,13 +262,11 @@ Attempt       : ${attemptLabel}
     console.log("[MarketDataWS/Debug] EVENT: joined:", JSON.stringify(data));
   });
 
-  // Low-level engine.io ping/pong is the actual heartbeat transport-layer signal.
   const engine: any = (socket as any).io?.engine;
   if (engine) {
     engine.on("packet", (packet: any) => {
       if (packet?.type === "ping" || packet?.type === "pong") {
         lastHeartbeatAt = new Date();
-        console.log(`[MarketDataWS/Debug] Heartbeat packet: ${packet.type}`);
       }
     });
   }

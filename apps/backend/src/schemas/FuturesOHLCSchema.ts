@@ -45,10 +45,8 @@ export const FuturesOHLCSchema = new Schema({
 // query for pivot calculation (replaces the old non-unique bar_time:-1 index).
 FuturesOHLCSchema.index({ symbol: 1, timeframe: 1, bar_time: 1 }, { unique: true });
 
-// TTL index: MongoDB auto-deletes candles older than 45 days.
-// Extended from the original 25h so coarser timeframes (15m and up) have
-// enough retained history to seed a best-effort EMA200 warm-up on connect
-// (see ohlc-warmup endpoint) — reads elsewhere stay scoped to "today only"
-// via explicit bar_time filters (getOHLCBars, getCachedOHLCBars), so this
-// longer retention never leaks prior-session rows into the live worksheet.
-FuturesOHLCSchema.index({ bar_time: 1 }, { expireAfterSeconds: 45 * 24 * 60 * 60 });
+// TTL index: MongoDB auto-deletes candles older than 24 hours (86,400 seconds).
+// Daily session cleanup is additionally managed at startup and daily rollover
+// by module1DataCleanupService.ts.
+FuturesOHLCSchema.index({ bar_time: 1 }, { expireAfterSeconds: 86400 });
+

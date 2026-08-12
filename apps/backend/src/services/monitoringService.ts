@@ -1,13 +1,21 @@
 import { readLive } from "./redisWriteBuffer";
 import { isZebuLiveConnected } from "./zebuMarketDataClient";
+import { isAetramConnected } from "./aetramMarketDataService";
 
-let lastTickTime = Date.now();
+let lastTickTimeModule1 = Date.now();
+let lastTickTimeModule2 = Date.now();
 
 /**
- * Call this whenever a new tick is received to update the freshness timestamp.
+ * Call this whenever a new tick is received to update the freshness timestamp for the specified module.
  */
-export const recordTickReceived = () => {
-  lastTickTime = Date.now();
+export const recordTickReceived = (moduleId: "module1" | "module2" = "module1") => {
+  const now = Date.now();
+  if (moduleId === "module2") {
+    lastTickTimeModule2 = now;
+    console.log(`[MODULE2][MONITOR] module2 lastTickAt updated: ${new Date(now).toISOString()}`);
+  } else {
+    lastTickTimeModule1 = now;
+  }
 };
 
 /**
@@ -15,7 +23,8 @@ export const recordTickReceived = () => {
  */
 export const getMonitoringStatus = async () => {
   const now = Date.now();
-  const secondsSinceLastTick = (now - lastTickTime) / 1000;
+  const secondsSinceModule1Tick = (now - lastTickTimeModule1) / 1000;
+  const secondsSinceModule2Tick = (now - lastTickTimeModule2) / 1000;
   
   // Memory-first: this loop runs every 10s — hitting Redis for it cost ~100K
   // commands/month for values the tick pipeline already holds in-process.
@@ -24,18 +33,29 @@ export const getMonitoringStatus = async () => {
   
   const alerts: string[] = [];
   
-  if (isZebuLiveConnected()) {
-    if (secondsSinceLastTick > 15) {
-      alerts.push(`Live feed data freshness alert: No ticks received for ${secondsSinceLastTick.toFixed(1)} seconds.`);
+  const zebuLive = isZebuLiveConnected();
+  const aetramLive = isAetramConnected() === "CONNECTED";
+
+  if (zebuLive) {
+    if (secondsSinceModule1Tick > 30) {
+      alerts.push(`Module 1 (Zebu) live feed data freshness alert: No ticks received for ${secondsSinceModule1Tick.toFixed(1)} seconds.`);
     }
-  } else {
-    alerts.push("Live feed is disconnected. No live data available — waiting for broker reconnection.");
+  }
+
+  if (aetramLive) {
+    if (secondsSinceModule2Tick > 30) {
+      alerts.push(`Module 2 (Aetram) live feed data freshness alert: No ticks received for ${secondsSinceModule2Tick.toFixed(1)} seconds.`);
+    }
+  }
+
+  if (!zebuLive && !aetramLive) {
+    alerts.push("Module 1 (Zebu) and Module 2 (Aetram) live feeds are disconnected — waiting for broker login/reconnection.");
   }
   
-  if (!spotLtp || parseFloat(spotLtp) === 0) {
+  if (zebuLive && (!spotLtp || parseFloat(spotLtp) === 0)) {
     alerts.push("Spot LTP is missing or zero.");
   }
-  if (!futLtp || parseFloat(futLtp) === 0) {
+  if (zebuLive && (!futLtp || parseFloat(futLtp) === 0)) {
     alerts.push("Futures LTP is missing or zero.");
   }
 
@@ -46,8 +66,10 @@ export const getMonitoringStatus = async () => {
 
   return {
     status: alerts.length === 0 ? "OK" : "WARNING",
-    lastTickTime: new Date(lastTickTime),
-    secondsSinceLastTick,
+    lastTickTimeModule1: new Date(lastTickTimeModule1),
+    lastTickTimeModule2: new Date(lastTickTimeModule2),
+    secondsSinceModule1Tick,
+    secondsSinceModule2Tick,
     alerts,
     metrics: {
       spotLtp: spotLtp ? parseFloat(spotLtp) : null,

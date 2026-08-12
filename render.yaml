@@ -152,6 +152,12 @@ services:
       - key: MOD2_API_SECRET
         sync: false
 
+      - key: AETRAM_APP_KEY
+        sync: false
+
+      - key: AETRAM_SECRET_KEY
+        sync: false
+
       - key: MOD2_INTERACTIVE_API_KEY
         sync: false
 

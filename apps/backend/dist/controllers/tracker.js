@@ -6,22 +6,36 @@ const trackerService_1 = require("../services/trackerService");
 const shared_1 = require("@stock/shared");
 // Start Module 2 Session
 const startSession = async (req, res) => {
+    console.log("[MODULE2][TRACKER] Request received at backend /api/module2/session/start");
     try {
         const userId = req.user?.id;
         if (!userId) {
+            console.error("[MODULE2][TRACKER] Unauthorized: No user ID");
             return res.status(401).json({ error: "Unauthorized" });
         }
+        console.log("[MODULE2][TRACKER] Authenticated module/session state:", { userId });
         const parseResult = shared_1.Module2SessionStartSchema.safeParse(req.body);
         if (!parseResult.success) {
+            console.error("[MODULE2][TRACKER] Validation failed:", parseResult.error.errors);
             return res.status(400).json({ error: "Validation failed", details: parseResult.error.errors });
         }
         const { sessionType, indexSymbol, expiryDate, selectedStrikes } = parseResult.data;
+        console.log("[MODULE2][TRACKER] Symbol:", indexSymbol);
+        console.log("[MODULE2][TRACKER] Expiry:", expiryDate);
+        console.log("[MODULE2][TRACKER] Session type:", sessionType);
+        console.log("[MODULE2][TRACKER] Selected strikes:", selectedStrikes);
+        console.log("[MODULE2][TRACKER] Strike count:", selectedStrikes?.length);
         // Start new session
+        console.log("[MODULE2][TRACKER] Calling startTrackerSession...");
         const session = await (0, trackerService_1.startTrackerSession)(userId, sessionType, indexSymbol, expiryDate, selectedStrikes);
+        console.log("[MODULE2][TRACKER] startTrackerSession returned:", session ? "Session Data" : "null/undefined");
+        if (session) {
+            console.log("[MODULE2][TRACKER] Tracker/session ID:", session.sessionId);
+        }
         return res.status(201).json(session);
     }
     catch (error) {
-        console.error("Start Session Error:", error);
+        console.error("[MODULE2][TRACKER] Start Session Error:", error);
         return res.status(500).json({ error: "Internal Server Error" });
     }
 };
