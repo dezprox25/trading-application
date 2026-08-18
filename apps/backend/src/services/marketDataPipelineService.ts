@@ -116,21 +116,27 @@ const parseStringPayload = (str: string): Record<string, any> => {
 };
 
 /** 1510 — Open Interest updates. Field names match aetramMarketDataService's existing handleOiTick. */
-const decodeOpenInterest1510: PacketDecoder = (payload) => ({
-  exchangeSegment: numOrUndef(payload.exchangeSegment ?? payload.ExchangeSegment),
-  exchangeInstrumentID: strOrUndef(payload.exchangeInstrumentID ?? payload.ExchangeInstrumentID),
-  openInterest: numOrUndef(payload.openInterest ?? payload.OpenInterest ?? payload.oi),
-  timestamp: payload.timestamp ?? payload.LastUpdateTime ?? payload.lut,
-});
+const decodeOpenInterest1510: PacketDecoder = (payload) => {
+  const t = payload.Touchline || payload.touchline || payload;
+  return {
+    exchangeSegment: numOrUndef(payload.exchangeSegment ?? payload.ExchangeSegment ?? t.exchangeSegment ?? t.ExchangeSegment),
+    exchangeInstrumentID: strOrUndef(payload.exchangeInstrumentID ?? payload.ExchangeInstrumentID ?? payload.InstrumentID ?? payload.Token ?? t.exchangeInstrumentID ?? t.ExchangeInstrumentID),
+    openInterest: numOrUndef(payload.openInterest ?? payload.OpenInterest ?? payload.oi ?? payload.OI ?? t.openInterest ?? t.OpenInterest ?? t.oi),
+    timestamp: payload.timestamp ?? payload.LastUpdateTime ?? payload.lut,
+  };
+};
 
 /** 1512 — LTP updates. Field names match aetramMarketDataService's existing handleLtpTick. */
-const decodeLtp1512: PacketDecoder = (payload) => ({
-  exchangeSegment: numOrUndef(payload.exchangeSegment ?? payload.ExchangeSegment),
-  exchangeInstrumentID: strOrUndef(payload.exchangeInstrumentID ?? payload.ExchangeInstrumentID),
-  lastPrice: numOrUndef(payload.lastTradedPrice ?? payload.LastTradedPrice ?? payload.lastPrice ?? payload.ltp ?? payload.close ?? payload.c),
-  volume: numOrUndef(payload.totalTradedQuantity ?? payload.TotalTradedQuantity ?? payload.volume ?? payload.ltq),
-  timestamp: payload.lastTradedTime ?? payload.timestamp ?? payload.LastUpdateTime ?? payload.lut,
-});
+const decodeLtp1512: PacketDecoder = (payload) => {
+  const t = payload.Touchline || payload.touchline || payload;
+  return {
+    exchangeSegment: numOrUndef(payload.exchangeSegment ?? payload.ExchangeSegment ?? t.exchangeSegment ?? t.ExchangeSegment),
+    exchangeInstrumentID: strOrUndef(payload.exchangeInstrumentID ?? payload.ExchangeInstrumentID ?? payload.InstrumentID ?? payload.Token ?? t.exchangeInstrumentID ?? t.ExchangeInstrumentID),
+    lastPrice: numOrUndef(payload.lastTradedPrice ?? payload.LastTradedPrice ?? payload.lastPrice ?? payload.LastPrice ?? payload.ltp ?? payload.LTP ?? payload.close ?? payload.c ?? t.lastTradedPrice ?? t.LastTradedPrice ?? t.lastPrice ?? t.LastPrice ?? t.ltp ?? t.LTP),
+    volume: numOrUndef(payload.totalTradedQuantity ?? payload.TotalTradedQuantity ?? payload.volume ?? payload.ltq ?? t.totalTradedQuantity ?? t.TotalTradedQuantity),
+    timestamp: payload.lastTradedTime ?? payload.timestamp ?? payload.LastUpdateTime ?? payload.lut,
+  };
+};
 
 const DECODERS: Record<string, PacketDecoder> = {
   "1501": decodeTouchline1501,
@@ -179,6 +185,8 @@ const publishError = (packetType: string, reason: string, partialEvent: Normaliz
   marketDataEvents.emit("PIPELINE_ERROR", payload);
 };
 
+const lastTickCache = new Map<string, string>();
+
 /**
  * Entry point: receive one raw broker packet, decode → normalize → validate →
  * publish. Never throws — every failure path is a PIPELINE_ERROR emit instead
@@ -208,6 +216,13 @@ export const processRawPacket = (packetType: string, raw: unknown): void => {
       return;
     }
 
+    if (Array.isArray(payload)) {
+      for (const item of payload) {
+        processRawPacket(packetType, item);
+      }
+      return;
+    }
+
     if (!payload || typeof payload !== "object") {
       publishError(packetType, "Malformed packet — payload is not an object.");
       return;
@@ -231,7 +246,20 @@ export const processRawPacket = (packetType: string, raw: unknown): void => {
     }
 
     marketDataEvents.emit("MARKET_DATA", event);
-    if (event.lastPrice !== null) marketDataEvents.emit("LTP_UPDATED", event);
+    if (event.lastPrice !== null) {
+      const tickKey = `${event.exchangeInstrumentID}|${event.lastPrice}|${event.timestamp}`;
+      if (lastTickCache.get(event.exchangeInstrumentID!) === tickKey) {
+        return;
+      }
+      lastTickCache.set(event.exchangeInstrumentID!, tickKey);
+
+      if (event.lastPrice === 0) {
+        console.log(`[PIPELINE][ZERO_LTP] token=${event.exchangeInstrumentID} rawPayload=${JSON.stringify(payload)}`);
+      } else {
+        console.log(`[PIPELINE][NORMALIZED] token=${event.exchangeInstrumentID} lastPrice=${event.lastPrice}`);
+      }
+      marketDataEvents.emit("LTP_UPDATED", event);
+    }
     if (event.openInterest !== null) marketDataEvents.emit("OI_UPDATED", event);
   } catch (err: any) {
     publishError(packetType, err?.message || String(err));

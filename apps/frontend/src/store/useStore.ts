@@ -89,7 +89,7 @@ interface AppState {
   activeSession: Module2SessionData | null;
   setActiveSession: (session: Module2SessionData | null) => void;
   updateSessionStrikes: (strikes: string[]) => void;
-  appendTrackerCell: (strike: string, cell: Module2Cell, stateUpdate: Partial<Module2StrikeState>) => void;
+  appendTrackerCell: (strike: string, cell: Module2Cell | null, stateUpdate: Partial<Module2StrikeState>) => void;
   updateFuturesOI: (futuresOI: any) => void;
 }
 
@@ -197,11 +197,24 @@ export const useStore = create<AppState>((set) => ({
 
       const currentStrikeState = state.activeSession.strikes[strike];
       const gridCopy = [...currentStrikeState.grid];
-      const existingCellIdx = gridCopy.findIndex((c) => c.minute === cell.minute);
-      if (existingCellIdx >= 0) {
-        gridCopy[existingCellIdx] = cell;
-      } else {
-        gridCopy.push(cell);
+
+      if (cell) {
+        const existingCellIdx = gridCopy.findIndex((c) => c.minute === cell.minute || c.timestamp === cell.timestamp);
+        if (existingCellIdx >= 0) {
+          gridCopy[existingCellIdx] = cell;
+        } else {
+          gridCopy.push(cell);
+        }
+      }
+
+      if (stateUpdate && (stateUpdate as any).ltp && gridCopy.length > 0) {
+        const latestCell = gridCopy[gridCopy.length - 1];
+        gridCopy[gridCopy.length - 1] = {
+          ...latestCell,
+          ltp: (stateUpdate as any).ltp,
+          isHigh: (stateUpdate as any).dayHigh ? (stateUpdate as any).ltp === (stateUpdate as any).dayHigh : latestCell.isHigh,
+          isLow: (stateUpdate as any).dayLow ? (stateUpdate as any).ltp === (stateUpdate as any).dayLow : latestCell.isLow
+        };
       }
 
       const updatedStrikeState: Module2StrikeState = {

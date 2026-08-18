@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.processIncomingTick = exports.resumeDataFeedFromPersistedSession = exports.stopDataFeed = exports.startDataFeedWithCredentials = exports.setOnTickReceived = exports.subscribeOptionTokens = void 0;
+exports.processIncomingTick = exports.resumeDataFeedFromPersistedSession = exports.stopDataFeed = exports.startDataFeedWithCredentials = exports.isOptionSymbolSelected = exports.setSelectedOptionSymbols = exports.setOnTickReceived = exports.subscribeOptionTokens = void 0;
 const redisWriteBuffer_1 = require("./redisWriteBuffer");
 const ohlcAggregator_1 = require("./ohlcAggregator");
 const module1OiService_1 = require("./module1OiService");
@@ -68,6 +68,22 @@ const setOnTickReceived = (callback) => {
     onTickReceived = callback;
 };
 exports.setOnTickReceived = setOnTickReceived;
+// ── Active Selected Option Symbols Registry ─────────────────────────────────
+// Ensures Module 1 ONLY buffers, ingests, aggregates, and persists option ticks
+// for strikes explicitly selected by active user sessions.
+const activeSelectedOptionSymbols = new Set();
+const setSelectedOptionSymbols = (symbols) => {
+    activeSelectedOptionSymbols.clear();
+    for (const sym of symbols) {
+        activeSelectedOptionSymbols.add(sym);
+    }
+    console.log(`[DataFeed] Active selected option symbols updated (${activeSelectedOptionSymbols.size}): ${Array.from(activeSelectedOptionSymbols).join(", ")}`);
+};
+exports.setSelectedOptionSymbols = setSelectedOptionSymbols;
+const isOptionSymbolSelected = (symbol) => {
+    return activeSelectedOptionSymbols.has(symbol);
+};
+exports.isOptionSymbolSelected = isOptionSymbolSelected;
 // ── Reconnection state ────────────────────────────────────────────────────────
 let storedUserId = null;
 let storedSessionToken = null;
@@ -278,21 +294,9 @@ const processIncomingTick = async (tick) => {
     const isFut = symbol.endsWith("-FUT") || symbol.includes("FUT");
     const isSpot = symbol === "NIFTY-SPOT";
     const isOpt = symbol.startsWith("NIFTY") && /[CP]\d+$/.test(symbol);
-    // One-time ATM-band recompute: if the option strikes were selected off a stale fallback
-    // at connect time (Redis empty on cold start), the first genuine spot/futures price this
-    // session tells us the REAL ATM — recompute the band and subscribe those strikes now,
-    // instead of waiting for the user to reconnect. See instrumentTokenService.ts.
-    if (!atmBandRecomputed && !atmIsReliableAtConnect && (isSpot || isFut) && ltp > 0) {
-        atmBandRecomputed = true; // set before the async call so a burst of ticks can't double-fire
-        const band = (0, instrumentTokenService_1.recomputeOptionBandFromLivePrice)(ltp);
-        if (band && (band.ceTokens.length > 0 || band.peTokens.length > 0)) {
-            const instruments = (0, zebuMarketDataClient_1.parseInstrumentEnv)([...band.ceTokens, ...band.peTokens].join(","));
-            console.log(`[DataFeed] ATM band recomputed from ${symbol}=${ltp} — subscribing ${instruments.length} option token(s).`);
-            (0, exports.subscribeOptionTokens)(instruments.map(i => ({ exchange: i.exchange, token: i.token, symbol: i.symbol })));
-        }
-        else {
-            console.warn(`[DataFeed] ATM band recompute from ${symbol}=${ltp} produced no tokens — NFO master may not be cached yet.`);
-        }
+    // Only process, buffer, aggregate, and persist option ticks that match user-selected strikes
+    if (isOpt && !(0, exports.isOptionSymbolSelected)(symbol)) {
+        return;
     }
     if (isFut || isSpot || isOpt) {
         await (0, ohlcAggregator_1.aggregateOHLC)(tick, 1, "1m");

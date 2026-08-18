@@ -167,6 +167,7 @@ export const loginMarketData = async (
   const reqBody = { secretKey: secret, appKey: key, source: "WEBAPI" };
   const reqHeaders = { "Content-Type": "application/json" };
 
+  console.log("[AETRAM][AUTH] Starting authentication");
   console.log(`----------------------------------------------------
 [Module2/Login] Starting broker authentication...
 API URL: ${authUrl}
@@ -195,14 +196,18 @@ Timestamp: ${new Date().toISOString()}
       };
       sessionEnded = null;
       
+      const maskedToken = session.token.length > 12 
+        ? `${session.token.substring(0, 8)}...[REDACTED]`
+        : "***";
+      
+      console.log("[AETRAM][AUTH] Login successful");
+      console.log(`[AETRAM][AUTH] Token received for userID: ${session.userID}`);
       console.log(`----------------------------------------------------
 [Module2/Login] Authentication Success
 
 HTTP Status: ${response.status}
 Response Headers: ${JSON.stringify(response.headers)}
-Raw Response Body: ${typeof body === 'object' ? JSON.stringify(body) : body}
-Parsed JSON: ${typeof body === 'object' ? JSON.stringify(body, null, 2) : 'N/A'}
-Token: ${session.token}
+Token (masked): ${maskedToken}
 UserID: ${session.userID}
 Description: ${body?.description || 'N/A'}
 ----------------------------------------------------`);
@@ -214,6 +219,8 @@ Description: ${body?.description || 'N/A'}
         expiresAt: session.expiresAt.toISOString(),
       };
     }
+
+    console.warn(`[AETRAM][AUTH] Login failed: ${body?.description || body?.message || "Invalid credentials"}`);
 
     console.log(`----------------------------------------------------
 [Module2/Login] Authentication Failed

@@ -164,9 +164,9 @@ export const useSocket = () => {
     // Module 2 tracker updates
     socket.on(
       "tracker_update",
-      (data: { strike?: string; cell?: Module2Cell; state?: Partial<Module2StrikeState>; futuresOI?: any }) => {
-        if (data.strike && data.cell && data.state) {
-          appendTrackerCell(data.strike, data.cell, data.state);
+      (data: { strike?: string; cell?: Module2Cell | null; state?: Partial<Module2StrikeState>; futuresOI?: any }) => {
+        if (data.strike && data.state) {
+          appendTrackerCell(data.strike, data.cell || null, data.state);
         }
         if (data.futuresOI) {
           updateFuturesOI(data.futuresOI);

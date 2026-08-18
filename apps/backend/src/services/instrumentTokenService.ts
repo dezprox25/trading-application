@@ -251,21 +251,12 @@ const buildActiveTokens = (rows: MasterRow[], atmStrike: number, atmIsReliable: 
   const nearestOptionExpiry = nearestExpiry.toISOString().slice(0, 10);
   console.log(`[InstrumentTokens] Nearest option expiry: ${nearestOptionExpiry}`);
 
-  // Select strikes around ATM. When the ATM seed came from a live Redis price
-  // (redis-spot / redis-futures) it's trustworthy, so a tight ±1000 radius is enough.
-  // When it fell back to the hardcoded default (no Redis data yet — e.g. cold start
-  // before any tick has arrived this session), that constant WILL drift out of date
-  // as NIFTY moves over weeks/months. A tight radius around a stale fallback silently
-  // excludes the real ATM strikes from subscription entirely — Zebu then never sends
-  // ticks for the strikes the user actually selects, which is indistinguishable from a
-  // broken feed (CE/PE OHLC permanently empty). Widen the net substantially in that case
-  // as an immediate safety net; the real fix is dataFeed.ts recomputing the band from the
-  // first genuine spot/futures tick (see recomputeOptionBandFromLivePrice below) and from
-  // the frontend's on-demand `subscribe:options` request (see resolveOptionInstrument).
-  const strikeRadius = atmIsReliable ? 1000 : 5000;
-  const { ceTokens, peTokens } = selectOptionTokens(rows, nearestExpiry, atmStrike, strikeRadius);
+  // Module 1 selected-strike storage model: do NOT bulk-subscribe option strikes at connect time.
+  // Option contracts are subscribed on-demand when the user selects CE/PE strikes in Module 1.
+  const ceTokens: string[] = [];
+  const peTokens: string[] = [];
 
-  console.log(`[InstrumentTokens] ATM=${Math.round(atmStrike / 50) * 50} (reliable=${atmIsReliable}, radius=${strikeRadius}): ${ceTokens.length} CE + ${peTokens.length} PE tokens selected.`);
+  console.log(`[InstrumentTokens] Connected with core tokens (FUT: ${futToken ? "set" : "none"}). Option tokens will be subscribed on-demand when selected by user.`);
 
   return { futToken, ceTokens, peTokens, fetchedAt: new Date(), nearestOptionExpiry, futExpiry, atmIsReliable };
 };
@@ -448,13 +439,13 @@ export const getAvailableStrikes = async (
  * Returns null if the instrument master hasn't been loaded yet or the contract isn't found
  * (wrong strike/expiry, or expired).
  */
-export const resolveOptionInstrument = (
+export const resolveOptionInstrument = async (
   instrument: string,
   expiryFmt: string,
   strike: number,
   optionType: "CE" | "PE"
-): { exchange: string; token: string; symbol: string } | null => {
-  if (!cachedRows.length) return null;
+): Promise<{ exchange: string; token: string; symbol: string } | null> => {
+  if (!cachedRows.length) await getActiveInstrumentTokens();
   const inst = instrument.toUpperCase();
 
   const row = cachedRows.find(r =>

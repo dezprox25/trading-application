@@ -81,7 +81,7 @@ const STATUS_CONFIGS: Partial<Record<FeedStatus | "custom-pending", {
   "market-closed": {
     icon: "◷",
     title: "Market Closed",
-    message: "The market is currently closed. Trading hours: Monday – Friday, 9:00 AM – 3:45 PM IST.",
+    message: "The market is currently closed. Trading hours: Monday – Friday, 9:15 AM – 3:30 PM IST.",
     color: "#5B6B7F",
   },
   "auth-error": {
@@ -315,11 +315,7 @@ export function Dashboard() {
 
           if (status?.status === "CLOSED") {
             setFeedStatus("market-closed");
-            setIsLoading(false);
-            return;
-          }
-
-          if (!status?.zebuConnected) {
+          } else if (!status?.zebuConnected) {
             const m1Status = useStore.getState().module1Status;
             setFeedStatus(m1Status === "authenticated" ? "api-error" : "auth-error");
             setIsLoading(false);
@@ -547,7 +543,9 @@ export function Dashboard() {
         }
 
         setIsLoading(false);
-        setFeedStatus("live");
+        if (useDashStore.getState().feedStatus !== "market-closed") {
+          setFeedStatus("live");
+        }
 
       } catch (err: unknown) {
         if (cancelled) return;
@@ -928,7 +926,6 @@ export function Dashboard() {
   const statusPanelKey: string | null =
     !isGenerated ? null :
     timeframe === "custom" && !customRange ? "custom-pending" :
-    feedStatus === "market-closed"      ? "market-closed"      :
     feedStatus === "auth-error"         ? "auth-error"         :
     feedStatus === "session-expired"    ? "session-expired"    :
     feedStatus === "broker-disconnected"? "broker-disconnected":
@@ -945,6 +942,30 @@ export function Dashboard() {
       overflow: "hidden",
     }}>
       <InfoBar />
+      {feedStatus === "market-closed" && (
+        <div style={{
+          background: "#FEF2F2",
+          borderBottom: "1px solid #FCA5A5",
+          color: "#991B1B",
+          padding: "8px 16px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          
+          fontFamily: "'Calibri','Segoe UI',system-ui,sans-serif",
+          flexShrink: 0,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 16 }}>🔴</span>
+            <div>
+              <span style={{ fontSize: 20, marginLeft: 12, opacity: 0.9, fontWeight:800 }}>MARKET CLOSED</span>
+              <span style={{ fontSize: 20, marginLeft: 12, opacity: 0.9, fontWeight:800 }}>
+                Monday–Friday: Live market updates have stopped. Displaying {istDateStr()} stored market session data (9:15 AM – 3:30 PM IST).
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
       <ConfigRow />
       <TimeframeRow />
       {statusPanelKey ? (

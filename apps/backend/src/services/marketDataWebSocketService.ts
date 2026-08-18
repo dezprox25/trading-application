@@ -81,12 +81,18 @@ const rawListeners: Array<{ event: string; handler: (...args: any[]) => void }> 
  * reference to the socket itself, so it cannot create/destroy/reconnect it.
  */
 export const onRawSocketEvent = (event: string, handler: (...args: any[]) => void): void => {
-  rawListeners.push({ event, handler });
-  if (socket) socket.on(event, handler);
+  if (!rawListeners.some((l) => l.event === event && l.handler === handler)) {
+    rawListeners.push({ event, handler });
+  }
+  if (socket) {
+    socket.off(event, handler);
+    socket.on(event, handler);
+  }
 };
 
 const attachRawListeners = (target: any) => {
   for (const { event, handler } of rawListeners) {
+    target.off(event, handler);
     target.on(event, handler);
   }
 };
@@ -219,6 +225,9 @@ const attemptConnect = async (): Promise<boolean> => {
 
   const fullUrl = `${host}${socketPath}?token=${maskedToken}&userID=${userID}&apiType=MARKETDATA&publishFormat=JSON`;
 
+  console.log(`[AETRAM][WS][STATE] before-connect`);
+  console.log(`[AETRAM][WS][STATE] connecting`);
+  console.log(`[AETRAM][WS] Connecting (${attemptLabel})...`);
   console.log(`----------------------------------------------------
 [MarketDataWS/Debug] Initiating Socket.IO Connection
 Timestamp     : ${new Date().toISOString()}
@@ -241,10 +250,14 @@ Attempt       : ${attemptLabel}
   });
 
   socket.on("connect", () => {
+    console.log(`[AETRAM][WS][STATE] connected`);
+    console.log(`[AETRAM][WS] Connected (Socket ID: ${socket?.id})`);
     console.log(`[MarketDataWS/Debug] EVENT: connect (Socket ID: ${socket?.id})`);
   });
 
   socket.on("disconnect", (reason: string) => {
+    console.warn(`[AETRAM][WS][STATE] disconnected`);
+    console.warn(`[AETRAM][WS] Disconnected (Reason: ${reason})`);
     console.log(`[MarketDataWS/Debug] EVENT: disconnect (Reason: ${reason})`);
     if (manualTeardown) {
       console.log(`[MarketDataWS] Socket closed (${reason}) — manual/graceful, no auto-reconnect.`);
@@ -255,6 +268,7 @@ Attempt       : ${attemptLabel}
 
   socket.on("error", (err: any) => {
     lastError = err?.message || String(err);
+    console.error(`[AETRAM][WS] Connection error: ${lastError}`);
     console.error("[MarketDataWS/Debug] EVENT: error:", lastError, err);
   });
 
@@ -277,6 +291,7 @@ Attempt       : ${attemptLabel}
 
   const connected = await new Promise<boolean>((resolve) => {
     const timer = setTimeout(() => {
+      console.warn(`[AETRAM][WS] Connection error: Connection timed out after ${CONNECT_TIMEOUT_MS}ms.`);
       console.warn(`[MarketDataWS] Connection timed out after ${CONNECT_TIMEOUT_MS}ms.`);
       resolve(false);
     }, CONNECT_TIMEOUT_MS);
@@ -291,6 +306,7 @@ Attempt       : ${attemptLabel}
       lastError = err?.message || String(err);
       const reqStatus = err?.req?.status || err?.status || err?.context?.status;
       const respData = err?.req?.responseText || err?.data || err?.context?.data;
+      console.error(`[AETRAM][WS] Connection error: ${lastError}`);
       console.error(`----------------------------------------------------
 [MarketDataWS/Debug] EVENT: connect_error
 Error Message : ${err?.message || err}
@@ -310,7 +326,8 @@ Response Body : ${respData || 'N/A'}
     lastError = null;
     reconnectAttempts = 0;
     startHeartbeatMonitor();
-    console.log(wasReconnect ? "[MarketDataWS] Reconnect Success." : "[MarketDataWS] Connection Established.");
+    console.log(`[AETRAM][WS][STATE] ready-for-subscription`);
+    console.log(wasReconnect ? "[AETRAM][WS] Reconnected" : "[AETRAM][WS] Connected");
     marketDataEvents.emit(wasReconnect ? "RECONNECTED" : "CONNECTED", { connectedAt: connectedAt.toISOString() });
     return true;
   }

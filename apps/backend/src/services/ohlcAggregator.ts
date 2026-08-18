@@ -1,6 +1,7 @@
 import { FuturesOHLC } from "../models/FuturesOHLC";
 import { Tick, Candle } from "@stock/shared";
 import { readLive } from "./redisWriteBuffer";
+import { archiveModule1Candles } from "./module1ArchiveService";
 
 // Local cache for active candles: activeCandles[symbol][timeframe]
 const activeCandles: Record<string, Record<string, Candle>> = {};
@@ -218,6 +219,9 @@ const drainPersistQueue = async () => {
   try {
     while (persistQueue.length > 0) {
       const batch = persistQueue.splice(0, persistQueue.length);
+
+      // Async fire-and-forget archival to Module1CandleArchive
+      void archiveModule1Candles(batch).catch(() => {});
 
       // 1. One bulk upsert for the whole batch (same doc shape/filter as the
       //    previous per-candle findOneAndUpdate upsert).

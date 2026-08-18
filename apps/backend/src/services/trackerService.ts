@@ -4,7 +4,7 @@ import { readLive } from "./redisWriteBuffer";
 import { broadcastTrackerUpdate } from "./socketService";
 import { Module2SessionData, Module2StrikeState, Module2Cell, TrendBadgeState } from "@stock/shared";
 import { getModule2DataSource, logModule2InteractiveStatus } from "./module2InteractiveDataService";
-import { resolveOptionStrikeToken, subscribeToInstruments, setOnAetramReconnect } from "./aetramMarketDataService";
+import { resolveOptionStrikeToken, subscribeToInstruments, unsubscribeFromInstruments, getActiveSubscribedInstruments, setOnAetramReconnect } from "./aetramMarketDataService";
 
 // In-memory cache for active tracker sessions to avoid database load
 export const activeSessions: Record<string, Module2SessionData> = {};
@@ -29,16 +29,15 @@ const getFuturesSymbol = (index: string): string => {
  */
 export const syncAetramSubscriptions = async () => {
   console.log("[MODULE2][TRACKER] syncAetramSubscriptions started");
-  const resolvedInstruments: Array<{ segment: number; token: string }> = [];
-  
+  const desiredMap = new Map<string, { segment: number; token: string }>();
+
   for (const session of Object.values(activeSessions)) {
     for (const strike of session.selectedStrikes) {
       try {
-        console.log(`[MODULE2][TRACKER][INSTRUMENT] Resolving strike ${strike} for ${session.indexSymbol} ${session.expiryDate}`);
         const inst = await resolveOptionStrikeToken(session.indexSymbol, session.expiryDate, strike);
         if (inst) {
-          console.log(`[MODULE2][TRACKER][INSTRUMENT] Resolved ${strike} -> Token: ${inst.token}, Segment: ${inst.segment}`);
-          resolvedInstruments.push(inst);
+          const key = `${inst.segment}|${inst.token}`;
+          desiredMap.set(key, inst);
         } else {
           console.error(`[MODULE2][TRACKER][INSTRUMENT] Failed to resolve strike ${strike}`);
         }
@@ -47,18 +46,61 @@ export const syncAetramSubscriptions = async () => {
       }
     }
   }
-  
-  if (resolvedInstruments.length > 0) {
-    console.log(`[MODULE2][SUBSCRIPTION] Request for ${resolvedInstruments.length} instruments`);
-    try {
-      await subscribeToInstruments(resolvedInstruments);
-      console.log(`[MODULE2][SUBSCRIPTION] Response success`);
-    } catch (error) {
-      console.error(`[MODULE2][SUBSCRIPTION] Error:`, error);
+
+  const currentlySubscribed = getActiveSubscribedInstruments();
+  const currentlySubscribedSet = new Set(currentlySubscribed.map((i: { segment: number; token: string }) => `${i.segment}|${i.token}`));
+  const desiredKeys = new Set(desiredMap.keys());
+
+  const toSubscribe: Array<{ segment: number; token: string }> = [];
+  for (const [key, inst] of desiredMap.entries()) {
+    if (!currentlySubscribedSet.has(key)) {
+      toSubscribe.push(inst);
     }
-  } else {
-    console.log("[MODULE2][SUBSCRIPTION] No valid instruments to subscribe to.");
   }
+
+  const toUnsubscribe: Array<{ segment: number; token: string }> = [];
+  for (const inst of currentlySubscribed) {
+    const key = `${inst.segment}|${inst.token}`;
+    if (!desiredKeys.has(key)) {
+      toUnsubscribe.push(inst);
+    }
+  }
+
+  console.log(`[AETRAM][SUBSCRIPTION] activeSessions=${Object.keys(activeSessions).length} desired=${desiredMap.size} added=${toSubscribe.length} removed=${toUnsubscribe.length}`);
+
+  if (toUnsubscribe.length > 0) {
+    await unsubscribeFromInstruments(toUnsubscribe);
+  }
+
+  if (toSubscribe.length > 0) {
+    await subscribeToInstruments(toSubscribe);
+  }
+};
+
+export const stopTrackerSession = async (sessionId: string) => {
+  console.log(`[TrackerEngine] Stopping session ${sessionId}`);
+  let found = false;
+
+  if (activeSessions[sessionId]) {
+    delete activeSessions[sessionId];
+    found = true;
+  }
+
+  for (const [sId, sess] of Object.entries(activeSessions)) {
+    if (sId === sessionId || sess.sessionId === sessionId) {
+      delete activeSessions[sId];
+      found = true;
+    }
+  }
+
+  if (found) {
+    console.log(`[TrackerEngine] Successfully removed session ${sessionId} from active memory.`);
+  }
+
+  // Trigger subscription synchronization non-blockingly
+  syncAetramSubscriptions().catch((err) => {
+    console.error("[TrackerEngine] Error in syncAetramSubscriptions after stop:", err);
+  });
 };
 
 /**
@@ -67,26 +109,11 @@ export const syncAetramSubscriptions = async () => {
 export const initTrackerEngine = async () => {
   logModule2InteractiveStatus();
 
-  // Load any existing active sessions from DB on startup (self-healing)
-  try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
-    const dbSessions = await Module2Session.find({
-      created_at: { $gte: today }
-    });
+  // Module 2 tracker sessions must NEVER automatically start on backend restart.
+  // Sessions only run after explicit user action ("Start Active Session Tracker").
+  console.log("[TrackerEngine] Initialized. 0 active tracker sessions running (waiting for explicit user Start).");
 
-    for (const session of dbSessions) {
-      await resumeSession(session._id.toString());
-    }
-    
-    await syncAetramSubscriptions();
-    console.log(`[TrackerEngine] Restored ${dbSessions.length} active sessions from database.`);
-  } catch (error) {
-    console.error("[TrackerEngine] Failed to restore sessions on startup:", error);
-  }
-
-  // Register reconnect callback so subscriptions are restored on WebSocket reconnect
+  // Register reconnect callback so subscriptions for active sessions (if any) are restored on WebSocket reconnect
   setOnAetramReconnect(() => syncAetramSubscriptions());
 
   // Schedule the minute boundary checker
@@ -130,7 +157,7 @@ const executeMinuteBoundary = async () => {
 
   for (const sessionId of sessionIds) {
     const session = activeSessions[sessionId];
-    
+
     // 1. Calculate Futures OI Delta
     const futSymbol = getFuturesSymbol(session.indexSymbol);
     const rawFutPrice = await readLive(`ltp:${futSymbol}`);
@@ -182,8 +209,8 @@ const executeMinuteBoundary = async () => {
     for (const strike of session.selectedStrikes) {
       // Fetch latest price & OI from Redis cache
       const rawPrice = await readLive(`ltp:${strike}`);
-      let ltp = rawPrice ? Math.floor(parseFloat(rawPrice)) : 0;
-      
+      let ltp = rawPrice ? parseFloat(rawPrice) : 0;
+
       const rawOi = await readLive(`oi:${strike}`);
       let oi = rawOi ? Math.floor(parseFloat(rawOi)) : 0;
 
@@ -268,7 +295,7 @@ const executeMinuteBoundary = async () => {
         strikeState.dayHigh = strikeState.dayHigh ? Math.max(strikeState.dayHigh, ltp) : ltp;
         strikeState.dayLow = (strikeState.dayLow && strikeState.dayLow > 0) ? Math.min(strikeState.dayLow, ltp) : ltp;
       }
-      
+
       const denominator = strikeState.dayOpen || ltp;
       strikeState.pctChange = denominator > 0 ? Number((((ltp - denominator) / denominator) * 100).toFixed(2)) : 0;
 
@@ -324,7 +351,7 @@ const executeMinuteBoundary = async () => {
       } else if (previousBadge === "L_TO_H" && newBadge === "FLAT" && recentLtpList.length >= 2 && recentLtpList[recentLtpList.length - 1] < recentLtpList[recentLtpList.length - 2]) {
         newBadge = "REVERSAL";
       }
-      
+
       strikeState.trendBadge = newBadge;
 
       // 4. Evaluate Call-Down Advisory Filter (CE options only)
@@ -362,7 +389,14 @@ const executeMinuteBoundary = async () => {
         oiSell
       };
 
-      strikeState.grid.push(cell);
+      console.log(`[AGGREGATION][MINUTE] symbol=${strike} minute=${timeString} open=${strikeState.dayOpen} high=${strikeState.dayHigh} low=${strikeState.dayLow} close=${ltp}`);
+
+      const existingCellIdx = strikeState.grid.findIndex((c) => c.minute === minutesSinceStart || c.timestamp === timeString);
+      if (existingCellIdx >= 0) {
+        strikeState.grid[existingCellIdx] = cell;
+      } else {
+        strikeState.grid.push(cell);
+      }
 
       // Save to Database
       try {
@@ -385,6 +419,7 @@ const executeMinuteBoundary = async () => {
       }
 
       // Broadcast to connected clients
+      console.log(`[SOCKET][BROADCAST] session=${sessionId} symbol=${strike} ltp=${ltp}`);
       broadcastTrackerUpdate(sessionId, {
         strike,
         cell,
@@ -419,24 +454,52 @@ export const startTrackerSession = async (
   selectedStrikes: string[]
 ): Promise<Module2SessionData> => {
   console.log("[MODULE2][TRACKER] startTrackerSession execution started");
+
+  // Deactivate any previous active sessions for this user to prevent stale strike retention
+  for (const [sId, sess] of Object.entries(activeSessions)) {
+    if (sess.userId === userId) {
+      console.log(`[TrackerEngine] Deactivating previous active session ${sId} for user ${userId}`);
+      delete activeSessions[sId];
+    }
+  }
+
   // Capture Day Open prices and OI for each selected strike from Redis
   const dayOpenPrices: Record<string, number> = {};
   const strikes: Record<string, Module2StrikeState> = {};
+  const initialMinutes = getMinutesSinceStart();
+  const initialTimeString = new Date().toLocaleTimeString("en-US", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 
   for (const strike of selectedStrikes) {
     const rawPrice = await readLive(`ltp:${strike}`);
-    const ltp = rawPrice ? Math.floor(parseFloat(rawPrice)) : 0; // Capture baseline at first observation
+    const ltp = rawPrice ? parseFloat(rawPrice) : 0; // Capture baseline at first observation
 
     const rawOi = await readLive(`oi:${strike}`);
     const oi = rawOi ? Math.floor(parseFloat(rawOi)) : 0;
 
     dayOpenPrices[strike] = ltp;
+
+    const initialCell: Module2Cell = {
+      ltp,
+      minute: initialMinutes,
+      timestamp: initialTimeString,
+      isHigh: ltp > 0,
+      isLow: ltp > 0,
+      oi,
+      oiDelta: 0,
+      oiBuy: oi,
+      oiSell: 0
+    };
+
     strikes[strike] = {
       strike,
       dayOpen: ltp,
-      dayHigh: ltp || 100,
-      dayLow: ltp || 100,
-      grid: [],
+      dayHigh: ltp,
+      dayLow: ltp,
+      grid: [initialCell],
       trendBadge: "FLAT",
       isDowntrendActive: false,
       isDeepLoss: false,
@@ -528,21 +591,40 @@ export const updateTrackerStrikes = async (
   }
 
   // Identify new strikes to initialize baselines
+  const initialMinutes = getMinutesSinceStart();
+  const initialTimeString = new Date().toLocaleTimeString("en-US", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+
   for (const strike of newStrikes) {
     if (!session.selectedStrikes.includes(strike)) {
       const rawPrice = await readLive(`ltp:${strike}`);
-      const ltp = rawPrice ? Math.floor(parseFloat(rawPrice)) : 0; // Capture baseline at first observation
+      const ltp = rawPrice ? parseFloat(rawPrice) : 0; // Capture baseline at first observation
 
       const rawOi = await readLive(`oi:${strike}`);
       const oi = rawOi ? Math.floor(parseFloat(rawOi)) : 0;
+
+      const initialCell: Module2Cell = {
+        ltp,
+        minute: initialMinutes,
+        timestamp: initialTimeString,
+        isHigh: ltp > 0,
+        isLow: ltp > 0,
+        oi,
+        oiDelta: 0,
+        oiBuy: oi,
+        oiSell: 0
+      };
 
       session.dayOpenPrices[strike] = ltp;
       session.strikes[strike] = {
         strike,
         dayOpen: ltp,
-        dayHigh: ltp || 100,
-        dayLow: ltp || 100,
-        grid: [],
+        dayHigh: ltp,
+        dayLow: ltp,
+        grid: [initialCell],
         trendBadge: "FLAT",
         isDowntrendActive: false,
         isDeepLoss: false,
@@ -599,7 +681,7 @@ export const resumeSession = async (sessionId: string): Promise<Module2SessionDa
   // Load per-minute tick history from database to reconstruct the grid
   for (const strike of doc.selected_strikes_json) {
     const ticks = await Module2StrikeTick.find({ session_id: sessionId, strike }).sort({ minute_timestamp: 1 });
-    
+
     const grid: Module2Cell[] = ticks.map((t: any, idx) => ({
       ltp: t.ltp_integer,
       minute: idx,
@@ -616,11 +698,11 @@ export const resumeSession = async (sessionId: string): Promise<Module2SessionDa
       oiSell: t.oi_sell || 0
     }));
 
-    const ltp = grid.length > 0 ? grid[grid.length - 1].ltp : (dayOpenPrices[strike] || 100);
-    const dayHigh = ticks.reduce((max, t) => Math.max(max, t.ltp_integer), dayOpenPrices[strike] || 100);
-    const dayLow = ticks.reduce((min, t) => Math.min(min, t.ltp_integer), dayOpenPrices[strike] || 100);
+    const ltp = grid.length > 0 ? grid[grid.length - 1].ltp : (dayOpenPrices[strike] || 0);
+    const dayHigh = ticks.reduce((max, t) => Math.max(max, t.ltp_integer), dayOpenPrices[strike] || 0);
+    const dayLow = ticks.reduce((min, t) => Math.min(min, t.ltp_integer), dayOpenPrices[strike] || 0);
     const isDowntrendActive = grid.length > 0 ? ticks[ticks.length - 1].is_downtrend_flagged : false;
-    const isDeepLoss = ltp < (dayOpenPrices[strike] || 100) * 0.85;
+    const isDeepLoss = ltp > 0 && dayOpenPrices[strike] > 0 ? ltp < dayOpenPrices[strike] * 0.85 : false;
 
     // Estimate trend badge from reconstructed grid
     let trendBadge: TrendBadgeState = "FLAT";
@@ -649,17 +731,18 @@ export const resumeSession = async (sessionId: string): Promise<Module2SessionDa
     const oiRunningSum = ticks.reduce((sum, t: any) => sum + (t.oi || 0), 0);
     const oiRowCount = ticks.length;
     const oiMean = oiRowCount > 0 ? Math.round(oiRunningSum / oiRowCount) : oiLatest;
+    const openPrice = dayOpenPrices[strike] || 0;
 
     strikes[strike] = {
       strike,
-      dayOpen: dayOpenPrices[strike] || 100,
+      dayOpen: openPrice,
       dayHigh,
       dayLow,
       grid,
       trendBadge,
       isDowntrendActive,
       isDeepLoss,
-      pctChange: Number((((ltp - (dayOpenPrices[strike] || 100)) / (dayOpenPrices[strike] || 100)) * 100).toFixed(2)),
+      pctChange: openPrice > 0 ? Number((((ltp - openPrice) / openPrice) * 100).toFixed(2)) : 0,
       oiLatest,
       oiBuyLatest,
       oiSellLatest,
@@ -697,6 +780,9 @@ export const resumeSession = async (sessionId: string): Promise<Module2SessionDa
   };
 
   activeSessions[sessionId] = sessionData;
+  syncAetramSubscriptions().catch((err) =>
+    console.error("[TrackerEngine] Aetram subscription sync failed on session resume:", err)
+  );
   return sessionData;
 };
 
@@ -720,6 +806,66 @@ const getMinutesSinceStart = (): number => {
 
   // If before 9:15 AM, return 0 (grid starts index 0)
   if (now.getTime() < start.getTime()) return 0;
-  
+
   return Math.floor((now.getTime() - start.getTime()) / 60000);
+};
+
+/**
+ * Real-time tick ingestion for Module 2 active tracker sessions.
+ * Initializes Day Open baseline and broadcasts immediate updates when the first valid
+ * tick arrives for a strike, ensuring UI updates instantly without waiting for minute boundaries.
+ */
+export const onLiveTickReceived = (symbol: string, ltp: number) => {
+  if (ltp <= 0) return;
+  for (const sessionId of Object.keys(activeSessions)) {
+    const session = activeSessions[sessionId];
+    if (session.selectedStrikes.includes(symbol)) {
+      const strikeState = session.strikes[symbol];
+      if (strikeState) {
+        if (strikeState.dayOpen === 0) {
+          strikeState.dayOpen = ltp;
+          strikeState.dayHigh = ltp;
+          strikeState.dayLow = ltp;
+          session.dayOpenPrices[symbol] = ltp;
+          console.log(`[TRACKER][BASELINE] Initialized Day Open baseline for ${symbol}: ${ltp}`);
+        } else {
+          strikeState.dayHigh = strikeState.dayHigh > 0 ? Math.max(strikeState.dayHigh, ltp) : ltp;
+          strikeState.dayLow = (strikeState.dayLow && strikeState.dayLow > 0) ? Math.min(strikeState.dayLow, ltp) : ltp;
+        }
+
+        const denominator = strikeState.dayOpen || ltp;
+        strikeState.pctChange = denominator > 0 ? Number((((ltp - denominator) / denominator) * 100).toFixed(2)) : 0;
+
+        // Update current active minute cell in grid with latest tick price and flags
+        if (strikeState.grid && strikeState.grid.length > 0) {
+          const latestCell = strikeState.grid[strikeState.grid.length - 1];
+          latestCell.ltp = ltp;
+          latestCell.isHigh = ltp === strikeState.dayHigh;
+          latestCell.isLow = ltp === strikeState.dayLow;
+        }
+
+        broadcastTrackerUpdate(sessionId, {
+          strike: symbol,
+          cell: null,
+          state: {
+            ltp: ltp,
+            dayOpen: strikeState.dayOpen,
+            dayHigh: strikeState.dayHigh,
+            dayLow: strikeState.dayLow,
+            trendBadge: strikeState.trendBadge,
+            isDowntrendActive: strikeState.isDowntrendActive,
+            isDeepLoss: strikeState.isDeepLoss,
+            pctChange: strikeState.pctChange,
+            oiLatest: strikeState.oiLatest,
+            oiBuyLatest: strikeState.oiBuyLatest,
+            oiSellLatest: strikeState.oiSellLatest,
+            oiHigh: strikeState.oiHigh,
+            oiLow: strikeState.oiLow,
+            oiMean: strikeState.oiMean
+          },
+          futuresOI: session.futuresOI
+        });
+      }
+    }
+  }
 };

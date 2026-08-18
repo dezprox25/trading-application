@@ -8,6 +8,17 @@ const module1OiService_1 = require("./module1OiService");
 const zebuMarketDataClient_1 = require("./zebuMarketDataClient");
 const instrumentTokenService_1 = require("./instrumentTokenService");
 let ioServer = null;
+// ── Selected option strikes tracking across active client sockets ─────────────
+const socketOptionSelections = new Map();
+const syncSelectedOptionSymbols = () => {
+    const allSelected = new Set();
+    for (const syms of socketOptionSelections.values()) {
+        for (const sym of syms) {
+            allSelected.add(sym);
+        }
+    }
+    (0, dataFeed_1.setSelectedOptionSymbols)(Array.from(allSelected));
+};
 // ── Market readiness tracking ─────────────────────────────────────────────────
 // Tracks whether the first valid NIFTY-FUT tick has been received this session.
 // Used to emit `market_ready` to clients so they can auto-generate without polling.
@@ -70,10 +81,9 @@ const initSocketServer = (io) => {
             console.log(`[Socket] Client ${socket.id} unsubscribed from market ticks: ${symbol}`);
         });
         // 1b. On-demand option subscribe: resolves the user's exact selected strikes to NFO
-        // tokens and subscribes them on the live Zebu connection, regardless of whether they
-        // fall inside the ATM band picked at connect time. This is the primary fix for
-        // "Call/Put OHLC empty" — see REPORT_MODULE1_DATAPATH.md §11(a).
-        socket.on("subscribe:options", (data) => {
+        // tokens, subscribes them on the live Zebu connection, and registers them in dataFeed's
+        // activeSelectedOptionSymbols set so ONLY user-selected strikes are buffered/aggregated/persisted.
+        socket.on("subscribe:options", async (data) => {
             const { instrument, expiry, callStrike, putStrike, type } = data || {};
             if (!instrument || !expiry) {
                 console.warn(`[Socket] subscribe:options from ${socket.id} missing instrument/expiry — ignored: ${JSON.stringify(data)}`);
@@ -84,19 +94,25 @@ const initSocketServer = (io) => {
                 wants.push({ strike: callStrike, optionType: "CE" });
             if (type !== "Call" && putStrike)
                 wants.push({ strike: putStrike, optionType: "PE" });
+            const resolvedTokens = [];
+            const selectedSymbolsForSocket = new Set();
             for (const w of wants) {
                 const letter = w.optionType === "CE" ? "C" : "P";
                 const wantedSymbol = `${instrument.toUpperCase()}${expiry}${letter}${w.strike}`;
-                const resolved = (0, instrumentTokenService_1.resolveOptionInstrument)(instrument, expiry, w.strike, w.optionType);
+                const resolved = await (0, instrumentTokenService_1.resolveOptionInstrument)(instrument, expiry, w.strike, w.optionType);
                 if (resolved) {
                     console.log(`[Feed:SUB] On-demand resolve OK — ${resolved.symbol} → ${resolved.exchange}|${resolved.token} (requested by ${socket.id})`);
-                    (0, dataFeed_1.subscribeOptionTokens)([resolved]);
+                    resolvedTokens.push(resolved);
+                    selectedSymbolsForSocket.add(resolved.symbol);
                 }
                 else {
-                    // Distinguishes "we looked it up and it doesn't exist" (bad strike/expiry, or
-                    // NFO master not loaded yet) from the generic [Feed:SKIP] unmapped-token case.
-                    console.warn(`[Feed:SUB] On-demand resolve FAILED — ${wantedSymbol} not found in NFO master (wrong strike/expiry, contract expired, or master not loaded yet).`);
+                    console.warn(`[Feed:SUB] On-demand resolve FAILED — ${wantedSymbol} not found in NFO master.`);
                 }
+            }
+            socketOptionSelections.set(socket.id, selectedSymbolsForSocket);
+            syncSelectedOptionSymbols();
+            if (resolvedTokens.length > 0) {
+                (0, dataFeed_1.subscribeOptionTokens)(resolvedTokens);
             }
         });
         // 2. Join room to receive real-time indicators (Call/Put signals)
@@ -128,6 +144,8 @@ const initSocketServer = (io) => {
         });
         socket.on("disconnect", () => {
             console.log(`[Socket] Client disconnected: ${socket.id}`);
+            socketOptionSelections.delete(socket.id);
+            syncSelectedOptionSymbols();
         });
     });
     let _socketEmitCount = 0;

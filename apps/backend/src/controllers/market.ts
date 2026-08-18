@@ -2,6 +2,7 @@ import { Response } from "express";
 import { AuthenticatedRequest } from "../middleware/auth";
 import { Watchlist } from "../models/Watchlist";
 import { FuturesOHLC } from "../models/FuturesOHLC";
+import { Module1CandleArchive } from "../models/Module1CandleArchive";
 import redis from "../config/redis";
 import { readLive, bufferSet } from "../services/redisWriteBuffer";
 import { WatchlistSchema, Module1ConfigSchema } from "@stock/shared";
@@ -14,6 +15,7 @@ import {
   getAvailableExpiries, getAvailableStrikes, getAvailableExchanges,
   getAvailableInstrumentTypes, getAvailableSymbols
 } from "../services/instrumentTokenService";
+import { getSessionCandlesForDate, getIstTradingDateStr } from "../services/module1ArchiveService";
 
 // Returns the start of the current NSE trading session in UTC.
 // NSE opens at 09:15 IST = 03:45 UTC. If it's currently before 03:45 UTC,
@@ -201,6 +203,31 @@ export const getOHLCBars = async (req: AuthenticatedRequest, res: Response) => {
     }));
   } catch (error) {
     console.error("[OHLC] MongoDB error, trying in-memory finalized cache:", error);
+  }
+
+  // Step 1.5: If FuturesOHLC returned no bars for today's session, try Module1CandleArchive
+  if (bars.length === 0) {
+    try {
+      const todayIst = getIstTradingDateStr();
+      const dbArchive = await Module1CandleArchive.find({ tradingDate: todayIst, symbol, timeframe: tf })
+        .sort({ bar_time: 1 })
+        .limit(fetchLimit);
+
+      if (dbArchive.length > 0) {
+        bars = dbArchive.map((b) => ({
+          symbol: b.symbol,
+          timeframe: b.timeframe,
+          open: b.bar_open,
+          high: b.bar_high,
+          low: b.bar_low,
+          close: b.bar_close,
+          openTime: new Date(b.bar_time).getTime(),
+          volume: b.volume ?? 0,
+        }));
+      }
+    } catch (archiveErr) {
+      console.warn("[OHLC] Module1CandleArchive lookup warning:", archiveErr);
+    }
   }
 
   // Step 2: Fall back to in-memory finalized candle cache if MongoDB returned nothing
@@ -560,7 +587,7 @@ export const updateCustomTimeframe = async (req: AuthenticatedRequest, res: Resp
 
 /**
  * Helper to check if the current time falls within Indian Standard Time (IST) market hours:
- * Monday to Friday, 9:00 AM to 3:45 PM IST.
+ * Monday to Friday, 9:15 AM to 3:30 PM IST.
  */
 export const isMarketOpenTime = (now = new Date()): boolean => {
   const formatter = new Intl.DateTimeFormat("en-US", {
@@ -586,16 +613,16 @@ export const isMarketOpenTime = (now = new Date()): boolean => {
   }
   
   const minutesSinceMidnight = hour * 60 + minute;
-  const marketOpenMinutes = 9 * 60; // 9:00 AM
-  const marketCloseMinutes = 15 * 60 + 45; // 3:45 PM
+  const marketOpenMinutes = 9 * 60 + 15; // 9:15 AM
+  const marketCloseMinutes = 15 * 60 + 30; // 3:30 PM
   
-  return minutesSinceMidnight >= marketOpenMinutes && minutesSinceMidnight <= marketCloseMinutes;
+  return minutesSinceMidnight >= marketOpenMinutes && minutesSinceMidnight < marketCloseMinutes;
 };
 
 // Get current live market connection status
 export const getMarketStatus = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    // Market open/closed is a time-based check (IST 9:00 AM – 3:45 PM, Mon–Fri).
+    // Market open/closed is a time-based check (IST 9:15 AM – 3:30 PM, Mon–Fri).
     // Broker connection is reported separately via /api/module/status.
     const isOpen = isMarketOpenTime();
     return res.status(200).json({
@@ -623,4 +650,5 @@ export const getModuleStatus = async (req: AuthenticatedRequest, res: Response) 
     return res.status(500).json({ error: "Internal Server Error" });
   }
 };
+
 

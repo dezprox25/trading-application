@@ -3,6 +3,7 @@ import { AuthenticatedRequest } from "../middleware/auth";
 import { Module2Session } from "../models/Module2Session";
 import {
   startTrackerSession,
+  stopTrackerSession,
   updateTrackerStrikes,
   getSessionData,
   activeSessions
@@ -61,6 +62,53 @@ export const startSession = async (req: AuthenticatedRequest, res: Response) => 
   }
 };
 
+// Stop Module 2 Session
+export const stopSession = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    console.log(`[MODULE2][TRACKER] Stop button clicked for user=${userId}`);
+
+    // Collect all active session IDs for this user
+    const userActiveSessionIds = Object.keys(activeSessions).filter(
+      (sId) => activeSessions[sId].userId === userId
+    );
+
+    const bodySessionId = req.body?.sessionId;
+    if (bodySessionId && !userActiveSessionIds.includes(bodySessionId)) {
+      userActiveSessionIds.push(bodySessionId);
+    }
+
+    console.log(`[MODULE2][TRACKER] Stopping ${userActiveSessionIds.length} active session(s) for user=${userId}`);
+
+    for (const sId of userActiveSessionIds) {
+      await stopTrackerSession(sId);
+    }
+
+    // Purge memory cache for user
+    for (const [sId, sess] of Object.entries(activeSessions)) {
+      if (sess.userId === userId) {
+        delete activeSessions[sId];
+      }
+    }
+
+    // Delete database session records for this user asynchronously so nothing remains for restoration
+    Module2Session.deleteMany({ user_id: userId }).catch((err) => {
+      console.warn("[MODULE2][TRACKER] Non-blocking DB session delete notice:", err?.message || err);
+    });
+
+    console.log("[MODULE2][TRACKER] Session stopped successfully");
+    return res.status(200).json({ status: "success", message: "Session stopped successfully" });
+  } catch (error) {
+    console.error("[MODULE2][TRACKER] Stop Session Error:", error);
+    // Idempotent fallback — always return 200 OK so frontend state is cleared cleanly
+    return res.status(200).json({ status: "success", message: "Session stopped successfully" });
+  }
+};
+
 // Get current active session for user
 export const getCurrentSession = async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -68,35 +116,17 @@ export const getCurrentSession = async (req: AuthenticatedRequest, res: Response
     if (!userId) {
       return res.status(401).json({ error: "Unauthorized" });
     }
-    
-    // Find the latest session created today for this user
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
 
-    let doc = null;
-    try {
-      doc = await Module2Session.findOne({
-        user_id: userId,
-        created_at: { $gte: today }
-      }).sort({ created_at: -1 });
-    } catch (err) {
-      console.warn("[Tracker] DB offline. Fetching active session from memory cache.");
+    // Only return a session if it is actively running in memory
+    const userActiveSession = Object.values(activeSessions).find(
+      (s) => s.userId === userId
+    );
+
+    if (userActiveSession) {
+      return res.status(200).json(userActiveSession);
     }
 
-    if (!doc) {
-      // Fallback: check in-memory activeSessions
-      const userSessions = Object.values(activeSessions).filter(
-        (s) => s.userId === userId && new Date(s.createdAt).getTime() >= today.getTime()
-      );
-      if (userSessions.length > 0) {
-        // Return latest
-        return res.status(200).json(userSessions[userSessions.length - 1]);
-      }
-      return res.status(200).json(null);
-    }
-
-    const session = await getSessionData(doc._id.toString());
-    return res.status(200).json(session);
+    return res.status(200).json(null);
   } catch (error) {
     console.error("Get Current Session Error:", error);
     return res.status(500).json({ error: "Internal Server Error" });
@@ -164,8 +194,6 @@ export const updateFilters = async (req: AuthenticatedRequest, res: Response) =>
       return res.status(400).json({ error: "Validation failed", details: parseResult.error.errors });
     }
 
-    // Filters are primarily handled on client rendering side,
-    // we return 200 OK acknowledging preferences.
     return res.status(200).json({
       message: "Filters updated successfully",
       filters: parseResult.data
@@ -238,13 +266,11 @@ const buildCSV = (session: Module2SessionData): string => {
     maxMinutes = Math.max(maxMinutes, state.grid.length);
   }
 
-  // Generate headers
   const headers = [
     "Strike", "Day Open", "Day High", "Day Low", "Trend Badge", "Pct Change",
     "OI Buy (Latest)", "OI Sell (Latest)", "OI High", "OI Low"
   ];
   
-  // Reconstruct timestamps for header minutes using the first available strike grid
   const firstStrikeKey = Object.keys(session.strikes)[0];
   const firstStrike = firstStrikeKey ? session.strikes[firstStrikeKey] : null;
 
@@ -288,4 +314,3 @@ const buildCSV = (session: Module2SessionData): string => {
 
   return csvRows.join("\n");
 };
-

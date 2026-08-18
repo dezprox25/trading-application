@@ -1,6 +1,6 @@
 import { Server, Socket } from "socket.io";
 import { verifyAccessToken } from "../utils/token";
-import { setOnTickReceived, subscribeOptionTokens } from "./dataFeed";
+import { setOnTickReceived, subscribeOptionTokens, setSelectedOptionSymbols } from "./dataFeed";
 import { setOnPivotsUpdated, evaluateIndicators } from "./pivotService";
 import { Tick, PivotLevels } from "@stock/shared";
 import { getLatestModule1OiMetrics } from "./module1OiService";
@@ -8,6 +8,19 @@ import { isZebuLiveConnected } from "./zebuMarketDataClient";
 import { resolveOptionInstrument } from "./instrumentTokenService";
 
 let ioServer: Server | null = null;
+
+// ── Selected option strikes tracking across active client sockets ─────────────
+const socketOptionSelections = new Map<string, Set<string>>();
+
+const syncSelectedOptionSymbols = () => {
+  const allSelected = new Set<string>();
+  for (const syms of socketOptionSelections.values()) {
+    for (const sym of syms) {
+      allSelected.add(sym);
+    }
+  }
+  setSelectedOptionSymbols(Array.from(allSelected));
+};
 
 // ── Market readiness tracking ─────────────────────────────────────────────────
 // Tracks whether the first valid NIFTY-FUT tick has been received this session.
@@ -81,12 +94,11 @@ export const initSocketServer = (io: Server) => {
     });
 
     // 1b. On-demand option subscribe: resolves the user's exact selected strikes to NFO
-    // tokens and subscribes them on the live Zebu connection, regardless of whether they
-    // fall inside the ATM band picked at connect time. This is the primary fix for
-    // "Call/Put OHLC empty" — see REPORT_MODULE1_DATAPATH.md §11(a).
+    // tokens, subscribes them on the live Zebu connection, and registers them in dataFeed's
+    // activeSelectedOptionSymbols set so ONLY user-selected strikes are buffered/aggregated/persisted.
     socket.on(
       "subscribe:options",
-      (data: { instrument: string; expiry: string; callStrike?: number | null; putStrike?: number | null; type: string }) => {
+      async (data: { instrument: string; expiry: string; callStrike?: number | null; putStrike?: number | null; type: string }) => {
         const { instrument, expiry, callStrike, putStrike, type } = data || ({} as typeof data);
         if (!instrument || !expiry) {
           console.warn(`[Socket] subscribe:options from ${socket.id} missing instrument/expiry — ignored: ${JSON.stringify(data)}`);
@@ -97,18 +109,27 @@ export const initSocketServer = (io: Server) => {
         if (type !== "Put" && callStrike) wants.push({ strike: callStrike, optionType: "CE" });
         if (type !== "Call" && putStrike) wants.push({ strike: putStrike, optionType: "PE" });
 
+        const resolvedTokens: { exchange: string; token: string; symbol: string }[] = [];
+        const selectedSymbolsForSocket = new Set<string>();
+
         for (const w of wants) {
           const letter = w.optionType === "CE" ? "C" : "P";
           const wantedSymbol = `${instrument.toUpperCase()}${expiry}${letter}${w.strike}`;
-          const resolved = resolveOptionInstrument(instrument, expiry, w.strike, w.optionType);
+          const resolved = await resolveOptionInstrument(instrument, expiry, w.strike, w.optionType);
           if (resolved) {
             console.log(`[Feed:SUB] On-demand resolve OK — ${resolved.symbol} → ${resolved.exchange}|${resolved.token} (requested by ${socket.id})`);
-            subscribeOptionTokens([resolved]);
+            resolvedTokens.push(resolved);
+            selectedSymbolsForSocket.add(resolved.symbol);
           } else {
-            // Distinguishes "we looked it up and it doesn't exist" (bad strike/expiry, or
-            // NFO master not loaded yet) from the generic [Feed:SKIP] unmapped-token case.
-            console.warn(`[Feed:SUB] On-demand resolve FAILED — ${wantedSymbol} not found in NFO master (wrong strike/expiry, contract expired, or master not loaded yet).`);
+            console.warn(`[Feed:SUB] On-demand resolve FAILED — ${wantedSymbol} not found in NFO master.`);
           }
+        }
+
+        socketOptionSelections.set(socket.id, selectedSymbolsForSocket);
+        syncSelectedOptionSymbols();
+
+        if (resolvedTokens.length > 0) {
+          subscribeOptionTokens(resolvedTokens);
         }
       }
     );
@@ -153,6 +174,8 @@ export const initSocketServer = (io: Server) => {
 
     socket.on("disconnect", () => {
       console.log(`[Socket] Client disconnected: ${socket.id}`);
+      socketOptionSelections.delete(socket.id);
+      syncSelectedOptionSymbols();
     });
   });
 

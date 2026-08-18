@@ -1,6 +1,6 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { getModule2Status, getModule2Expiries } from "../controllers/module2";
+import { getModule2Status, getModule2Expiries, getModule2Indexes, getModule2OptionChain } from "../controllers/module2";
 import { module2AuthLogin, module2AuthLogout, module2AuthStatus } from "../controllers/module2Auth";
 import { module2SearchInstruments, module2GetExpiry, module2ResolveInstrument } from "../controllers/module2Instruments";
 import {
@@ -54,7 +54,9 @@ const authRateLimiter = rateLimit({
 });
 
 router.get("/status", getModule2Status);
+router.get("/indexes", getModule2Indexes);
 router.get("/expiries", getModule2Expiries);
+router.get("/option-chain", getModule2OptionChain);
 
 // Market Data authentication & session management
 router.post("/auth/login",  authRateLimiter, module2AuthLogin);

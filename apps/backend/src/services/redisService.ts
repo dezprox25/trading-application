@@ -35,7 +35,13 @@ let state: RedisConnectionState = "DISCONNECTED";
 let connectedAt: Date | null = null;
 let lastError: string | null = null;
 
-const getUpstashUrl = () => (process.env.UPSTASH_REDIS_REST_URL || "").trim();
+const getUpstashUrl = () => {
+  let url = (process.env.UPSTASH_REDIS_REST_URL || "").trim();
+  if (url.startsWith("hhttps://")) {
+    url = url.replace(/^h+https:\/\//, "https://");
+  }
+  return url;
+};
 const getUpstashToken = () => (process.env.UPSTASH_REDIS_REST_TOKEN || "").trim();
 
 export const isRedisConfigured = (): boolean => !!getUpstashUrl() && !!getUpstashToken();

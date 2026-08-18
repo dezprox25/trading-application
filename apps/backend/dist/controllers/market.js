@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.getModuleStatus = exports.getMarketStatus = exports.isMarketOpenTime = exports.updateCustomTimeframe = exports.getModule1Strikes = exports.getModule1Expiries = exports.getModule1Symbols = exports.getModule1Instruments = exports.getModule1Exchanges = exports.getOptionChain = exports.getModule1LatestOi = exports.getIndicatorsEndpoint = exports.getPivotLevelsEndpoint = exports.getHistoricalOHLCBars = exports.getWarmupOHLCBars = exports.getOHLCBars = exports.getFuturesData = exports.getSpotPrice = exports.updateWatchlist = exports.getWatchlist = void 0;
 const Watchlist_1 = require("../models/Watchlist");
 const FuturesOHLC_1 = require("../models/FuturesOHLC");
+const Module1CandleArchive_1 = require("../models/Module1CandleArchive");
 const redis_1 = __importDefault(require("../config/redis"));
 const redisWriteBuffer_1 = require("../services/redisWriteBuffer");
 const shared_1 = require("@stock/shared");
@@ -15,6 +16,7 @@ const module1OiService_1 = require("../services/module1OiService");
 const zebuMarketDataClient_1 = require("../services/zebuMarketDataClient");
 const aetramMarketDataService_1 = require("../services/aetramMarketDataService");
 const instrumentTokenService_1 = require("../services/instrumentTokenService");
+const module1ArchiveService_1 = require("../services/module1ArchiveService");
 // Returns the start of the current NSE trading session in UTC.
 // NSE opens at 09:15 IST = 03:45 UTC. If it's currently before 03:45 UTC,
 // the active session is from the previous calendar day.
@@ -180,6 +182,30 @@ const getOHLCBars = async (req, res) => {
     }
     catch (error) {
         console.error("[OHLC] MongoDB error, trying in-memory finalized cache:", error);
+    }
+    // Step 1.5: If FuturesOHLC returned no bars for today's session, try Module1CandleArchive
+    if (bars.length === 0) {
+        try {
+            const todayIst = (0, module1ArchiveService_1.getIstTradingDateStr)();
+            const dbArchive = await Module1CandleArchive_1.Module1CandleArchive.find({ tradingDate: todayIst, symbol, timeframe: tf })
+                .sort({ bar_time: 1 })
+                .limit(fetchLimit);
+            if (dbArchive.length > 0) {
+                bars = dbArchive.map((b) => ({
+                    symbol: b.symbol,
+                    timeframe: b.timeframe,
+                    open: b.bar_open,
+                    high: b.bar_high,
+                    low: b.bar_low,
+                    close: b.bar_close,
+                    openTime: new Date(b.bar_time).getTime(),
+                    volume: b.volume ?? 0,
+                }));
+            }
+        }
+        catch (archiveErr) {
+            console.warn("[OHLC] Module1CandleArchive lookup warning:", archiveErr);
+        }
     }
     // Step 2: Fall back to in-memory finalized candle cache if MongoDB returned nothing
     if (bars.length === 0) {
@@ -524,7 +550,7 @@ const updateCustomTimeframe = async (req, res) => {
 exports.updateCustomTimeframe = updateCustomTimeframe;
 /**
  * Helper to check if the current time falls within Indian Standard Time (IST) market hours:
- * Monday to Friday, 9:00 AM to 3:45 PM IST.
+ * Monday to Friday, 9:15 AM to 3:30 PM IST.
  */
 const isMarketOpenTime = (now = new Date()) => {
     const formatter = new Intl.DateTimeFormat("en-US", {
@@ -546,15 +572,15 @@ const isMarketOpenTime = (now = new Date()) => {
         return false;
     }
     const minutesSinceMidnight = hour * 60 + minute;
-    const marketOpenMinutes = 9 * 60; // 9:00 AM
-    const marketCloseMinutes = 15 * 60 + 45; // 3:45 PM
-    return minutesSinceMidnight >= marketOpenMinutes && minutesSinceMidnight <= marketCloseMinutes;
+    const marketOpenMinutes = 9 * 60 + 15; // 9:15 AM
+    const marketCloseMinutes = 15 * 60 + 30; // 3:30 PM
+    return minutesSinceMidnight >= marketOpenMinutes && minutesSinceMidnight < marketCloseMinutes;
 };
 exports.isMarketOpenTime = isMarketOpenTime;
 // Get current live market connection status
 const getMarketStatus = async (req, res) => {
     try {
-        // Market open/closed is a time-based check (IST 9:00 AM – 3:45 PM, Mon–Fri).
+        // Market open/closed is a time-based check (IST 9:15 AM – 3:30 PM, Mon–Fri).
         // Broker connection is reported separately via /api/module/status.
         const isOpen = (0, exports.isMarketOpenTime)();
         return res.status(200).json({

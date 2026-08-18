@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useStore } from "../store/useStore";
 import { api } from "../utils/api";
+import { exportModule2ToExcel } from "../utils/excelModule2Export";
+import { colorClassStyle } from "../modules/dashboard/cellColorRules";
 
 const formatExpiryLabel = (dateStr: string): string => {
   try {
@@ -26,7 +28,8 @@ const ensureFullStrikesData = (session: any) => {
   const nextSession = JSON.parse(JSON.stringify(session));
   if (!nextSession.strikes) nextSession.strikes = {};
   let currentSelected = [...nextSession.selectedStrikes];
-  if (currentSelected.length > 10) currentSelected = currentSelected.slice(0, 10);
+  const maxAllowed = nextSession.sessionType === "mixed" ? 20 : 10;
+  if (currentSelected.length > maxAllowed) currentSelected = currentSelected.slice(0, maxAllowed);
   nextSession.selectedStrikes = currentSelected;
   currentSelected.forEach((strike: string) => {
     if (!nextSession.strikes[strike]) {
@@ -99,10 +102,11 @@ function SegmentedControl<K extends string>({
   );
 }
 
-function SelectField({ label, value, onChange, options }: {
+function SelectField({ label, value, onChange, options, disabled = false }: {
   label: string; value: string;
   onChange: (v: string) => void;
   options: { value: string; label: string }[];
+  disabled?: boolean;
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -112,13 +116,15 @@ function SelectField({ label, value, onChange, options }: {
       <div style={{ position: "relative" }}>
         <select
           value={value}
+          disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
           style={{
             width: "100%", padding: "9px 32px 9px 12px",
             fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 500,
             color: "var(--trading-text-active)", background: "var(--trading-bg)",
             border: "1.5px solid var(--trading-border)", borderRadius: 8,
-            outline: "none", cursor: "pointer", appearance: "none", WebkitAppearance: "none",
+            outline: "none", cursor: disabled ? "not-allowed" : "pointer",
+            opacity: disabled ? 0.6 : 1, appearance: "none", WebkitAppearance: "none",
           }}
         >
           {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -129,83 +135,123 @@ function SelectField({ label, value, onChange, options }: {
   );
 }
 
-function FilterChip({ label, active, onClick, color = GREEN }: { label: string; active: boolean; onClick: () => void; color?: string }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        padding: "5px 14px", borderRadius: 8,
-        fontFamily: "'Inter', sans-serif", fontSize: 12, fontWeight: 600,
-        cursor: "pointer",
-        border: `1.5px solid ${active ? color : "var(--trading-border)"}`,
-        background: active ? `${color}12` : "transparent",
-        color: active ? color : "var(--trading-text-muted)",
-        transition: "all 0.15s",
-      }}
-    >
-      {label}
-    </button>
-  );
-}
-
 export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
   const activeSession = useStore((s) => s.activeSession);
   const setActiveSession = useStore((s) => s.setActiveSession);
   const module2BrokerStatus = useStore((s) => s.module2BrokerStatus);
   const [isConfigExpanded, setIsConfigExpanded] = useState(!isSplit);
 
-
   const [indexSymbol, setIndexSymbol] = useState("NIFTY50");
   const [expiryDate, setExpiryDate] = useState("");
   const [sessionType, setSessionType] = useState<"CE" | "PE" | "mixed">("mixed");
   const [selectedStrikes, setSelectedStrikes] = useState<string[]>([]);
-  const [sortOrder, setSortOrder] = useState<"high_value" | "low_value" | "default">("default");
-  const [priceAbove, setPriceAbove] = useState<number | "">("");
-  const [priceBelow, setPriceBelow] = useState<number | "">("");
-  const [highlightTop3, setHighlightTop3] = useState(false);
-  const [callDownCollapsedToggle, setCallDownCollapsedToggle] = useState(false);
-  const [filterType, setFilterType] = useState<"CE" | "PE" | "mixed">(isSplit ? "CE" : "mixed");
-  const [isAdvancedFiltersExpanded, setIsAdvancedFiltersExpanded] = useState(false);
 
-  const { data: expiriesData } = useQuery({
+  // 1. Index Symbol Query (API-driven)
+  const { data: indexesData, isLoading: isIndexesLoading, isError: isIndexesError } = useQuery({
+    queryKey: ["module2-indexes"],
+    queryFn: async () => {
+      console.log("[MODULE2][CONFIG] Loading indexes");
+      const res = await api.get("/api/module2/indexes");
+      console.log("[MODULE2][CONFIG] Indexes received:", res?.indexes?.length || 0);
+      return res;
+    },
+    staleTime: 60 * 60 * 1000,
+  });
+
+  const indexOptions: { value: string; label: string }[] = isIndexesLoading
+    ? [{ value: "", label: "Loading indexes…" }]
+    : isIndexesError
+    ? [{ value: "", label: "Error loading indexes" }]
+    : (indexesData?.indexes || []).map((idx: { symbol: string; label: string }) => ({
+        value: idx.symbol,
+        label: idx.label,
+      }));
+
+  // Auto-set default index if current indexSymbol is invalid
+  useEffect(() => {
+    const available = indexesData?.indexes || [];
+    if (available.length > 0) {
+      if (!available.some((idx: any) => idx.symbol === indexSymbol)) {
+        setIndexSymbol(available[0].symbol);
+      }
+    }
+  }, [indexesData, indexSymbol]);
+
+  // 2. Options Expiry Query (API-driven)
+  const { data: expiriesData, isLoading: isExpiriesLoading, isError: isExpiriesError } = useQuery({
     queryKey: ["module2-expiries", indexSymbol],
-    queryFn: () => api.get(`/api/module2/expiries?symbol=${indexSymbol}`),
+    queryFn: async () => {
+      console.log(`[MODULE2][CONFIG] Loading expiries for ${indexSymbol}`);
+      const res = await api.get(`/api/module2/expiries?symbol=${indexSymbol}`);
+      console.log("[MODULE2][CONFIG] Expiries received:", res?.expiries?.length || 0);
+      return res;
+    },
+    enabled: !!indexSymbol,
     staleTime: 60 * 60 * 1000,
     retry: 1,
   });
 
-  const expiryOptions: { value: string; label: string }[] = (expiriesData?.expiries || []).map(
-    (date: string) => ({ value: date, label: formatExpiryLabel(date) })
-  );
+  const expiryOptions: { value: string; label: string }[] = isExpiriesLoading
+    ? [{ value: "", label: "Loading expiries…" }]
+    : isExpiriesError
+    ? [{ value: "", label: "Error loading expiries" }]
+    : (expiriesData?.expiries || []).length === 0
+    ? [{ value: "", label: "No expiries available" }]
+    : (expiriesData?.expiries || []).map((date: string) => ({
+        value: date,
+        label: formatExpiryLabel(date),
+      }));
 
-  // Set default expiry to first available when list loads
-  useEffect(() => {
-    if (expiriesData?.expiries?.length > 0 && !expiryDate) {
-      setExpiryDate(expiriesData.expiries[0]);
-    }
-  }, [expiriesData, expiryDate]);
-
-  // Reset expiry selection when index changes
+  // When Index changes, reset expiry and selected strikes
   useEffect(() => {
     setExpiryDate("");
+    setSelectedStrikes([]);
   }, [indexSymbol]);
 
-  const { data: chainData } = useQuery({
-    queryKey: ["option-chain", indexSymbol],
-    queryFn: () => api.get(`/api/market/option-chain/${indexSymbol}`),
-    enabled: true,
-  });
-
-  const { data: initialSession } = useQuery({
-    queryKey: ["active-session-init"],
-    queryFn: () => api.get("/api/module2/session/current"),
-    enabled: !activeSession,
-  });
-
+  // Auto-select first API-provided expiry when expiries list updates
   useEffect(() => {
-    if (initialSession) setActiveSession(initialSession);
-  }, [initialSession, setActiveSession]);
+    const expiries: string[] = expiriesData?.expiries || [];
+    if (expiries.length > 0) {
+      if (!expiryDate || !expiries.includes(expiryDate)) {
+        setExpiryDate(expiries[0]);
+      }
+    } else {
+      setExpiryDate("");
+    }
+  }, [expiriesData]);
 
+  // When Expiry changes, clear previously selected strikes
+  useEffect(() => {
+    setSelectedStrikes([]);
+  }, [expiryDate]);
+
+  // 3. Option Chain / Strikes Query (API-driven)
+  const { data: chainData, isLoading: isStrikesLoading, isError: isStrikesError } = useQuery({
+    queryKey: ["module2-option-chain", indexSymbol, expiryDate],
+    queryFn: async () => {
+      console.log(`[MODULE2][CONFIG] Loading option contracts for ${indexSymbol} @ ${expiryDate}`);
+      const res = await api.get(`/api/module2/option-chain?symbol=${indexSymbol}&expiry=${expiryDate}`);
+      
+      const strikes = res?.strikes || [];
+      let ceCount = 0;
+      let peCount = 0;
+      strikes.forEach((s: any) => {
+        if (s.CE) ceCount++;
+        if (s.PE) peCount++;
+      });
+
+      console.log(`[MODULE2][CONFIG] Contracts received: ${strikes.length}`);
+      console.log(`[MODULE2][CONFIG] Available strikes: ${strikes.length}`);
+      console.log(`[MODULE2][CONFIG] CE contracts: ${ceCount}`);
+      console.log(`[MODULE2][CONFIG] PE contracts: ${peCount}`);
+
+      return res;
+    },
+    enabled: !!indexSymbol && !!expiryDate,
+    retry: 1,
+  });
+
+  // Session Start Mutation with strict contract validation
   const startSessionMutation = useMutation({
     mutationFn: async () => {
       console.log("[MODULE2][TRACKER] Start button clicked");
@@ -213,26 +259,63 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
       console.log("[MODULE2][TRACKER] expiry:", expiryDate);
       console.log("[MODULE2][TRACKER] session type:", sessionType);
       console.log("[MODULE2][TRACKER] selected strikes:", selectedStrikes);
-      console.log("[MODULE2][TRACKER] current Module 2 auth/session state:", useStore.getState().module2Status);
 
-      console.log("[MODULE2][TRACKER] Starting tracker request");
-      console.log("[MODULE2][TRACKER] Endpoint: /api/module2/session/start");
-      console.log("[MODULE2][TRACKER] Method: POST");
-      console.log("[MODULE2][TRACKER] Payload:", { sessionType, indexSymbol, expiryDate, selectedStrikes });
+      // Validate that every selected strike contract actually exists in the API response
+      const validContractSymbols = new Set<string>();
+      (chainData?.strikes || []).forEach((s: any) => {
+        if (s.CE) validContractSymbols.add(s.CE);
+        if (s.PE) validContractSymbols.add(s.PE);
+      });
 
+      const invalidStrikes = selectedStrikes.filter((st) => !validContractSymbols.has(st));
+      if (invalidStrikes.length > 0) {
+        const msg = `Validation Error: Contract(s) ${invalidStrikes.join(", ")} do not exist in the API instrument data.`;
+        console.error("[MODULE2][CONFIG]", msg);
+        alert(msg);
+        throw new Error(msg);
+      }
+
+      console.log("[MODULE2][TRACKER] Starting tracker request to /api/module2/session/start");
       const res = await api.post("/api/module2/session/start", { sessionType, indexSymbol, expiryDate, selectedStrikes });
-      
-      console.log("[MODULE2][TRACKER] Response status: success");
       console.log("[MODULE2][TRACKER] Response:", res);
-      
       return res;
     },
     onSuccess: (data) => {
       console.log("[MODULE2][TRACKER] Mutation success, active session updated");
       setActiveSession(data);
     },
-    onError: (error) => {
-      console.error("[MODULE2][TRACKER] Request failed:", error);
+    onError: (error: any) => {
+      console.error("[MODULE2][TRACKER] Request failed:", error?.message || error);
+    }
+  });
+
+  // Session Stop Mutation with guaranteed local state reset
+  const stopSessionMutation = useMutation({
+    mutationFn: async () => {
+      console.log("[MODULE2][TRACKER] Stop button clicked");
+      const currentSessionId = activeSession?.sessionId;
+      console.log(`[MODULE2][TRACKER] Stopping session=${currentSessionId || "unknown"}`);
+
+      // Optimistically clear local session state immediately so UI updates instantly
+      setActiveSession(null);
+      setSelectedStrikes([]);
+
+      try {
+        const res = await api.post("/api/module2/session/stop", { sessionId: currentSessionId });
+        return res;
+      } catch (err: any) {
+        console.warn("[MODULE2][TRACKER] Stop network notice (state cleared locally):", err?.message || err);
+        return { status: "success", message: "Session cleared locally" };
+      }
+    },
+    onSuccess: () => {
+      console.log("[MODULE2][TRACKER] Session stopped successfully");
+      setActiveSession(null);
+      setSelectedStrikes([]);
+    },
+    onError: () => {
+      setActiveSession(null);
+      setSelectedStrikes([]);
     }
   });
 
@@ -243,16 +326,6 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
   });
 
   const isClosed = marketStatus?.status === "CLOSED";
-
-  const handleExportCSV = async () => {
-    if (!activeSession) return;
-    try {
-      const blob = await fetch("/api/module2/export", { headers: { Authorization: `Bearer ${useStore.getState().accessToken}` } }).then(r => r.blob());
-      const url = window.URL.createObjectURL(blob); const a = document.createElement("a");
-      a.href = url; a.download = `session_${activeSession?.sessionId}.csv`; document.body.appendChild(a); a.click();
-      document.body.removeChild(a); window.URL.revokeObjectURL(url);
-    } catch (err) { console.error("CSV Export failed:", err); }
-  };
 
   const toggleStrikeSelection = (strike: string) => {
     setSelectedStrikes((prev) => {
@@ -274,31 +347,19 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
     return Array.from(tsSet).sort();
   })();
 
-  const topStrikes = Object.values(currentSession?.strikes || {})
-    .sort((a: any, b: any) => b.pctChange - a.pctChange)
-    .slice(0, 3).map((s: any) => s.strike);
+  // All selected strikes are displayed always
+  const allSelectedStrikes: string[] = currentSession?.selectedStrikes || [];
+  const ceStrikesList = allSelectedStrikes.filter((s) => s.endsWith("CE"));
+  const peStrikesList = allSelectedStrikes.filter((s) => s.endsWith("PE"));
 
-  const processedStrikes = [...(currentSession?.selectedStrikes || [])]
-    .filter((strike) => {
-      const s = currentSession?.strikes?.[strike]; if (!s) return true;
-      const latestLtp = s.grid.length > 0 ? s.grid[s.grid.length - 1].ltp : s.dayOpen;
-      if (priceAbove !== "" && latestLtp < Number(priceAbove)) return false;
-      if (priceBelow !== "" && latestLtp > Number(priceBelow)) return false;
-      if (callDownCollapsedToggle && !s.isDowntrendActive && !s.isDeepLoss) return false;
-      return true;
-    })
-    .sort((a, b) => {
-      const sA = currentSession?.strikes?.[a]; const sB = currentSession?.strikes?.[b];
-      if (!sA || !sB) return 0;
-      const ltpA = sA.grid.length > 0 ? sA.grid[sA.grid.length - 1].ltp : sA.dayOpen;
-      const ltpB = sB.grid.length > 0 ? sB.grid[sB.grid.length - 1].ltp : sB.dayOpen;
-      if (sortOrder === "high_value") return ltpB - ltpA;
-      if (sortOrder === "low_value") return ltpA - ltpB;
-      return 0;
-    });
-
-  const ceStrikesList = processedStrikes.filter((s) => s.endsWith("CE"));
-  const peStrikesList = processedStrikes.filter((s) => s.endsWith("PE"));
+  const handleExportExcel = async () => {
+    if (!currentSession) return;
+    try {
+      await exportModule2ToExcel(currentSession, sortedTimestamps);
+    } catch (err) {
+      console.error("Excel export failed:", err);
+    }
+  };
 
   // ── RENDER ──────────────────────────────────────────────────────────────────
   return (
@@ -318,8 +379,8 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
         }
 
         .m2-th {
-          font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 700;
-          letter-spacing: 0.08em; text-transform: uppercase;
+          font-family: 'Inter', sans-serif; font-size: 16px; font-weight: 700;
+          letter-spacing: 0.05em; text-transform: uppercase;
           padding: 12px 16px; white-space: nowrap;
           color: var(--trading-text-muted);
           background: var(--trading-bg);
@@ -327,27 +388,27 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
           position: sticky; top: 0; z-index: 2;
         }
         .m2-td {
-          font-family: 'Inter', sans-serif; font-size: 13px;
+          font-family: 'Inter', sans-serif; font-size: 24px;
           padding: 12px 16px; white-space: nowrap;
           border-bottom: 1px solid var(--trading-border);
           color: var(--trading-text-active);
         }
-        .m2-tr:hover td:not(.m2-sticky-cell) { background: rgba(4,120,87,0.03) !important; }
+        .m2-tr:hover td:not(.m2-sticky-cell) { opacity: 0.95; }
         .m2-tr:hover .m2-sticky-cell {
           background-image: linear-gradient(rgba(4,120,87,0.03), rgba(4,120,87,0.03)) !important;
         }
 
         .m2-strike-chip {
           display: flex; flex-direction: column; align-items: center;
-          padding: 8px 6px; border-radius: 8px; cursor: pointer;
+          padding: 8px 8px; border-radius: 8px; cursor: pointer;
           transition: all 0.15s; border: 1.5px solid var(--trading-border);
           background: var(--trading-bg);
         }
         .m2-strike-chip:hover { border-color: ${GREEN}; background: rgba(4,120,87,0.04); }
 
         .m2-ce-btn, .m2-pe-btn {
-          flex: 1; padding: 3px 0; border-radius: 5px;
-          font-family: 'Inter', sans-serif; font-size: 10px; font-weight: 700;
+          flex: 1; padding: 6px 0; border-radius: 6px;
+          font-family: 'Inter', sans-serif; font-size: 14px; font-weight: 700;
           cursor: pointer; transition: all 0.15s; border: 1.5px solid transparent;
         }
         .m2-ce-btn { color: ${GREEN}; background: rgba(4,120,87,0.08); border-color: rgba(4,120,87,0.2); }
@@ -356,16 +417,6 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
         .m2-pe-btn { color: ${RED}; background: rgba(229,57,53,0.08); border-color: rgba(229,57,53,0.2); }
         .m2-pe-btn:hover { background: rgba(229,57,53,0.14); }
         .m2-pe-btn.active { background: ${RED}; color: #fff; border-color: ${RED}; }
-
-        .m2-input {
-          font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 500;
-          background: var(--trading-bg); border: 1.5px solid var(--trading-border);
-          border-radius: 8px; padding: 6px 10px; outline: none;
-          color: var(--trading-text-active); width: 80px; transition: border-color 0.15s;
-        }
-        .m2-input:focus { border-color: ${GREEN}; box-shadow: 0 0 0 3px rgba(4,120,87,0.1); }
-        .m2-input::placeholder { color: #94a3b8; }
-        input[type=number].m2-input::-webkit-inner-spin-button { -webkit-appearance: none; }
 
         .m2-cta {
           width: 100%; padding: 13px; border-radius: 8px;
@@ -376,21 +427,15 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
         .m2-cta:hover:not(:disabled) { opacity: 0.9; }
         .m2-cta:disabled { opacity: 0.45; cursor: not-allowed; }
 
-        .m2-export {
-          font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 600;
-          padding: 7px 16px; border-radius: 8px; cursor: pointer;
-          border: 1.5px solid ${GREEN}; background: rgba(4,120,87,0.06);
+        .m2-excel-btn {
+          display: inline-flex; alignItems: center; gap: 6px;
+          font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 700;
+          padding: 8px 16px; border-radius: 8px; cursor: pointer;
+          border: 1.5px solid ${GREEN}; background: rgba(4,120,87,0.08);
           color: ${GREEN}; transition: all 0.15s;
         }
-        .m2-export:hover { background: ${GREEN}; color: #fff; }
-
-        .m2-reset {
-          font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 600;
-          padding: 6px 14px; border-radius: 8px; cursor: pointer;
-          border: 1.5px solid var(--trading-border);
-          background: transparent; color: var(--trading-text-muted); transition: all 0.15s;
-        }
-        .m2-reset:hover { border-color: var(--trading-text-active); color: var(--trading-text-active); }
+        .m2-excel-btn:hover:not(:disabled) { background: ${GREEN}; color: #fff; }
+        .m2-excel-btn:disabled { opacity: 0.45; cursor: not-allowed; }
       `}</style>
 
       <div style={{ minHeight: isSplit ? "auto" : "100vh", background: isSplit ? "transparent" : "var(--trading-bg)", fontFamily: "'Inter', sans-serif" }}>
@@ -418,13 +463,20 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
                 </span>
               </div>
 
-              <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 {activeSession && isLiveInteractive && (
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 8px", borderRadius: 5, background: "rgba(4,120,87,0.1)", fontSize: 11, fontWeight: 700, color: GREEN }}>
                     <span style={{ width: 5, height: 5, borderRadius: "50%", background: GREEN }} />
                     Live API
                   </span>
                 )}
+                <button
+                  className="m2-excel-btn"
+                  onClick={handleExportExcel}
+                  disabled={!currentSession || !allSelectedStrikes.length}
+                >
+                  Export Excel
+                </button>
               </div>
             </div>
           ) : (
@@ -451,256 +503,220 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
                 </span>
               </div>
 
-              <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 {activeSession && isLiveInteractive && (
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 8, background: "rgba(4,120,87,0.1)", border: "1.5px solid rgba(4,120,87,0.25)", fontSize: 12, fontWeight: 700, color: GREEN }}>
                     <span style={{ width: 7, height: 7, borderRadius: "50%", background: GREEN, display: "inline-block" }} className="animate-pulse" />
                     Live Interactive API
                   </span>
                 )}
+                <button
+                  className="m2-excel-btn"
+                  onClick={handleExportExcel}
+                  disabled={!currentSession || !allSelectedStrikes.length}
+                >
+                  Export Excel
+                </button>
               </div>
             </div>
           )}
 
-              <>
+          {/* Broker status banner */}
+          {module2BrokerStatus === "session-expired" && (
+            <div className="m2-section" style={{ background: "rgba(239,68,68,0.08)", border: "1.5px solid rgba(239,68,68,0.3)", borderRadius: 10, padding: "12px 18px", display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 16 }}>⚠</span>
+              <div>
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 700, color: "#dc2626" }}>Broker Session Expired</div>
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: "#dc2626", opacity: 0.8, marginTop: 2 }}>Please reconnect from the Module 2 login page.</div>
+              </div>
+            </div>
+          )}
 
-              {/* Broker status banner */}
-              {module2BrokerStatus === "session-expired" && (
-                <div className="m2-section" style={{ background: "rgba(239,68,68,0.08)", border: "1.5px solid rgba(239,68,68,0.3)", borderRadius: 10, padding: "12px 18px", display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: 16 }}>⚠</span>
-                  <div>
-                    <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 700, color: "#dc2626" }}>Broker Session Expired</div>
-                    <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: "#dc2626", opacity: 0.8, marginTop: 2 }}>Please reconnect from the Module 2 login page.</div>
-                  </div>
+          {(module2BrokerStatus === "broker-disconnected" || module2BrokerStatus === "reconnecting") && (
+            <div className="m2-section animate-pulse" style={{ background: "rgba(217,119,6,0.08)", border: "1.5px solid rgba(217,119,6,0.3)", borderRadius: 10, padding: "12px 18px", display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 16 }}>↻</span>
+              <div>
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 700, color: "#d97706" }}>Disconnected</div>
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: "#d97706", opacity: 0.8, marginTop: 2 }}>Attempting to reconnect to broker…</div>
+              </div>
+            </div>
+          )}
+
+          {/* Configuration */}
+          {isConfigExpanded ? (
+            <div
+              className="m2-section"
+              style={{
+                background: "var(--trading-surface)", border: "1.5px solid var(--trading-border)",
+                borderRadius: 14, padding: "20px 24px",
+                boxShadow: "0 1px 8px rgba(0,0,0,0.05)", animationDelay: "0.04s",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+                <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 700, color: "var(--trading-text-muted)", textTransform: "uppercase", letterSpacing: "0.15em" }}>
+                  Session Configuration
+                </span>
+                {isSplit && (
+                  <button
+                    onClick={() => setIsConfigExpanded(false)}
+                    style={{
+                      background: "rgba(4,120,87,0.08)", border: "none", color: GREEN,
+                      fontWeight: 700, fontSize: 11, cursor: "pointer", padding: "4px 10px", borderRadius: 5
+                    }}
+                  >
+                    Hide Config ▲
+                  </button>
+                )}
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16, marginBottom: 20 }}>
+                <SelectField
+                  label="Index Symbol"
+                  value={indexSymbol}
+                  onChange={setIndexSymbol}
+                  options={indexOptions}
+                  disabled={isIndexesLoading || !!activeSession}
+                />
+                <SelectField
+                  label="Options Expiry"
+                  value={expiryDate}
+                  onChange={setExpiryDate}
+                  options={expiryOptions}
+                  disabled={isExpiriesLoading || !indexSymbol || (expiriesData?.expiries || []).length === 0 || !!activeSession}
+                />
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <label style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 600, color: "var(--trading-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                    Session Type
+                  </label>
+                  <SegmentedControl
+                    options={[{ key: "CE" as const, label: "CE" }, { key: "PE" as const, label: "PE" }, { key: "mixed" as const, label: "Mixed" }]}
+                    value={sessionType} onChange={setSessionType}
+                  />
                 </div>
-              )}
+              </div>
 
-              {(module2BrokerStatus === "broker-disconnected" || module2BrokerStatus === "reconnecting") && (
-                <div className="m2-section animate-pulse" style={{ background: "rgba(217,119,6,0.08)", border: "1.5px solid rgba(217,119,6,0.3)", borderRadius: 10, padding: "12px 18px", display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: 16 }}>↻</span>
-                  <div>
-                    <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 700, color: "#d97706" }}>Disconnected</div>
-                    <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: "#d97706", opacity: 0.8, marginTop: 2 }}>Attempting to reconnect to broker…</div>
-                  </div>
+              {/* Dynamic Strike Selection */}
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                  <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 14, fontWeight: 700, color: "var(--trading-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                    Select Strikes
+                  </span>
+                  <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 600, color: "var(--trading-text-muted)" }}>
+                    {selectedStrikes.length}/{sessionType === "mixed" ? 20 : 10} selected
+                  </span>
                 </div>
-              )}
 
-              {/* Configuration */}
-              {isConfigExpanded ? (
-                <div
-                  className="m2-section"
+                {!expiryDate ? (
+                  <div style={{ padding: "16px", textAlign: "center", fontFamily: "'Inter', sans-serif", fontSize: 14, color: "var(--trading-text-muted)", background: "var(--trading-bg)", border: "1.5px dashed var(--trading-border)", borderRadius: 8 }}>
+                    Please select an available expiry date to load option contracts.
+                  </div>
+                ) : isStrikesLoading ? (
+                  <div style={{ padding: "16px", textAlign: "center", fontFamily: "'Inter', sans-serif", fontSize: 14, color: "var(--trading-text-muted)", background: "var(--trading-bg)", border: "1.5px dashed var(--trading-border)", borderRadius: 8 }}>
+                    Loading option contracts from API…
+                  </div>
+                ) : isStrikesError ? (
+                  <div style={{ padding: "16px", textAlign: "center", fontFamily: "'Inter', sans-serif", fontSize: 14, color: "#dc2626", background: "rgba(229,57,53,0.06)", border: "1.5px solid rgba(229,57,53,0.2)", borderRadius: 8, fontWeight: 600 }}>
+                    Unable to load market data. Please try again.
+                  </div>
+                ) : (chainData?.strikes || []).length === 0 ? (
+                  <div style={{ padding: "16px", textAlign: "center", fontFamily: "'Inter', sans-serif", fontSize: 14, color: "var(--trading-text-muted)", background: "var(--trading-bg)", border: "1.5px dashed var(--trading-border)", borderRadius: 8 }}>
+                    No option contracts available for this expiry.
+                  </div>
+                ) : (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 8, maxHeight: 200, overflowY: "auto", paddingRight: 4 }}>
+                    {(chainData?.strikes || []).map((s: any) => {
+                      const ceSymbol = s.CE;
+                      const peSymbol = s.PE;
+                      const ceSelected = ceSymbol && selectedStrikes.includes(ceSymbol);
+                      const peSelected = peSymbol && selectedStrikes.includes(peSymbol);
+
+                      return (
+                        <div key={s.strikePrice} className="m2-strike-chip">
+                          <span style={{ fontFamily: "'Inter', sans-serif", fontSize: "24px", fontWeight: 800, color: "var(--trading-text-active)", marginBottom: 6 }}>{s.strikePrice}</span>
+                          <div style={{ display: "flex", gap: 4, width: "100%" }}>
+                            {sessionType !== "PE" && ceSymbol && (
+                              <button onClick={() => toggleStrikeSelection(ceSymbol)} className={`m2-ce-btn${ceSelected ? " active" : ""}`}>CE</button>
+                            )}
+                            {sessionType !== "CE" && peSymbol && (
+                              <button onClick={() => toggleStrikeSelection(peSymbol)} className={`m2-pe-btn${peSelected ? " active" : ""}`}>PE</button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {activeSession ? (
+                <button
+                  className="m2-stop-cta"
+                  onClick={() => stopSessionMutation.mutate()}
+                  disabled={stopSessionMutation.isPending}
                   style={{
-                    background: "var(--trading-surface)", border: "1.5px solid var(--trading-border)",
-                    borderRadius: 14, padding: "20px 24px",
-                    boxShadow: "0 1px 8px rgba(0,0,0,0.05)", animationDelay: "0.04s",
+                    width: "100%", padding: 13, borderRadius: 8,
+                    fontFamily: "'Inter', sans-serif", fontSize: 14, fontWeight: 700,
+                    cursor: stopSessionMutation.isPending ? "not-allowed" : "pointer",
+                    border: "none", background: RED, color: "#fff",
+                    transition: "all 0.2s", boxShadow: "0 4px 14px rgba(229,57,53,0.3)",
+                    opacity: stopSessionMutation.isPending ? 0.6 : 1,
                   }}
                 >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
-                    <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 700, color: "var(--trading-text-muted)", textTransform: "uppercase", letterSpacing: "0.15em" }}>
-                      Session Configuration
-                    </span>
-                    {isSplit && (
-                      <button
-                        onClick={() => setIsConfigExpanded(false)}
-                        style={{
-                          background: "rgba(4,120,87,0.08)", border: "none", color: GREEN,
-                          fontWeight: 700, fontSize: 11, cursor: "pointer", padding: "4px 10px", borderRadius: 5
-                        }}
-                      >
-                        Hide Config ▲
-                      </button>
-                    )}
-                  </div>
-
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16, marginBottom: 20 }}>
-                    <SelectField
-                      label="Index Symbol" value={indexSymbol} onChange={setIndexSymbol}
-                      options={[
-                        { value: "NIFTY50",   label: "NIFTY 50 (Step 50)" },
-                        { value: "BANKNIFTY", label: "BANK NIFTY (Step 100)" },
-                        { value: "FINNIFTY",  label: "FIN NIFTY (Step 50)" },
-                      ]}
-                    />
-                    <SelectField
-                      label="Options Expiry"
-                      value={expiryDate}
-                      onChange={setExpiryDate}
-                      options={
-                        expiryOptions.length > 0
-                          ? expiryOptions
-                          : [{ value: "", label: "Loading expiries…" }]
-                      }
-                    />
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      <label style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 600, color: "var(--trading-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                        Session Type
-                      </label>
-                      <SegmentedControl
-                        options={[{ key: "CE" as const, label: "CE" }, { key: "PE" as const, label: "PE" }, { key: "mixed" as const, label: "Mixed" }]}
-                        value={sessionType} onChange={setSessionType}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Strike selection */}
-                  <div style={{ marginBottom: 20 }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                      <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 700, color: "var(--trading-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                        Select Strikes
-                      </span>
-                      <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 500, color: "var(--trading-text-muted)" }}>
-                        {selectedStrikes.length}/{sessionType === "mixed" ? 20 : 10} selected
-                      </span>
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(70px, 1fr))", gap: 6, maxHeight: 120, overflowY: "auto", paddingRight: 4 }}>
-                      {(chainData?.strikes || []).map((s: any) => {
-                        const ceSelected = selectedStrikes.includes(s.CE);
-                        const peSelected = selectedStrikes.includes(s.PE);
-                        return (
-                          <div key={s.strikePrice} className="m2-strike-chip">
-                            <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 10, fontWeight: 600, color: "var(--trading-text-muted)", marginBottom: 5 }}>{s.strikePrice}</span>
-                            <div style={{ display: "flex", gap: 3, width: "100%" }}>
-                              {sessionType !== "PE" && (
-                                <button onClick={() => toggleStrikeSelection(s.CE)} className={`m2-ce-btn${ceSelected ? " active" : ""}`}>CE</button>
-                              )}
-                              {sessionType !== "CE" && (
-                                <button onClick={() => toggleStrikeSelection(s.PE)} className={`m2-pe-btn${peSelected ? " active" : ""}`}>PE</button>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <button
-                    className="m2-cta"
-                    onClick={() => startSessionMutation.mutate()}
-                    disabled={selectedStrikes.length === 0 || startSessionMutation.isPending}
-                  >
-                    {startSessionMutation.isPending ? "Initialising Session…" : "Start Active Session Tracker"}
-                  </button>
-                </div>
+                  {stopSessionMutation.isPending ? "Stopping Session…" : "Stop Active Session Tracker"}
+                </button>
               ) : (
-                isSplit && (
-                  <div
-                    className="m2-section"
-                    style={{
-                      background: "var(--trading-surface)", border: "1.5px solid var(--trading-border)",
-                      borderRadius: 10, padding: "10px 16px",
-                      display: "flex", justifyContent: "space-between", alignItems: "center",
-                      boxShadow: "0 1px 4px rgba(0,0,0,0.04)", cursor: "pointer",
-                    }}
-                    onClick={() => setIsConfigExpanded(true)}
-                  >
-                    <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 700, color: "var(--trading-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                      ⚙️ Configure Session & Strikes
-                    </span>
-                    <span style={{ color: GREEN, fontWeight: 700, fontSize: 11, background: "rgba(4,120,87,0.08)", padding: "4px 10px", borderRadius: 5 }}>
-                      Show Config ▼
-                    </span>
-                  </div>
-                )
+                <button
+                  className="m2-cta"
+                  onClick={() => startSessionMutation.mutate()}
+                  disabled={selectedStrikes.length === 0 || !expiryDate || startSessionMutation.isPending}
+                >
+                  {startSessionMutation.isPending ? "Initialising Session…" : "Start Active Session Tracker"}
+                </button>
               )}
-
-              {/* Toolbar */}
+            </div>
+          ) : (
+            isSplit && (
               <div
                 className="m2-section"
                 style={{
                   background: "var(--trading-surface)", border: "1.5px solid var(--trading-border)",
-                  borderRadius: 14, padding: "12px 16px",
-                  boxShadow: "0 1px 8px rgba(0,0,0,0.05)", animationDelay: "0.08s",
+                  borderRadius: 10, padding: "10px 16px",
+                  display: "flex", justifyContent: "space-between", alignItems: "center",
+                  boxShadow: "0 1px 4px rgba(0,0,0,0.04)", cursor: "pointer",
                 }}
+                onClick={() => setIsConfigExpanded(true)}
               >
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {/* Row 1: Primary Tab Control & Toggle */}
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 700, color: "var(--trading-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Strikes:</span>
-                      <SegmentedControl
-                        options={[{ key: "mixed" as const, label: "All" }, { key: "CE" as const, label: "CE" }, { key: "PE" as const, label: "PE" }]}
-                        value={filterType} onChange={setFilterType} size="xs"
-                      />
-                    </div>
-                    {isSplit && (
-                      <button
-                        onClick={() => setIsAdvancedFiltersExpanded(!isAdvancedFiltersExpanded)}
-                        style={{
-                          background: "rgba(4,120,87,0.08)", border: "none", color: GREEN,
-                          fontWeight: 700, fontSize: 11, cursor: "pointer", padding: "6px 12px", borderRadius: 6,
-                          transition: "all 0.15s"
-                        }}
-                      >
-                        {isAdvancedFiltersExpanded ? "Hide Filters ▲" : "Show Filters & Export ▼"}
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Row 2: Advanced filters (always visible if not split, toggleable if split) */}
-                  {(!isSplit || isAdvancedFiltersExpanded) && (
-                    <div
-                      style={{
-                        display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10,
-                        paddingTop: 10, borderTop: isSplit ? "1.5px solid var(--trading-border)" : "none",
-                        animation: "m2-enter 0.2s ease both"
-                      }}
-                    >
-                      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, flex: 1 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 700, color: "var(--trading-text-muted)", textTransform: "uppercase", letterSpacing: "0.02em" }}>Sort:</span>
-                          <SegmentedControl
-                            options={[{ key: "default" as const, label: "Default" }, { key: "high_value" as const, label: "High ↓" }, { key: "low_value" as const, label: "Low ↑" }]}
-                            value={sortOrder} onChange={setSortOrder} size="xs"
-                          />
-                        </div>
-                        <div style={{ width: 1, height: 22, background: "var(--trading-border)" }} />
-                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 500, color: "var(--trading-text-muted)" }}>Above</span>
-                          <input type="number" placeholder="Min" value={priceAbove} onChange={(e) => setPriceAbove(e.target.value === "" ? "" : Number(e.target.value))} className="m2-input" style={{ width: 70 }} />
-                        </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 500, color: "var(--trading-text-muted)" }}>Below</span>
-                          <input type="number" placeholder="Max" value={priceBelow} onChange={(e) => setPriceBelow(e.target.value === "" ? "" : Number(e.target.value))} className="m2-input" style={{ width: 70 }} />
-                        </div>
-                        <div style={{ width: 1, height: 22, background: "var(--trading-border)" }} />
-                        <FilterChip label="Call-Down" active={callDownCollapsedToggle} onClick={() => setCallDownCollapsedToggle(!callDownCollapsedToggle)} color={RED} />
-                        <FilterChip label="Top 3" active={highlightTop3} onClick={() => setHighlightTop3(!highlightTop3)} color={AMBER} />
-                        <button className="m2-reset" onClick={() => { setSortOrder("default"); setPriceAbove(""); setPriceBelow(""); setHighlightTop3(false); setCallDownCollapsedToggle(false); setFilterType(isSplit ? "CE" : "mixed"); }}>
-                          Reset
-                        </button>
-                      </div>
-                      <button className="m2-export" onClick={handleExportCSV}>Export CSV</button>
-                    </div>
-                  )}
-                </div>
+                <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 700, color: "var(--trading-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                  ⚙️ Configure Session & Strikes
+                </span>
+                <span style={{ color: GREEN, fontWeight: 700, fontSize: 11, background: "rgba(4,120,87,0.08)", padding: "4px 10px", borderRadius: 5 }}>
+                  Show Config ▼
+                </span>
               </div>
+            )
+          )}
 
-              {/* CE Table */}
-              {(filterType === "mixed" || filterType === "CE") && (
-                <div className="m2-section" style={{ animationDelay: "0.1s" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: GREEN, display: "inline-block" }} />
-                    <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 700, color: GREEN, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                      CE Strikes
-                    </span>
-                  </div>
-                  <StrikeTrackerTable strikesList={ceStrikesList} session={currentSession} sortedTimestamps={sortedTimestamps} highlightTop3={highlightTop3} topStrikes={topStrikes} isSplit={isSplit} isClosed={isClosed} />
-                </div>
-              )}
+          {/* CE Table */}
+          <div className="m2-section" style={{ animationDelay: "0.1s" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: GREEN, display: "inline-block" }} />
+              <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 700, color: GREEN, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                CE Strikes
+              </span>
+            </div>
+            <StrikeTrackerTable strikesList={ceStrikesList} session={currentSession} sortedTimestamps={sortedTimestamps} isSplit={isSplit} isClosed={isClosed} />
+          </div>
 
-              {/* PE Table */}
-              {(filterType === "mixed" || filterType === "PE") && (
-                <div className="m2-section" style={{ animationDelay: "0.13s" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: RED, display: "inline-block" }} />
-                    <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 700, color: RED, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                      PE Strikes
-                    </span>
-                  </div>
-                  <StrikeTrackerTable strikesList={peStrikesList} session={currentSession} sortedTimestamps={sortedTimestamps} highlightTop3={highlightTop3} topStrikes={topStrikes} isSplit={isSplit} isClosed={isClosed} />
-                </div>
-              )}
-            </>
+          {/* PE Table */}
+          <div className="m2-section" style={{ animationDelay: "0.13s" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: RED, display: "inline-block" }} />
+              <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 700, color: RED, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                PE Strikes
+              </span>
+            </div>
+            <StrikeTrackerTable strikesList={peStrikesList} session={currentSession} sortedTimestamps={sortedTimestamps} isSplit={isSplit} isClosed={isClosed} />
+          </div>
 
         </div>
       </div>
@@ -709,13 +725,13 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
 };
 
 // ── StrikeTrackerTable ────────────────────────────────────────────────────────
-function StrikeTrackerTable({ strikesList, session, sortedTimestamps, highlightTop3, topStrikes, isSplit = false, isClosed = false }: {
+function StrikeTrackerTable({ strikesList, session, sortedTimestamps, isSplit = false, isClosed = false }: {
   strikesList: string[]; session: any; sortedTimestamps: string[];
-  highlightTop3: boolean; topStrikes: string[]; isSplit?: boolean; isClosed?: boolean;
+  isSplit?: boolean; isClosed?: boolean;
 }) {
   const [showFullColumns, setShowFullColumns] = useState(false);
-  const cellPadding = isSplit ? "12px 14px" : "12px 16px";
-  const cellFontSize = isSplit ? "12px" : "13px";
+  const cellPadding = isSplit ? "10px 12px" : "12px 16px";
+  const cellFontSize = "24px";
 
   const displayedTimestamps = showFullColumns || !isSplit
     ? sortedTimestamps
@@ -724,6 +740,28 @@ function StrikeTrackerTable({ strikesList, session, sortedTimestamps, highlightT
   const displayedStrikes = showFullColumns || !isSplit
     ? strikesList
     : strikesList.slice(0, 5);
+
+  // High column Min & Max across displayed strikes
+  const highValues: number[] = [];
+  displayedStrikes.forEach((strike) => {
+    const s = session?.strikes?.[strike];
+    if (s && typeof s.dayHigh === "number" && !isNaN(s.dayHigh) && s.dayHigh > 0) {
+      highValues.push(s.dayHigh);
+    }
+  });
+  const highMax = highValues.length > 0 ? Math.max(...highValues) : null;
+  const highMin = highValues.length > 0 ? Math.min(...highValues) : null;
+
+  // Low column Min & Max across displayed strikes
+  const lowValues: number[] = [];
+  displayedStrikes.forEach((strike) => {
+    const s = session?.strikes?.[strike];
+    if (s && typeof s.dayLow === "number" && !isNaN(s.dayLow) && s.dayLow > 0) {
+      lowValues.push(s.dayLow);
+    }
+  });
+  const lowMax = lowValues.length > 0 ? Math.max(...lowValues) : null;
+  const lowMin = lowValues.length > 0 ? Math.min(...lowValues) : null;
 
   return (
     <div
@@ -736,95 +774,133 @@ function StrikeTrackerTable({ strikesList, session, sortedTimestamps, highlightT
       <div style={{ overflowX: "auto", overflowY: "visible" }}>
         <table style={{ 
           width: "100%", 
-          minWidth: isSplit && showFullColumns ? "1150px" : "100%", 
+          minWidth: isSplit && showFullColumns ? "1450px" : "100%", 
           borderCollapse: "collapse", 
           textAlign: "left" 
         }}>
           <thead>
             <tr>
-              <th className="m2-th" style={{ padding: cellPadding, fontSize: "10px", minWidth: isSplit ? 130 : 180, position: isSplit ? "sticky" : undefined, left: isSplit ? 0 : undefined, top: 0, zIndex: 40, borderRight: isSplit ? "3px solid var(--trading-border)" : "1px solid var(--trading-border)" }}>Strike</th>
-              {(!isSplit || showFullColumns) && (
-                <th className="m2-th" style={{ padding: cellPadding, fontSize: "10px", textAlign: "center", minWidth: isSplit ? 56 : 72, borderRight: "1px solid var(--trading-border)" }}>Day Open</th>
-              )}
+              <th className="m2-th" style={{ padding: cellPadding, fontSize: "16px", textAlign: "center", width: 60, minWidth: 55, position: "sticky", left: 0, top: 0, zIndex: 40, borderRight: "1px solid var(--trading-border)", background: "var(--trading-bg)" }}>S.No.</th>
+              <th className="m2-th" style={{ padding: cellPadding, fontSize: "18px", minWidth: isSplit ? 200 : 260, position: "sticky", left: 60, top: 0, zIndex: 40, borderRight: "3px solid var(--trading-border)", background: "var(--trading-bg)" }}>Strike</th>
               {displayedTimestamps.map((ts) => (
-                <th key={ts} className="m2-th" style={{ padding: cellPadding, fontSize: "10px", textAlign: "center", minWidth: isSplit ? 48 : 60 }}>{ts}</th>
+                <th key={ts} className="m2-th" style={{ padding: cellPadding, fontSize: "18px", textAlign: "center", minWidth: isSplit ? 90 : 110 }}>{ts}</th>
               ))}
               {(!isSplit || showFullColumns) && (
-                <th className="m2-th" style={{ padding: cellPadding, fontSize: "10px", textAlign: "center", minWidth: 80, width: 80, borderLeft: isSplit ? "3px solid var(--trading-border)" : "1px solid var(--trading-border)", position: isSplit ? "sticky" : undefined, right: isSplit ? 80 : undefined, top: 0, zIndex: 40, background: isSplit ? "var(--trading-bg)" : undefined }}>High</th>
+                <th className="m2-th" style={{ padding: cellPadding, fontSize: "18px", textAlign: "center", minWidth: 110, width: 110, borderLeft: "3px solid var(--trading-border)", position: "sticky", right: 110, top: 0, zIndex: 40, background: "var(--trading-bg)" }}>High</th>
               )}
               {(!isSplit || showFullColumns) && (
-                <th className="m2-th" style={{ padding: cellPadding, fontSize: "10px", textAlign: "center", minWidth: 80, width: 80, position: isSplit ? "sticky" : undefined, right: isSplit ? 0 : undefined, top: 0, zIndex: 40, background: isSplit ? "var(--trading-bg)" : undefined }}>Low</th>
+                <th className="m2-th" style={{ padding: cellPadding, fontSize: "18px", textAlign: "center", minWidth: 110, width: 110, position: "sticky", right: 0, top: 0, zIndex: 40, background: "var(--trading-bg)" }}>Low</th>
               )}
             </tr>
           </thead>
           <tbody>
             {isClosed ? (
               <tr>
-                <td colSpan={displayedTimestamps.length + (isSplit && !showFullColumns ? 1 : 4)} style={{ padding: "48px 16px", textAlign: "center", fontFamily: "'Inter', sans-serif", fontSize: 13, color: "#E53935", fontWeight: 700 }}>
+                <td colSpan={displayedTimestamps.length + (isSplit && !showFullColumns ? 2 : 4)} style={{ padding: "48px 16px", textAlign: "center", fontFamily: "'Inter', sans-serif", fontSize: 24, color: "#E53935", fontWeight: 700 }}>
                   Market Closed
                 </td>
               </tr>
             ) : displayedStrikes.length === 0 ? (
               <tr>
-                <td colSpan={displayedTimestamps.length + (isSplit && !showFullColumns ? 1 : 4)} style={{ padding: "32px 16px", textAlign: "center", fontFamily: "'Inter', sans-serif", fontSize: 13, color: "var(--trading-text-muted)" }}>
+                <td colSpan={displayedTimestamps.length + (isSplit && !showFullColumns ? 2 : 4)} style={{ padding: "32px 16px", textAlign: "center", fontFamily: "'Inter', sans-serif", fontSize: 24, color: "var(--trading-text-muted)" }}>
                   No strikes to display in this category.
                 </td>
               </tr>
             ) : (
-              displayedStrikes.map((strike) => {
-                const s = session.strikes[strike];
+              displayedStrikes.map((strike, index) => {
+                const s = session?.strikes?.[strike];
                 if (!s) return null;
                 const parsed = parseStrikeSymbol(strike);
-                const isTop3 = highlightTop3 && topStrikes.includes(strike);
                 const isCE = parsed.optionType === "CE";
 
                 const rowBg = s.isDeepLoss ? "rgba(107,114,128,0.08)" : s.isDowntrendActive ? "rgba(37, 99, 235, 0.08)" : "transparent";
-                // sticky cell needs a solid background
                 const stickyBg = s.isDeepLoss
                   ? "rgba(255,242,242,0.98)"
                   : s.isDowntrendActive
                   ? "rgba(255,251,235,0.98)"
                   : "var(--trading-surface)";
 
-                const summaryBg = isSplit
-                  ? (s.isDeepLoss
-                      ? "linear-gradient(rgba(239, 68, 68, 0.12), rgba(239, 68, 68, 0.12)), var(--trading-bg)"
-                      : s.isDowntrendActive
-                      ? "linear-gradient(rgba(217, 119, 6, 0.12), rgba(217, 119, 6, 0.12)), var(--trading-bg)"
-                      : "var(--trading-bg)")
-                  : stickyBg;
+                const summaryBg = s.isDeepLoss
+                  ? "rgba(255,242,242,0.98)"
+                  : s.isDowntrendActive
+                  ? "rgba(255,251,235,0.98)"
+                  : "var(--trading-surface)";
+
+                // Row-wise Min & Max calculation for timestamp/LTP cells in THIS specific strike row
+                const rowLtps: number[] = [];
+                displayedTimestamps.forEach((ts) => {
+                  const cell = (s.grid || []).find((c: any) => c.timestamp === ts);
+                  if (cell && typeof cell.ltp === "number" && !isNaN(cell.ltp) && cell.ltp > 0) {
+                    rowLtps.push(cell.ltp);
+                  }
+                });
+
+                const rowMax = rowLtps.length > 0 ? Math.max(...rowLtps) : null;
+                const rowMin = rowLtps.length > 0 ? Math.min(...rowLtps) : null;
+                const hasDistinctRowMinMax = rowMax !== null && rowMin !== null && rowMax !== rowMin;
+
+                // High Column cell style using Module 1 color logic
+                const isHighHighest = highMax !== null && highMin !== null && highMax !== highMin && s.dayHigh === highMax;
+                const isHighLowest  = highMax !== null && highMin !== null && highMax !== highMin && s.dayHigh === highMin;
+                const highColorClass = isHighHighest ? "blue" : isHighLowest ? "black" : null;
+                const highStyle = highColorClass ? colorClassStyle(highColorClass, "hlc") : null;
+
+                // Low Column cell style using Module 1 color logic
+                const isLowHighest = lowMax !== null && lowMin !== null && lowMax !== lowMin && s.dayLow === lowMax;
+                const isLowLowest  = lowMax !== null && lowMin !== null && lowMax !== lowMin && s.dayLow === lowMin;
+                const lowColorClass = isLowHighest ? "blue" : isLowLowest ? "black" : null;
+                const lowStyle = lowColorClass ? colorClassStyle(lowColorClass, "hlc") : null;
 
                 return (
                   <tr
-  key={strike}
-  className={`m2-tr ${
-    isTop3
-      ? "border-gold-signal"
-      : s.isDeepLoss
-      ? "border-red-signal"
-      : s.trendBadge === "L_TO_H"
-      ? "border-green-signal"
-      : ""
-  } ${s.trendBadge === "REVERSAL" ? "animate-reversal-border" : ""}`}
-  style={{ background: rowBg }}
->
-                    {/* Sticky strike cell */}
+                    key={strike}
+                    className={`m2-tr ${
+                      s.isDeepLoss
+                        ? "border-red-signal"
+                        : s.trendBadge === "L_TO_H"
+                        ? "border-green-signal"
+                        : ""
+                    } ${s.trendBadge === "REVERSAL" ? "animate-reversal-border" : ""}`}
+                    style={{ background: rowBg }}
+                  >
+                    {/* Column 1: S.No. */}
+                    <td
+                      className="m2-td m2-sticky-cell"
+                      style={{
+                        padding: cellPadding,
+                        fontSize: cellFontSize,
+                        textAlign: "center",
+                        fontWeight: 600,
+                        color: "var(--trading-text-muted)",
+                        position: "sticky",
+                        left: 0,
+                        zIndex: 20,
+                        background: stickyBg,
+                        borderRight: "1px solid var(--trading-border)",
+                        width: 60,
+                        minWidth: 55,
+                      }}
+                    >
+                      {index + 1}
+                    </td>
+
+                    {/* Column 2: Sticky Strike cell */}
                     <td className="m2-td m2-sticky-cell" style={{ 
                       padding: cellPadding, 
                       fontSize: cellFontSize, 
-                      position: isSplit ? "sticky" : undefined, 
-                      left: isSplit ? 0 : undefined, 
-                      zIndex: isSplit ? 20 : undefined, 
-                      background: isSplit ? stickyBg : undefined, 
-                      borderRight: isSplit ? "3px solid var(--trading-border)" : "1px solid var(--trading-border)", 
-                      minWidth: isSplit ? 130 : 180 
+                      position: "sticky", 
+                      left: 60, 
+                      zIndex: 20, 
+                      background: stickyBg, 
+                      borderRight: "3px solid var(--trading-border)", 
+                      minWidth: isSplit ? 200 : 260 
                     }}>
                       <div style={{ display: "flex", flexDirection: "column", gap: isSplit ? 2 : 5 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: isSplit ? 4 : 8 }}>
-                          <span style={{ fontFamily: "'Inter', sans-serif", fontSize: isSplit ? 12 : 14, fontWeight: 800, color: "var(--trading-text-active)" }}>{parsed.strikePrice}</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: isSplit ? 6 : 10 }}>
+                          <span style={{ fontFamily: "'Inter', sans-serif", fontSize: "24px", fontWeight: 800, color: "var(--trading-text-active)" }}>{parsed.strikePrice}</span>
                           <span style={{
-                            padding: isSplit ? "1px 4px" : "2px 7px", borderRadius: 4,
-                            fontSize: isSplit ? 9 : 10, fontWeight: 700, fontFamily: "'Inter', sans-serif",
+                            padding: isSplit ? "2px 6px" : "3px 8px", borderRadius: 4,
+                            fontSize: "14px", fontWeight: 700, fontFamily: "'Inter', sans-serif",
                             color: isCE ? GREEN : RED,
                             background: isCE ? "rgba(4,120,87,0.1)" : "rgba(229,57,53,0.1)",
                             border: `1px solid ${isCE ? "rgba(4,120,87,0.25)" : "rgba(229,57,53,0.25)"}`,
@@ -834,18 +910,13 @@ function StrikeTrackerTable({ strikesList, session, sortedTimestamps, highlightT
                           <TrendBadge badge={s.trendBadge} />
                         </div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
-                          {isTop3 && (
-                            <span style={{ padding: "1px 5px", borderRadius: 4, fontFamily: "'Inter', sans-serif", fontSize: 9, fontWeight: 700, color: AMBER, background: "rgba(217,119,6,0.1)", border: "1px solid rgba(217,119,6,0.25)" }}>
-                              Top 3
-                            </span>
-                          )}
                           {s.isDeepLoss && (
-                            <span className="animate-pulse" style={{ padding: "1px 5px", borderRadius: 4, fontFamily: "'Inter', sans-serif", fontSize: 9, fontWeight: 700, color: RED, background: "rgba(229,57,53,0.1)", border: "1px solid rgba(229,57,53,0.25)" }}>
+                            <span className="animate-pulse" style={{ padding: "1px 5px", borderRadius: 4, fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 700, color: RED, background: "rgba(229,57,53,0.1)", border: "1px solid rgba(229,57,53,0.25)" }}>
                               Severe −15%
                             </span>
                           )}
                           {!s.isDeepLoss && s.isDowntrendActive && (
-                            <span style={{ padding: "1px 5px", borderRadius: 4, fontFamily: "'Inter', sans-serif", fontSize: 9, fontWeight: 700, color: AMBER, background: "rgba(217,119,6,0.1)", border: "1px solid rgba(217,119,6,0.25)" }}>
+                            <span style={{ padding: "1px 5px", borderRadius: 4, fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 700, color: AMBER, background: "rgba(217,119,6,0.1)", border: "1px solid rgba(217,119,6,0.25)" }}>
                               Down 3m
                             </span>
                           )}
@@ -853,43 +924,32 @@ function StrikeTrackerTable({ strikesList, session, sortedTimestamps, highlightT
                       </div>
                     </td>
 
-                    {/* Day open */}
-                    {(!isSplit || showFullColumns) && (
-                      <td className="m2-td" style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: "center", borderRight: "1px solid var(--trading-border)", color: "var(--trading-text-muted)", fontWeight: 500 }}>
-                        {Math.round(s.dayOpen)}
-                      </td>
-                    )}
-
-                    {/* Minute columns */}
+                    {/* Minute columns with ROW-WISE cell-background color logic */}
                     {displayedTimestamps.map((ts) => {
-                      const cell = s.grid.find((c: any) => c.timestamp === ts);
-                      if (!cell) return <td key={ts} className="m2-td" style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: "center", color: "var(--trading-text-muted)" }}>—</td>;
-                      const isCellHigh = cell.ltp === s.dayHigh && s.dayHigh > 0;
-                      const isCellLow  = cell.ltp === s.dayLow  && s.dayLow  > 0;
+                      const cell = (s.grid || []).find((c: any) => c.timestamp === ts);
+                      if (!cell || typeof cell.ltp !== "number") return <td key={ts} className="m2-td" style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: "center", color: "var(--trading-text-muted)" }}>—</td>;
+                      
+                      const isHighest = hasDistinctRowMinMax && cell.ltp === rowMax;
+                      const isLowest  = hasDistinctRowMinMax && cell.ltp === rowMin;
                       const isLatestCell = ts === sortedTimestamps[sortedTimestamps.length - 1];
+
+                      const colorClass = isHighest ? "blue" : isLowest ? "black" : null;
+                      const cellStyle = colorClass ? colorClassStyle(colorClass, "light") : null;
+
                       return (
                         <td
-                           key={ts}
-  className={`m2-td ${isLatestCell ? "animate-blue-live-pulse" : ""} ${
-    s.isDowntrendActive || s.isDeepLoss ? "bg-call-down-stripes" : ""
-  }`}
+                          key={ts}
+                          className={`m2-td ${isLatestCell ? "animate-blue-live-pulse" : ""} ${
+                            s.isDowntrendActive || s.isDeepLoss ? "bg-call-down-stripes" : ""
+                          }`}
                           title={`${cell.timestamp} · ${cell.ltp}`}
                           style={{
                             padding: cellPadding,
                             fontSize: cellFontSize,
                             textAlign: "center",
-                            background: isCellHigh
-  ? "rgba(37, 99, 235, 0.10)"
-  : isCellLow
-  ? "rgba(107, 114, 128, 0.10)"
-  : undefined,
-
-color: isCellHigh
-  ? "#2563EB"
-  : isCellLow
-  ? "#6B7280"
-  : "var(--trading-text-active)",
-                            fontWeight: isCellHigh || isCellLow ? 700 : 400,
+                            background: cellStyle ? cellStyle.bg : undefined,
+                            color: cellStyle ? cellStyle.textColor : "var(--trading-text-active)",
+                            fontWeight: isHighest || isLowest ? 700 : 400,
                           }}
                         >
                           {cell.ltp}
@@ -897,40 +957,40 @@ color: isCellHigh
                       );
                     })}
 
-                    {/* High */}
+                    {/* High Column */}
                     {(!isSplit || showFullColumns) && (
                       <td className="m2-td m2-sticky-cell" style={{ 
                         padding: cellPadding, 
                         fontSize: cellFontSize, 
                         textAlign: "center", 
-                        position: isSplit ? "sticky" : undefined, 
-                        right: isSplit ? 80 : undefined, 
-                        zIndex: isSplit ? 20 : undefined, 
-                        background: summaryBg, 
-                        borderLeft: isSplit ? "3px solid var(--trading-border)" : "1px solid var(--trading-border)", 
-                        color: "#2563eb", 
+                        position: "sticky", 
+                        right: 110, 
+                        zIndex: 20, 
+                        background: highStyle ? highStyle.bg : summaryBg, 
+                        borderLeft: "3px solid var(--trading-border)", 
+                        color: highStyle ? highStyle.textColor : "#2563EB", 
                         fontWeight: 700, 
-                        minWidth: 80, 
-                        width: 80 
+                        minWidth: 110, 
+                        width: 110 
                       }}>
                         {Math.round(s.dayHigh)}
                       </td>
                     )}
 
-                    {/* Low */}
+                    {/* Low Column */}
                     {(!isSplit || showFullColumns) && (
                       <td className="m2-td m2-sticky-cell" style={{ 
                         padding: cellPadding, 
                         fontSize: cellFontSize, 
                         textAlign: "center", 
-                        position: isSplit ? "sticky" : undefined, 
-                        right: isSplit ? 0 : undefined, 
-                        zIndex: isSplit ? 20 : undefined, 
-                        background: summaryBg, 
-                        color: "#6b7280", 
+                        position: "sticky", 
+                        right: 0, 
+                        zIndex: 20, 
+                        background: lowStyle ? lowStyle.bg : summaryBg, 
+                        color: lowStyle ? lowStyle.textColor : "#111827", 
                         fontWeight: 700, 
-                        minWidth: 80, 
-                        width: 80 
+                        minWidth: 110, 
+                        width: 110 
                       }}>
                         {Math.round(s.dayLow)}
                       </td>

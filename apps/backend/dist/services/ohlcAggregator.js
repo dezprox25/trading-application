@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.getActiveCandle = exports.getCachedOHLCBars = exports.aggregateOHLC = exports.getBoundaryTime = exports.getTodaySessionOpenMs = exports.setOnCandleFinalized = void 0;
 const FuturesOHLC_1 = require("../models/FuturesOHLC");
 const redisWriteBuffer_1 = require("./redisWriteBuffer");
+const module1ArchiveService_1 = require("./module1ArchiveService");
 // Local cache for active candles: activeCandles[symbol][timeframe]
 const activeCandles = {};
 const parseTfMinutes = (tf) => {
@@ -198,6 +199,8 @@ const drainPersistQueue = async () => {
     try {
         while (persistQueue.length > 0) {
             const batch = persistQueue.splice(0, persistQueue.length);
+            // Async fire-and-forget archival to Module1CandleArchive
+            void (0, module1ArchiveService_1.archiveModule1Candles)(batch).catch(() => { });
             // 1. One bulk upsert for the whole batch (same doc shape/filter as the
             //    previous per-candle findOneAndUpdate upsert).
             try {

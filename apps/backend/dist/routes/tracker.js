@@ -5,6 +5,7 @@ const auth_1 = require("../middleware/auth");
 const tracker_1 = require("../controllers/tracker");
 const router = (0, express_1.Router)();
 router.post("/session/start", auth_1.authenticate, tracker_1.startSession);
+router.post("/session/stop", auth_1.authenticate, tracker_1.stopSession);
 router.get("/session/current", auth_1.authenticate, tracker_1.getCurrentSession);
 router.put("/session/strikes", auth_1.authenticate, tracker_1.updateStrikes);
 router.put("/filters", auth_1.authenticate, tracker_1.updateFilters);

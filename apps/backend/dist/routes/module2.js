@@ -25,7 +25,9 @@ const authRateLimiter = (0, express_rate_limit_1.default)({
     legacyHeaders: false,
 });
 router.get("/status", module2_1.getModule2Status);
+router.get("/indexes", module2_1.getModule2Indexes);
 router.get("/expiries", module2_1.getModule2Expiries);
+router.get("/option-chain", module2_1.getModule2OptionChain);
 // Market Data authentication & session management
 router.post("/auth/login", authRateLimiter, module2Auth_1.module2AuthLogin);
 router.post("/auth/logout", authRateLimiter, module2Auth_1.module2AuthLogout);

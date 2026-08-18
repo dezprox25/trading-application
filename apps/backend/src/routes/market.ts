@@ -19,7 +19,7 @@ import {
   getModule1Strikes,
   getModule1Exchanges,
   getModule1Instruments,
-  getModule1Symbols
+  getModule1Symbols,
 } from "../controllers/market";
 
 const router = Router();

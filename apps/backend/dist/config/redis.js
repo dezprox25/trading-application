@@ -7,9 +7,19 @@ exports.Redis = void 0;
 const ioredis_1 = __importDefault(require("ioredis"));
 exports.Redis = ioredis_1.default;
 const redis_1 = require("@upstash/redis");
+const sanitizeUrl = (url) => {
+    if (!url)
+        return "";
+    let trimmed = url.trim();
+    if (trimmed.startsWith("hhttps://")) {
+        trimmed = trimmed.replace(/^h+https:\/\//, "https://");
+    }
+    return trimmed;
+};
 const redisUrl = process.env.REDIS_URL || "redis://127.0.0.1:6379";
-const upstashUrl = process.env.UPSTASH_REDIS_REST_URL;
-const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN;
+const rawUpstashUrl = process.env.UPSTASH_REDIS_REST_URL;
+const upstashUrl = sanitizeUrl(rawUpstashUrl);
+const upstashToken = (process.env.UPSTASH_REDIS_REST_TOKEN || "").trim();
 class MockRedis {
     store = new Map();
     async get(key) {
@@ -44,22 +54,23 @@ try {
                 url: upstashUrl,
                 token: upstashToken,
             });
-            console.log("[Redis] Connected to Upstash REST API successfully.");
+            console.log(`[Redis] REAL UPSTASH REDIS connected successfully (${upstashUrl}).`);
         }
         catch (upstashError) {
-            console.warn("[Redis] Upstash connection failed. Trying standard Redis...");
+            console.warn("[Redis] Upstash connection failed:", upstashError?.message || upstashError);
             throw upstashError;
         }
     }
     else {
         // Fall back to standard Redis connection
+        console.log(`[Redis] Connecting to standard Redis at ${redisUrl}...`);
         activeClient = new ioredis_1.default(redisUrl, {
             maxRetriesPerRequest: 1,
             connectTimeout: 1500,
         });
         activeClient.on("error", (err) => {
             if (!(activeClient instanceof MockRedis)) {
-                console.warn("[Redis] Connection failed. Falling back to local in-memory Mock Redis cache.");
+                console.warn("[Redis] Standard Redis connection failed. Falling back to IN-MEMORY MOCK REDIS.");
                 const oldClient = activeClient;
                 activeClient = new MockRedis();
                 try {
@@ -73,7 +84,7 @@ try {
     }
 }
 catch (error) {
-    console.warn("[Redis] Initialization failed. Falling back to local in-memory Mock Redis cache.");
+    console.warn("[Redis] Initialization failed. Falling back to IN-MEMORY MOCK REDIS cache.");
     activeClient = new MockRedis();
 }
 // Proxy wrapper to expose the active client dynamically to all modules importing it

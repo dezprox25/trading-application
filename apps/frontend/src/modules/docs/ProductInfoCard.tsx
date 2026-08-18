@@ -1,4 +1,4 @@
-import { Tag, Rocket, Building2, Package, IndianRupee, CheckCircle2, FileText, Globe } from "lucide-react";
+import { Tag, Rocket, Building2, Package, CheckCircle2, FileText, Globe } from "lucide-react";
 
 // ── Product Information card ──────────────────────────────────────────────────
 // Sits at the very top of the Documentation page, below the Dezprox banner and
@@ -70,12 +70,12 @@ export function ProductInfoCard() {
     { icon: <Rocket {...iconProps} />, label: "Version", value: "1.0" },
     { icon: <Building2 {...iconProps} />, label: "Developed By", value: "Dezprox LLP" },
     { icon: <Package {...iconProps} />, label: "Category", value: "Enterprise Trading Analytics Platform" },
-    {
-      icon: <IndianRupee {...iconProps} />,
-      label: "Current Market Value",
-      value: "₹2,50,000 INR",
-      emphasize: true,
-    },
+    // {
+    //   icon: <IndianRupee {...iconProps} />,
+    //   label: "Current Market Value",
+    //   value: "₹2,50,000 INR",
+    //   emphasize: true,
+    // },
     { icon: <CheckCircle2 {...iconProps} />, label: "Development Status", value: <SuccessBadge label="Production Ready" /> },
     { icon: <FileText {...iconProps} />, label: "License", value: "Commercial" },
     {

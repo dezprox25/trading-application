@@ -281,7 +281,7 @@ export function TimeframeRow() {
             marginRight: 10,
           }}
         >
-          ⬇ Download Excel
+          ⬇ Export Table
         </button>
 
         {/* Columns button + popover */}

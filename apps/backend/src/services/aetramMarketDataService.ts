@@ -119,7 +119,16 @@ export interface AetramInstrumentResult {
  * Extracted from resolveOptionStrikeToken (Phase 3) so the Instrument Discovery
  * layer can reuse the exact same search call instead of re-implementing it.
  */
+const searchCache = new Map<string, { timestamp: number; data: AetramInstrumentResult[] }>();
+const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
+
 export const searchInstruments = async (searchString: string): Promise<AetramInstrumentResult[]> => {
+  const cacheKey = searchString.trim().toUpperCase();
+  const cached = searchCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < SEARCH_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
   const baseUrl = getBaseUrl();
   if (!baseUrl || !getMarketDataToken()) return [];
 
@@ -141,8 +150,8 @@ export const searchInstruments = async (searchString: string): Promise<AetramIns
       expiryDate: inst.ContractExpiration || inst.contractExpiration || inst.ExpiryDate || inst.expiryDate || inst.Expiry || inst.expiry || undefined,
       strikePrice: inst.StrikePrice !== undefined ? Number(inst.StrikePrice)
         : inst.strikePrice !== undefined ? Number(inst.strikePrice)
-        : inst.Strike !== undefined ? Number(inst.Strike)
-        : inst.strike !== undefined ? Number(inst.strike) : undefined,
+          : inst.Strike !== undefined ? Number(inst.Strike)
+            : inst.strike !== undefined ? Number(inst.strike) : undefined,
       optionType: inst.OptionType || inst.optionType || inst.Type || inst.type || undefined,
     }));
   } catch (error: any) {
@@ -160,6 +169,9 @@ export const searchInstruments = async (searchString: string): Promise<AetramIns
 /**
  * Search and resolve an option strike symbol to its instrument token
  */
+/**
+ * Search and resolve an option strike symbol to its instrument token
+ */
 export const resolveOptionStrikeToken = async (
   index: string,
   expiryDate: string,
@@ -167,77 +179,149 @@ export const resolveOptionStrikeToken = async (
 ): Promise<{ segment: number; token: string } | null> => {
   // If already in cache, return it
   if (symbolToTokenMap.has(strikeSymbol)) {
-    return symbolToTokenMap.get(strikeSymbol)!;
+    const cached = symbolToTokenMap.get(strikeSymbol)!;
+    console.log(`[INSTRUMENT][RESOLVED] symbol=${strikeSymbol} segment=${cached.segment} token=${cached.token} (cached)`);
+    return cached;
   }
 
-  if (!getBaseUrl() || !getMarketDataToken()) return null;
+  // Auto-login check if not authenticated
+  if (!getMarketDataToken()) {
+    console.log("[AetramMD] Market Data token missing. Attempting auto-login...");
+    const loggedIn = await loginToAetram();
+    if (!loggedIn || !getMarketDataToken()) {
+      console.warn(`[INSTRUMENT][FAILED] symbol=${strikeSymbol} reason=Not authenticated to Aetram Market Data API`);
+      return null;
+    }
+  }
 
   // Extract strike price and option type from strikeSymbol (e.g. "NIFTY22100CE")
   const match = strikeSymbol.match(/(\d+)(CE|PE)$/);
-  if (!match) return null;
+  if (!match) {
+    console.warn(`[INSTRUMENT][FAILED] symbol=${strikeSymbol} reason=Invalid strike symbol format`);
+    return null;
+  }
   const strikePrice = Number(match[1]);
   const optionType = match[2].toUpperCase(); // CE or PE
 
   const indexShort = index.replace("50", "").replace("fifty", "").toUpperCase(); // e.g. "NIFTY"
 
-  const months = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
-  const d = new Date(expiryDate);
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mmm = months[d.getMonth()];
-  const yyyy = d.getFullYear();
-  const displayExpiry = `${dd}${mmm}${yyyy}`; 
+  // Search by "NIFTY 22000" first, fallback to "NIFTY"
+  const primarySearch = `${indexShort} ${strikePrice}`;
+  console.log(`[AetramMD] Searching Aetram instruments with query: '${primarySearch}'`);
+  let results = await searchInstruments(primarySearch);
 
-  const searchString = `${indexShort} ${displayExpiry} ${optionType} ${strikePrice}`;
-  console.log(`[AetramMD] searchString: '${searchString}'`);
-  const results = await searchInstruments(searchString);
+  if (results.length === 0) {
+    console.log(`[AetramMD] Search '${primarySearch}' yielded 0 results. Trying index query: '${indexShort}'`);
+    results = await searchInstruments(indexShort);
+  }
+
+  if (results.length === 0) {
+    console.warn(`[INSTRUMENT][FAILED] symbol=${strikeSymbol} reason=No instruments returned from Aetram search query`);
+    return null;
+  }
+
   const targetYmd = parseDateToYMD(expiryDate);
+  const candidateMatches: Array<{ inst: AetramInstrumentResult; ymd: string }> = [];
 
-  // Filter list in-memory for the closest match
   for (const inst of results) {
     const rawExpiry = inst.expiryDate || "";
     const instExpiryYmd = parseDateToYMD(rawExpiry);
-    
     const instStrike = Math.round(Number(inst.strikePrice ?? 0));
     const instOptType = String(inst.optionType || "").toUpperCase();
-    
-    // In XTS, OptionType 3 = CE, 4 = PE
-    const isOptCE = instOptType.startsWith("C") || instOptType.includes("CE") || instOptType === "3";
-    const targetCE = optionType.startsWith("C");
 
-    if (
-      instExpiryYmd === targetYmd &&
-      instStrike === strikePrice &&
-      isOptCE === targetCE
-    ) {
-      const segment = inst.exchangeSegment;
-      const token = inst.exchangeInstrumentID;
+    // In XTS, OptionType 3 = CE, 4 = PE (or string "CE"/"PE")
+    const isOptCE = instOptType === "3" || instOptType.includes("CE") || instOptType.includes("CALL");
+    const isOptPE = instOptType === "4" || instOptType.includes("PE") || instOptType.includes("PUT");
+    const isTargetCE = optionType === "CE";
 
-      const result = { segment, token };
-      symbolToTokenMap.set(strikeSymbol, result);
-      tokenToSymbolMap.set(`${segment}|${token}`, strikeSymbol);
-      tokenToSymbolMap.set(token, strikeSymbol); // Fallback lookup mapping
+    const optTypeMatches = isTargetCE ? isOptCE : isOptPE;
 
-      console.log(`[AetramMD] Resolved ${strikeSymbol} to Token: ${token} (Seg: ${segment})`);
-      return result;
+    if (instStrike === strikePrice && optTypeMatches) {
+      candidateMatches.push({ inst, ymd: instExpiryYmd });
     }
   }
 
-  console.warn(`[AetramMD] Could not find matching Aetram instrument for strike ${strikeSymbol} (${expiryDate})`);
+  if (candidateMatches.length === 0) {
+    console.warn(`[INSTRUMENT][FAILED] symbol=${strikeSymbol} reason=No matching strike ${strikePrice} ${optionType} found in search results (${results.length} records scanned)`);
+    return null;
+  }
+
+  // 1. Try exact expiry match first
+  let matchInst = candidateMatches.find(c => c.ymd === targetYmd);
+
+  if (!matchInst) {
+    const availableExpiries = Array.from(new Set(candidateMatches.map(c => c.ymd).filter(Boolean))).sort();
+    console.log(`[INSTRUMENT][EXPIRY] Requested: ${targetYmd}, Available: ${availableExpiries.join(", ")}`);
+    
+    // Select closest available expiry
+    matchInst = candidateMatches.sort((a, b) => {
+      const diffA = Math.abs(new Date(a.ymd).getTime() - new Date(targetYmd).getTime());
+      const diffB = Math.abs(new Date(b.ymd).getTime() - new Date(targetYmd).getTime());
+      return diffA - diffB;
+    })[0];
+
+    if (matchInst) {
+      console.log(`[INSTRUMENT][EXPIRY] Matched nearest available expiry: ${matchInst.ymd} for requested ${targetYmd}`);
+    }
+  }
+
+  if (matchInst) {
+    const inst = matchInst.inst;
+    const segment = inst.exchangeSegment;
+    const token = inst.exchangeInstrumentID;
+
+    const result = { segment, token };
+    symbolToTokenMap.set(strikeSymbol, result);
+    tokenToSymbolMap.set(`${segment}|${token}`, strikeSymbol);
+    tokenToSymbolMap.set(token, strikeSymbol);
+
+    console.log(`[INSTRUMENT][RESOLVED] symbol=${strikeSymbol} segment=${segment} token=${token} expiry=${matchInst.ymd} strike=${strikePrice} optionType=${optionType}`);
+    return result;
+  }
+
+  console.warn(`[INSTRUMENT][FAILED] symbol=${strikeSymbol} reason=No valid contract expiry matched`);
   return null;
 };
 
+const activeSubscribedMap = new Map<string, { segment: number; token: string }>();
+
+export const getActiveSubscribedInstruments = (): Array<{ segment: number; token: string }> => {
+  return Array.from(activeSubscribedMap.values());
+};
+
 /**
- * Subscribe to LTP & OI updates for resolved instruments
+ * Subscribe to LTP & OI updates for resolved instruments (deduplicated)
  */
 export const subscribeToInstruments = async (
   instruments: Array<{ segment: number; token: string }>
 ) => {
   const baseUrl = getBaseUrl();
-  if (!baseUrl || !getMarketDataToken() || instruments.length === 0) return;
+  if (!getMarketDataToken()) {
+    await loginToAetram();
+  }
+
+  if (!baseUrl || !getMarketDataToken() || instruments.length === 0) {
+    console.warn("[AetramMD] Cannot subscribe — unauthenticated or empty instrument list.");
+    return;
+  }
+
+  // Deduplicate instruments by segment|token to avoid XTS HTTP 400 Bad Request
+  const uniqueMap = new Map<string, { segment: number; token: string }>();
+  for (const inst of instruments) {
+    if (inst && inst.token) {
+      const key = `${inst.segment}|${inst.token}`;
+      if (!uniqueMap.has(key)) {
+        uniqueMap.set(key, inst);
+      }
+    }
+  }
+  const uniqueInstruments = Array.from(uniqueMap.values());
+
+  console.log(`[AETRAM][SUBSCRIBE] requested=${instruments.length} unique=${uniqueInstruments.length}`);
 
   try {
     const payload = {
-      instruments: instruments.map((inst) => ({
+      instruments: uniqueInstruments.map((inst) => ({
         exchangeSegment: inst.segment,
         exchangeInstrumentID: Number(inst.token),
       })),
@@ -249,45 +333,97 @@ export const subscribeToInstruments = async (
       xtsMessageCode: 1510, // OI updates
     };
 
-    console.log(`[AetramMD] Subscribing to LTP/OI for ${instruments.length} instruments...`);
-    await axios.post(`${baseUrl}/instruments/subscription`, payload, { headers: getHeaders(), timeout: 10000 });
-    await axios.post(`${baseUrl}/instruments/subscription`, payloadOI, { headers: getHeaders(), timeout: 10000 });
+    console.log(`[AETRAM][SUBSCRIBE][REQUEST] count=${uniqueInstruments.length}`);
+    const respLTP = await axios.post(`${baseUrl}/instruments/subscription`, payload, { headers: getHeaders(), timeout: 10000 });
+    const respOI = await axios.post(`${baseUrl}/instruments/subscription`, payloadOI, { headers: getHeaders(), timeout: 10000 });
+
+    if (respLTP.data?.type === "success" || respLTP.status === 200) {
+      for (const inst of uniqueInstruments) {
+        activeSubscribedMap.set(`${inst.segment}|${inst.token}`, inst);
+      }
+      console.log(`[AETRAM][SUBSCRIBE][SUCCESS] count=${uniqueInstruments.length}`);
+    } else {
+      console.warn(`[AETRAM][SUBSCRIBE][WARNING] LTP response:`, JSON.stringify(respLTP.data));
+    }
   } catch (error: any) {
-    if (error?.response?.status === 401) {
+    const status = error?.response?.status;
+    const respBody = error?.response?.data;
+    console.error(`[AETRAM][SUBSCRIBE][FAILED] status=${status || 'N/A'} response=${JSON.stringify(respBody || error?.message || error)}`);
+
+    if (status === 401) {
       console.warn("[AetramMD] Session expired (401) during subscription.");
       clearAetramSession();
       broadcastBrokerStatus("session-expired", "Broker session expired. Please login again.", "module2");
-    } else {
-      console.error("[AetramMD] Subscription request failed:", error?.message || error);
     }
   }
 };
 
 /**
- * Persists normalized LTP/OI events to the in-process live store (Module 2's
- * tracker reads these via readLive — same process, zero Redis commands).
- * Previously each tick issued a direct Redis SET; per-tick REST calls were a
- * major contributor to the monthly command quota blowout.
- *
- * This is business logic (what to do with a tick), kept separate from
- * transport/decoding — see marketDataPipelineService.ts (Phase 7), which
- * decodes the raw packet and publishes LTP_UPDATED/OI_UPDATED. This service
- * only reacts to those normalized events; it no longer parses raw packets.
+ * Unsubscribe from LTP & OI updates for instruments no longer required by any active session
  */
+export const unsubscribeFromInstruments = async (
+  instruments: Array<{ segment: number; token: string }>
+) => {
+  const baseUrl = getBaseUrl();
+  if (!baseUrl || !getMarketDataToken() || instruments.length === 0) return;
+
+  const uniqueMap = new Map<string, { segment: number; token: string }>();
+  for (const inst of instruments) {
+    if (inst && inst.token) {
+      const key = `${inst.segment}|${inst.token}`;
+      uniqueMap.set(key, inst);
+    }
+  }
+  const uniqueInstruments = Array.from(uniqueMap.values());
+  console.log(`[AETRAM][UNSUBSCRIBE] requested=${instruments.length} unique=${uniqueInstruments.length}`);
+
+  try {
+    const payload = {
+      instruments: uniqueInstruments.map((inst) => ({
+        exchangeSegment: inst.segment,
+        exchangeInstrumentID: Number(inst.token),
+      })),
+      xtsMessageCode: 1512,
+    };
+    const payloadOI = { ...payload, xtsMessageCode: 1510 };
+
+    await axios.put(`${baseUrl}/instruments/subscription`, payload, { headers: getHeaders(), timeout: 10000 }).catch(() => {});
+    await axios.put(`${baseUrl}/instruments/subscription`, payloadOI, { headers: getHeaders(), timeout: 10000 }).catch(() => {});
+
+    for (const inst of uniqueInstruments) {
+      const key = `${inst.segment}|${inst.token}`;
+      activeSubscribedMap.delete(key);
+    }
+    console.log(`[AETRAM][UNSUBSCRIBE][SUCCESS] count=${uniqueInstruments.length}`);
+  } catch (error: any) {
+    console.warn(`[AETRAM][UNSUBSCRIBE][FAILED]`, error?.message || error);
+  }
+};
+
+import { onLiveTickReceived } from "./trackerService";
+
 marketDataEvents.on("MARKET_DATA", (event: NormalizedMarketEvent) => {
   recordTickReceived("module2");
 });
 
 marketDataEvents.on("LTP_UPDATED", (event: NormalizedMarketEvent) => {
   if (!event.exchangeInstrumentID || event.lastPrice === null) return;
-  const symbol = tokenToSymbolMap.get(event.exchangeInstrumentID);
-  if (symbol) bufferSet(`ltp:${symbol}`, String(event.lastPrice));
+  const symbol = (event.exchangeSegment ? tokenToSymbolMap.get(`${event.exchangeSegment}|${event.exchangeInstrumentID}`) : null) || tokenToSymbolMap.get(event.exchangeInstrumentID);
+  if (symbol) {
+    bufferSet(`ltp:${symbol}`, String(event.lastPrice));
+    console.log(`[AETRAM][TICK] token=${event.exchangeInstrumentID} symbol=${symbol} ltp=${event.lastPrice}`);
+    console.log(`[REDIS][LIVE] key=ltp:${symbol} value=${event.lastPrice}`);
+    onLiveTickReceived(symbol, event.lastPrice);
+  }
 });
 
 marketDataEvents.on("OI_UPDATED", (event: NormalizedMarketEvent) => {
   if (!event.exchangeInstrumentID || event.openInterest === null) return;
-  const symbol = tokenToSymbolMap.get(event.exchangeInstrumentID);
-  if (symbol) bufferSet(`oi:${symbol}`, String(event.openInterest));
+  const symbol = (event.exchangeSegment ? tokenToSymbolMap.get(`${event.exchangeSegment}|${event.exchangeInstrumentID}`) : null) || tokenToSymbolMap.get(event.exchangeInstrumentID);
+  if (symbol) {
+    bufferSet(`oi:${symbol}`, String(event.openInterest));
+    console.log(`[REDIS][LIVE] key=oi:${symbol} value=${event.openInterest}`);
+  }
 });
 
 /**
@@ -381,7 +517,7 @@ export const getAetramExpiryDates = async (indexSymbol: string, exchangeSegment 
       // Aetram's Market Data API returns 404 for /instruments/expiry.
       // Instead, we fetch the instruments for the index and extract the unique expiries.
       const results = await searchInstruments(name);
-      
+
       const uniqueExpiries = new Set<string>();
       for (const inst of results) {
         // Only look at options (OptionType 3 = CE, 4 = PE, or strings like "CE"/"PE")
