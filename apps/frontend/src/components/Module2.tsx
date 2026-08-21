@@ -145,6 +145,21 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
   const [expiryDate, setExpiryDate] = useState("");
   const [sessionType, setSessionType] = useState<"CE" | "PE" | "mixed">("mixed");
   const [selectedStrikes, setSelectedStrikes] = useState<string[]>([]);
+  const [strikeWarning, setStrikeWarning] = useState<string | null>(null);
+
+  const handleSessionTypeChange = (newType: "CE" | "PE" | "mixed") => {
+    setSessionType(newType);
+    setStrikeWarning(null);
+    setSelectedStrikes((prev) => {
+      if (newType === "CE") {
+        return prev.filter((s) => s.toUpperCase().endsWith("CE")).slice(0, 10);
+      }
+      if (newType === "PE") {
+        return prev.filter((s) => s.toUpperCase().endsWith("PE")).slice(0, 10);
+      }
+      return prev;
+    });
+  };
 
   // 1. Index Symbol Query (API-driven)
   const { data: indexesData, isLoading: isIndexesLoading, isError: isIndexesError } = useQuery({
@@ -206,6 +221,7 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
   useEffect(() => {
     setExpiryDate("");
     setSelectedStrikes([]);
+    setStrikeWarning(null);
   }, [indexSymbol]);
 
   // Auto-select first API-provided expiry when expiries list updates
@@ -223,6 +239,7 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
   // When Expiry changes, clear previously selected strikes
   useEffect(() => {
     setSelectedStrikes([]);
+    setStrikeWarning(null);
   }, [expiryDate]);
 
   // 3. Option Chain / Strikes Query (API-driven)
@@ -259,6 +276,29 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
       console.log("[MODULE2][TRACKER] expiry:", expiryDate);
       console.log("[MODULE2][TRACKER] session type:", sessionType);
       console.log("[MODULE2][TRACKER] selected strikes:", selectedStrikes);
+
+      // Validate contract limits (max 10 CE, max 10 PE, max 20 total)
+      const ceCount = selectedStrikes.filter((st) => st.toUpperCase().endsWith("CE")).length;
+      const peCount = selectedStrikes.filter((st) => st.toUpperCase().endsWith("PE")).length;
+
+      if (selectedStrikes.length > 20) {
+        const msg = "Validation Error: Cannot select more than 20 total option contracts.";
+        console.error("[MODULE2][CONFIG]", msg);
+        alert(msg);
+        throw new Error(msg);
+      }
+      if (ceCount > 10) {
+        const msg = "Validation Error: Cannot select more than 10 Call (CE) strikes.";
+        console.error("[MODULE2][CONFIG]", msg);
+        alert(msg);
+        throw new Error(msg);
+      }
+      if (peCount > 10) {
+        const msg = "Validation Error: Cannot select more than 10 Put (PE) strikes.";
+        console.error("[MODULE2][CONFIG]", msg);
+        alert(msg);
+        throw new Error(msg);
+      }
 
       // Validate that every selected strike contract actually exists in the API response
       const validContractSymbols = new Set<string>();
@@ -299,6 +339,7 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
       // Optimistically clear local session state immediately so UI updates instantly
       setActiveSession(null);
       setSelectedStrikes([]);
+      setStrikeWarning(null);
 
       try {
         const res = await api.post("/api/module2/session/stop", { sessionId: currentSessionId });
@@ -312,10 +353,12 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
       console.log("[MODULE2][TRACKER] Session stopped successfully");
       setActiveSession(null);
       setSelectedStrikes([]);
+      setStrikeWarning(null);
     },
     onError: () => {
       setActiveSession(null);
       setSelectedStrikes([]);
+      setStrikeWarning(null);
     }
   });
 
@@ -328,10 +371,26 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
   const isClosed = marketStatus?.status === "CLOSED";
 
   const toggleStrikeSelection = (strike: string) => {
+    setStrikeWarning(null);
     setSelectedStrikes((prev) => {
       if (prev.includes(strike)) return prev.filter((s) => s !== strike);
-      const maxAllowed = sessionType === "mixed" ? 20 : 10;
-      if (prev.length >= maxAllowed) return prev;
+      const isCE = strike.toUpperCase().endsWith("CE");
+      const isPE = strike.toUpperCase().endsWith("PE");
+      const ceCount = prev.filter((s) => s.toUpperCase().endsWith("CE")).length;
+      const peCount = prev.filter((s) => s.toUpperCase().endsWith("PE")).length;
+
+      if (prev.length >= 20) {
+        setStrikeWarning("Maximum limit of 20 total option contracts reached.");
+        return prev;
+      }
+      if (isCE && ceCount >= 10) {
+        setStrikeWarning("Maximum limit of 10 Call (CE) strikes reached.");
+        return prev;
+      }
+      if (isPE && peCount >= 10) {
+        setStrikeWarning("Maximum limit of 10 Put (PE) strikes reached.");
+        return prev;
+      }
       return [...prev, strike];
     });
   };
@@ -590,7 +649,7 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
                   </label>
                   <SegmentedControl
                     options={[{ key: "CE" as const, label: "CE" }, { key: "PE" as const, label: "PE" }, { key: "mixed" as const, label: "Mixed" }]}
-                    value={sessionType} onChange={setSessionType}
+                    value={sessionType} onChange={handleSessionTypeChange}
                   />
                 </div>
               </div>
@@ -602,9 +661,48 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
                     Select Strikes
                   </span>
                   <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 600, color: "var(--trading-text-muted)" }}>
-                    {selectedStrikes.length}/{sessionType === "mixed" ? 20 : 10} selected
+                    {sessionType === "mixed"
+                      ? `CE: ${selectedStrikes.filter((s) => s.toUpperCase().endsWith("CE")).length}/10 · PE: ${selectedStrikes.filter((s) => s.toUpperCase().endsWith("PE")).length}/10 (Total: ${selectedStrikes.length}/20)`
+                      : sessionType === "CE"
+                      ? `CE: ${selectedStrikes.filter((s) => s.toUpperCase().endsWith("CE")).length}/10 selected`
+                      : `PE: ${selectedStrikes.filter((s) => s.toUpperCase().endsWith("PE")).length}/10 selected`}
                   </span>
                 </div>
+
+                {strikeWarning && (
+                  <div
+                    style={{
+                      marginBottom: 10,
+                      padding: "8px 12px",
+                      borderRadius: 6,
+                      background: "rgba(229, 57, 53, 0.1)",
+                      border: "1px solid rgba(229, 57, 53, 0.3)",
+                      color: "#e53935",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <span>⚠️ {strikeWarning}</span>
+                    <button
+                      onClick={() => setStrikeWarning(null)}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "#e53935",
+                        cursor: "pointer",
+                        fontSize: 16,
+                        lineHeight: 1,
+                        padding: "0 4px",
+                      }}
+                      title="Dismiss"
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
 
                 {!expiryDate ? (
                   <div style={{ padding: "16px", textAlign: "center", fontFamily: "'Inter', sans-serif", fontSize: 14, color: "var(--trading-text-muted)", background: "var(--trading-bg)", border: "1.5px dashed var(--trading-border)", borderRadius: 8 }}>

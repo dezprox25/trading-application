@@ -284,21 +284,22 @@ const startServer = async () => {
   }
   initCandleHistory();
 
-  // ── Step 3: Initialize services that depend on DB being ready ────────────
-  // Only start these after the DB connection is confirmed.
+  // ── Step 3: Initialize services ──────────────────────────────────────────
+  try {
+    initTrackerEngine();
+  } catch (err) {
+    console.warn("[Server] TrackerEngine init warning:", err);
+  }
+
+  // Services strictly requiring database connection
   if (dbReady) {
-    try {
-      initTrackerEngine();
-    } catch (err) {
-      console.warn("[Server] TrackerEngine init warning:", err);
-    }
     try {
       initCandleArchive();
     } catch (err) {
       console.warn("[Server] CandleArchive init warning:", err);
     }
   } else {
-    console.warn("[Server] Skipping TrackerEngine/CandleArchive init — DB not ready.");
+    console.warn("[Server] Skipping CandleArchive init — DB not ready.");
   }
 
   // Warm up in-memory OI state from Redis (safe to run even if Redis is offline)

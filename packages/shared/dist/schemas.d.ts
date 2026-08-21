@@ -48,11 +48,14 @@ export declare const WatchlistSchema: z.ZodObject<{
     symbols: string[];
     columnPrefs?: Record<string, boolean> | undefined;
 }>;
+export declare const isCallStrike: (symbol: string) => boolean;
+export declare const isPutStrike: (symbol: string) => boolean;
+export declare const SelectedStrikesSchema: z.ZodEffects<z.ZodArray<z.ZodString, "many">, string[], string[]>;
 export declare const Module2SessionStartSchema: z.ZodObject<{
     sessionType: z.ZodEnum<["CE", "PE", "mixed"]>;
     indexSymbol: z.ZodString;
     expiryDate: z.ZodString;
-    selectedStrikes: z.ZodArray<z.ZodString, "many">;
+    selectedStrikes: z.ZodEffects<z.ZodArray<z.ZodString, "many">, string[], string[]>;
 }, "strip", z.ZodTypeAny, {
     sessionType: "CE" | "PE" | "mixed";
     indexSymbol: string;
@@ -65,7 +68,7 @@ export declare const Module2SessionStartSchema: z.ZodObject<{
     selectedStrikes: string[];
 }>;
 export declare const Module2StrikeUpdateSchema: z.ZodObject<{
-    selectedStrikes: z.ZodArray<z.ZodString, "many">;
+    selectedStrikes: z.ZodEffects<z.ZodArray<z.ZodString, "many">, string[], string[]>;
 }, "strip", z.ZodTypeAny, {
     selectedStrikes: string[];
 }, {

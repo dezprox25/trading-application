@@ -1,6 +1,6 @@
 import { Server, Socket } from "socket.io";
 import { verifyAccessToken } from "../utils/token";
-import { setOnTickReceived, subscribeOptionTokens, setSelectedOptionSymbols } from "./dataFeed";
+import { setOnTickReceived, subscribeOptionTokens } from "./dataFeed";
 import { setOnPivotsUpdated, evaluateIndicators } from "./pivotService";
 import { Tick, PivotLevels } from "@stock/shared";
 import { getLatestModule1OiMetrics } from "./module1OiService";
@@ -8,19 +8,6 @@ import { isZebuLiveConnected } from "./zebuMarketDataClient";
 import { resolveOptionInstrument } from "./instrumentTokenService";
 
 let ioServer: Server | null = null;
-
-// ── Selected option strikes tracking across active client sockets ─────────────
-const socketOptionSelections = new Map<string, Set<string>>();
-
-const syncSelectedOptionSymbols = () => {
-  const allSelected = new Set<string>();
-  for (const syms of socketOptionSelections.values()) {
-    for (const sym of syms) {
-      allSelected.add(sym);
-    }
-  }
-  setSelectedOptionSymbols(Array.from(allSelected));
-};
 
 // ── Market readiness tracking ─────────────────────────────────────────────────
 // Tracks whether the first valid NIFTY-FUT tick has been received this session.
@@ -94,8 +81,7 @@ export const initSocketServer = (io: Server) => {
     });
 
     // 1b. On-demand option subscribe: resolves the user's exact selected strikes to NFO
-    // tokens, subscribes them on the live Zebu connection, and registers them in dataFeed's
-    // activeSelectedOptionSymbols set so ONLY user-selected strikes are buffered/aggregated/persisted.
+    // tokens and subscribes them on the live Zebu connection.
     socket.on(
       "subscribe:options",
       async (data: { instrument: string; expiry: string; callStrike?: number | null; putStrike?: number | null; type: string }) => {
@@ -110,7 +96,6 @@ export const initSocketServer = (io: Server) => {
         if (type !== "Call" && putStrike) wants.push({ strike: putStrike, optionType: "PE" });
 
         const resolvedTokens: { exchange: string; token: string; symbol: string }[] = [];
-        const selectedSymbolsForSocket = new Set<string>();
 
         for (const w of wants) {
           const letter = w.optionType === "CE" ? "C" : "P";
@@ -119,14 +104,10 @@ export const initSocketServer = (io: Server) => {
           if (resolved) {
             console.log(`[Feed:SUB] On-demand resolve OK — ${resolved.symbol} → ${resolved.exchange}|${resolved.token} (requested by ${socket.id})`);
             resolvedTokens.push(resolved);
-            selectedSymbolsForSocket.add(resolved.symbol);
           } else {
             console.warn(`[Feed:SUB] On-demand resolve FAILED — ${wantedSymbol} not found in NFO master.`);
           }
         }
-
-        socketOptionSelections.set(socket.id, selectedSymbolsForSocket);
-        syncSelectedOptionSymbols();
 
         if (resolvedTokens.length > 0) {
           subscribeOptionTokens(resolvedTokens);
@@ -174,8 +155,6 @@ export const initSocketServer = (io: Server) => {
 
     socket.on("disconnect", () => {
       console.log(`[Socket] Client disconnected: ${socket.id}`);
-      socketOptionSelections.delete(socket.id);
-      syncSelectedOptionSymbols();
     });
   });
 

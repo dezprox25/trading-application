@@ -817,55 +817,98 @@ const getMinutesSinceStart = (): number => {
  */
 export const onLiveTickReceived = (symbol: string, ltp: number) => {
   if (ltp <= 0) return;
+  const now = new Date();
+  const currentMinute = getMinutesSinceStart();
+  const timeString = now.toLocaleTimeString("en-US", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+
   for (const sessionId of Object.keys(activeSessions)) {
     const session = activeSessions[sessionId];
     if (session.selectedStrikes.includes(symbol)) {
-      const strikeState = session.strikes[symbol];
-      if (strikeState) {
-        if (strikeState.dayOpen === 0) {
-          strikeState.dayOpen = ltp;
-          strikeState.dayHigh = ltp;
-          strikeState.dayLow = ltp;
-          session.dayOpenPrices[symbol] = ltp;
-          console.log(`[TRACKER][BASELINE] Initialized Day Open baseline for ${symbol}: ${ltp}`);
-        } else {
-          strikeState.dayHigh = strikeState.dayHigh > 0 ? Math.max(strikeState.dayHigh, ltp) : ltp;
-          strikeState.dayLow = (strikeState.dayLow && strikeState.dayLow > 0) ? Math.min(strikeState.dayLow, ltp) : ltp;
-        }
-
-        const denominator = strikeState.dayOpen || ltp;
-        strikeState.pctChange = denominator > 0 ? Number((((ltp - denominator) / denominator) * 100).toFixed(2)) : 0;
-
-        // Update current active minute cell in grid with latest tick price and flags
-        if (strikeState.grid && strikeState.grid.length > 0) {
-          const latestCell = strikeState.grid[strikeState.grid.length - 1];
-          latestCell.ltp = ltp;
-          latestCell.isHigh = ltp === strikeState.dayHigh;
-          latestCell.isLow = ltp === strikeState.dayLow;
-        }
-
-        broadcastTrackerUpdate(sessionId, {
+      let strikeState = session.strikes[symbol];
+      if (!strikeState) {
+        strikeState = {
           strike: symbol,
-          cell: null,
-          state: {
-            ltp: ltp,
-            dayOpen: strikeState.dayOpen,
-            dayHigh: strikeState.dayHigh,
-            dayLow: strikeState.dayLow,
-            trendBadge: strikeState.trendBadge,
-            isDowntrendActive: strikeState.isDowntrendActive,
-            isDeepLoss: strikeState.isDeepLoss,
-            pctChange: strikeState.pctChange,
-            oiLatest: strikeState.oiLatest,
-            oiBuyLatest: strikeState.oiBuyLatest,
-            oiSellLatest: strikeState.oiSellLatest,
-            oiHigh: strikeState.oiHigh,
-            oiLow: strikeState.oiLow,
-            oiMean: strikeState.oiMean
-          },
-          futuresOI: session.futuresOI
-        });
+          dayOpen: ltp,
+          dayHigh: ltp,
+          dayLow: ltp,
+          grid: [],
+          trendBadge: "FLAT",
+          isDowntrendActive: false,
+          isDeepLoss: false,
+          pctChange: 0,
+          oiLatest: 0,
+          oiBuyLatest: 0,
+          oiSellLatest: 0,
+          oiHigh: 0,
+          oiLow: 0,
+          oiMean: 0,
+          _oiRunningSum: 0,
+          _oiRowCount: 0
+        } as any;
+        session.strikes[symbol] = strikeState;
       }
+
+      if (strikeState.dayOpen === 0) {
+        strikeState.dayOpen = ltp;
+        strikeState.dayHigh = ltp;
+        strikeState.dayLow = ltp;
+        session.dayOpenPrices[symbol] = ltp;
+        console.log(`[TRACKER][BASELINE] Initialized Day Open baseline for ${symbol}: ${ltp}`);
+      } else {
+        strikeState.dayHigh = strikeState.dayHigh > 0 ? Math.max(strikeState.dayHigh, ltp) : ltp;
+        strikeState.dayLow = (strikeState.dayLow && strikeState.dayLow > 0) ? Math.min(strikeState.dayLow, ltp) : ltp;
+      }
+
+      const denominator = strikeState.dayOpen || ltp;
+      strikeState.pctChange = denominator > 0 ? Number((((ltp - denominator) / denominator) * 100).toFixed(2)) : 0;
+
+      // Find or create current active minute cell in grid
+      let currentCell = strikeState.grid.find(c => c.timestamp === timeString || c.minute === currentMinute);
+      if (currentCell) {
+        currentCell.ltp = ltp;
+        currentCell.isHigh = ltp === strikeState.dayHigh;
+        currentCell.isLow = ltp === strikeState.dayLow;
+      } else {
+        currentCell = {
+          ltp,
+          minute: currentMinute,
+          timestamp: timeString,
+          isHigh: ltp === strikeState.dayHigh,
+          isLow: ltp === strikeState.dayLow,
+          oi: strikeState.oiLatest || 0,
+          oiDelta: 0,
+          oiBuy: strikeState.oiBuyLatest || 0,
+          oiSell: strikeState.oiSellLatest || 0
+        };
+        strikeState.grid.push(currentCell);
+      }
+
+      console.log(`[SOCKET][BROADCAST][TICK] session=${sessionId} symbol=${symbol} minute=${timeString} ltp=${ltp}`);
+      broadcastTrackerUpdate(sessionId, {
+        strike: symbol,
+        cell: currentCell,
+        state: {
+          ltp: ltp,
+          dayOpen: strikeState.dayOpen,
+          dayHigh: strikeState.dayHigh,
+          dayLow: strikeState.dayLow,
+          trendBadge: strikeState.trendBadge,
+          isDowntrendActive: strikeState.isDowntrendActive,
+          isDeepLoss: strikeState.isDeepLoss,
+          pctChange: strikeState.pctChange,
+          oiLatest: strikeState.oiLatest,
+          oiBuyLatest: strikeState.oiBuyLatest,
+          oiSellLatest: strikeState.oiSellLatest,
+          oiHigh: strikeState.oiHigh,
+          oiLow: strikeState.oiLow,
+          oiMean: strikeState.oiMean
+        },
+        futuresOI: session.futuresOI
+      });
     }
   }
 };

@@ -73,23 +73,6 @@ export const setOnTickReceived = (callback: TickCallback) => {
   onTickReceived = callback;
 };
 
-// ── Active Selected Option Symbols Registry ─────────────────────────────────
-// Ensures Module 1 ONLY buffers, ingests, aggregates, and persists option ticks
-// for strikes explicitly selected by active user sessions.
-const activeSelectedOptionSymbols = new Set<string>();
-
-export const setSelectedOptionSymbols = (symbols: string[]) => {
-  activeSelectedOptionSymbols.clear();
-  for (const sym of symbols) {
-    activeSelectedOptionSymbols.add(sym);
-  }
-  console.log(`[DataFeed] Active selected option symbols updated (${activeSelectedOptionSymbols.size}): ${Array.from(activeSelectedOptionSymbols).join(", ")}`);
-};
-
-export const isOptionSymbolSelected = (symbol: string): boolean => {
-  return activeSelectedOptionSymbols.has(symbol);
-};
-
 // ── Reconnection state ────────────────────────────────────────────────────────
 
 let storedUserId: string | null = null;
@@ -327,11 +310,6 @@ export const processIncomingTick = async (tick: Tick) => {
   const isFut  = symbol.endsWith("-FUT") || symbol.includes("FUT");
   const isSpot = symbol === "NIFTY-SPOT";
   const isOpt  = symbol.startsWith("NIFTY") && /[CP]\d+$/.test(symbol);
-
-  // Only process, buffer, aggregate, and persist option ticks that match user-selected strikes
-  if (isOpt && !isOptionSymbolSelected(symbol)) {
-    return;
-  }
 
   if (isFut || isSpot || isOpt) {
     await aggregateOHLC(tick,   1,   "1m");

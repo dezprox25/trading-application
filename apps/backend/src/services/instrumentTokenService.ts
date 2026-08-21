@@ -251,12 +251,10 @@ const buildActiveTokens = (rows: MasterRow[], atmStrike: number, atmIsReliable: 
   const nearestOptionExpiry = nearestExpiry.toISOString().slice(0, 10);
   console.log(`[InstrumentTokens] Nearest option expiry: ${nearestOptionExpiry}`);
 
-  // Module 1 selected-strike storage model: do NOT bulk-subscribe option strikes at connect time.
-  // Option contracts are subscribed on-demand when the user selects CE/PE strikes in Module 1.
-  const ceTokens: string[] = [];
-  const peTokens: string[] = [];
+  const strikeRadius = atmIsReliable ? 1000 : 5000;
+  const { ceTokens, peTokens } = selectOptionTokens(rows, nearestExpiry, atmStrike, strikeRadius);
 
-  console.log(`[InstrumentTokens] Connected with core tokens (FUT: ${futToken ? "set" : "none"}). Option tokens will be subscribed on-demand when selected by user.`);
+  console.log(`[InstrumentTokens] ATM=${Math.round(atmStrike / 50) * 50} (reliable=${atmIsReliable}, radius=${strikeRadius}): ${ceTokens.length} CE + ${peTokens.length} PE tokens selected.`);
 
   return { futToken, ceTokens, peTokens, fetchedAt: new Date(), nearestOptionExpiry, futExpiry, atmIsReliable };
 };

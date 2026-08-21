@@ -193,15 +193,28 @@ export const useStore = create<AppState>((set) => ({
     }),
   appendTrackerCell: (strike, cell, stateUpdate) =>
     set((state) => {
-      if (!state.activeSession || !state.activeSession.strikes[strike]) return {};
+      if (!state.activeSession) return {};
 
-      const currentStrikeState = state.activeSession.strikes[strike];
-      const gridCopy = [...currentStrikeState.grid];
+      const currentStrikeState = state.activeSession.strikes?.[strike] || {
+        strike,
+        dayOpen: (stateUpdate as any)?.dayOpen || (stateUpdate as any)?.ltp || 0,
+        dayHigh: (stateUpdate as any)?.dayHigh || 0,
+        dayLow: (stateUpdate as any)?.dayLow || 0,
+        grid: [],
+        trendBadge: "FLAT",
+        isDowntrendActive: false,
+        isDeepLoss: false,
+        pctChange: 0
+      };
+      const gridCopy = [...(currentStrikeState.grid || [])];
 
       if (cell) {
         const existingCellIdx = gridCopy.findIndex((c) => c.minute === cell.minute || c.timestamp === cell.timestamp);
         if (existingCellIdx >= 0) {
-          gridCopy[existingCellIdx] = cell;
+          gridCopy[existingCellIdx] = {
+            ...gridCopy[existingCellIdx],
+            ...cell
+          };
         } else {
           gridCopy.push(cell);
         }
