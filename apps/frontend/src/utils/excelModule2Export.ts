@@ -1,6 +1,10 @@
 import ExcelJS from "exceljs";
 
-export const exportModule2ToExcel = async (session: any, sortedTimestamps: string[]) => {
+export const exportModule2ToExcel = async (
+  session: any,
+  sortedTimestamps: string[],
+  selectedOHLCFields: string[] = ["open", "high", "low", "close"]
+) => {
   if (!session || !session.strikes) {
     console.warn("No active session data to export.");
     return;
@@ -17,11 +21,38 @@ export const exportModule2ToExcel = async (session: any, sortedTimestamps: strin
   const ceStrikes = selectedStrikes.filter((s) => s.endsWith("CE"));
   const peStrikes = selectedStrikes.filter((s) => s.endsWith("PE"));
 
+  // Dynamic OHLC fields configuration
+  const ohlcDefs = [
+    {
+      id: "open",
+      header: "Day Open",
+      getVal: (s: any) => (typeof s.dayOpen === "number" && !isNaN(s.dayOpen) && s.dayOpen > 0 ? Math.round(s.dayOpen) : 0),
+    },
+    {
+      id: "high",
+      header: "Day High",
+      getVal: (s: any) => (typeof s.dayHigh === "number" && !isNaN(s.dayHigh) && s.dayHigh > 0 ? Math.round(s.dayHigh) : 0),
+    },
+    {
+      id: "low",
+      header: "Day Low",
+      getVal: (s: any) => (typeof s.dayLow === "number" && !isNaN(s.dayLow) && s.dayLow > 0 ? Math.round(s.dayLow) : 0),
+    },
+    {
+      id: "close",
+      header: "LTP / Close",
+      getVal: (s: any) => {
+        const ltp = (s.grid && s.grid.length > 0) ? s.grid[s.grid.length - 1]?.ltp : s.dayOpen;
+        return typeof ltp === "number" && !isNaN(ltp) && ltp > 0 ? Math.round(ltp) : 0;
+      },
+    },
+  ].filter((d) => selectedOHLCFields.includes(d.id));
+
   const buildSheet = (sheetName: string, strikeKeys: string[], headerColor: string) => {
     const sheet = workbook.addWorksheet(sheetName);
 
-    // Columns definition: S.No., Strike, Trend Badge, % Change, Day High, Day Low, then Minute Timestamps
-    const baseHeaders = ["S.No.", "Strike", "Trend Badge", "% Change", "Day High", "Day Low"];
+    // Base headers: S.No., Strike, Trend Badge, % Change + selected OHLC fields + minute timestamps
+    const baseHeaders = ["S.No.", "Strike", "Trend Badge", "% Change", ...ohlcDefs.map((d) => d.header)];
     const allHeaders = [...baseHeaders, ...sortedTimestamps];
 
     // Add Header Row
@@ -40,34 +71,31 @@ export const exportModule2ToExcel = async (session: any, sortedTimestamps: strin
     sheet.getColumn(2).width = 14; // Strike
     sheet.getColumn(3).width = 14; // Trend Badge
     sheet.getColumn(4).width = 12; // % Change
-    sheet.getColumn(5).width = 12; // Day High
-    sheet.getColumn(6).width = 12; // Day Low
+
+    ohlcDefs.forEach((_, idx) => {
+      sheet.getColumn(5 + idx).width = 12;
+    });
 
     sortedTimestamps.forEach((_, idx) => {
-      sheet.getColumn(7 + idx).width = 10;
+      sheet.getColumn(5 + ohlcDefs.length + idx).width = 10;
     });
 
-    // High column Min & Max across strikeKeys in this sheet
-    const highValues: number[] = [];
-    strikeKeys.forEach((key) => {
-      const s = session.strikes[key];
-      if (s && typeof s.dayHigh === "number" && !isNaN(s.dayHigh) && s.dayHigh > 0) {
-        highValues.push(s.dayHigh);
-      }
+    // Min & Max across strikeKeys in this sheet for each active OHLC column
+    const ohlcMinMax: Record<string, { max: number | null; min: number | null }> = {};
+    ohlcDefs.forEach((d) => {
+      const vals: number[] = [];
+      strikeKeys.forEach((key) => {
+        const s = session.strikes[key];
+        if (s) {
+          const val = d.getVal(s);
+          if (val > 0) vals.push(val);
+        }
+      });
+      ohlcMinMax[d.id] = {
+        max: vals.length > 0 ? Math.max(...vals) : null,
+        min: vals.length > 0 ? Math.min(...vals) : null,
+      };
     });
-    const highMax = highValues.length > 0 ? Math.max(...highValues) : null;
-    const highMin = highValues.length > 0 ? Math.min(...highValues) : null;
-
-    // Low column Min & Max across strikeKeys in this sheet
-    const lowValues: number[] = [];
-    strikeKeys.forEach((key) => {
-      const s = session.strikes[key];
-      if (s && typeof s.dayLow === "number" && !isNaN(s.dayLow) && s.dayLow > 0) {
-        lowValues.push(s.dayLow);
-      }
-    });
-    const lowMax = lowValues.length > 0 ? Math.max(...lowValues) : null;
-    const lowMin = lowValues.length > 0 ? Math.min(...lowValues) : null;
 
     // Populate Rows
     strikeKeys.forEach((strikeKey, index) => {
@@ -91,8 +119,7 @@ export const exportModule2ToExcel = async (session: any, sortedTimestamps: strin
         strikeKey,
         strikeData.trendBadge || "FLAT",
         typeof strikeData.pctChange === "number" ? `${strikeData.pctChange > 0 ? "+" : ""}${strikeData.pctChange.toFixed(2)}%` : "0.00%",
-        typeof strikeData.dayHigh === "number" ? Math.round(strikeData.dayHigh) : 0,
-        typeof strikeData.dayLow === "number" ? Math.round(strikeData.dayLow) : 0,
+        ...ohlcDefs.map((d) => d.getVal(strikeData)),
       ];
 
       // Add Minute Ticks
@@ -115,35 +142,25 @@ export const exportModule2ToExcel = async (session: any, sortedTimestamps: strin
           right: { style: "thin", color: { argb: "E2E8F0" } },
         };
 
-        // Col 5: Day High cell
-        if (colNumber === 5) {
-          const isHighHighest = highMax !== null && highMin !== null && highMax !== highMin && strikeData.dayHigh === highMax;
-          const isHighLowest  = highMax !== null && highMin !== null && highMax !== highMin && strikeData.dayHigh === highMin;
-          if (isHighHighest) {
+        // Active OHLC cells (Col 5 to 4 + ohlcDefs.length)
+        if (colNumber >= 5 && colNumber < 5 + ohlcDefs.length) {
+          const ohlcIdx = colNumber - 5;
+          const def = ohlcDefs[ohlcIdx];
+          const val = def.getVal(strikeData);
+          const { max, min } = ohlcMinMax[def.id] || { max: null, min: null };
+          if (max !== null && min !== null && max !== min && val === max && val > 0) {
             cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "1E3A8A" } }; // Dark Blue
             cell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FFFFFF" } };
-          } else if (isHighLowest) {
+          } else if (max !== null && min !== null && max !== min && val === min && val > 0) {
             cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "111827" } }; // Black
             cell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FFFFFF" } };
           }
         }
 
-        // Col 6: Day Low cell
-        if (colNumber === 6) {
-          const isLowHighest = lowMax !== null && lowMin !== null && lowMax !== lowMin && strikeData.dayLow === lowMax;
-          const isLowLowest  = lowMax !== null && lowMin !== null && lowMax !== lowMin && strikeData.dayLow === lowMin;
-          if (isLowHighest) {
-            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "1E3A8A" } }; // Dark Blue
-            cell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FFFFFF" } };
-          } else if (isLowLowest) {
-            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "111827" } }; // Black
-            cell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FFFFFF" } };
-          }
-        }
-
-        // Col 7+: Minute Timestamp cells
-        if (colNumber >= 7) {
-          const tsIdx = colNumber - 7;
+        // Minute Timestamp cells (Col 5 + ohlcDefs.length onwards)
+        const minStartCol = 5 + ohlcDefs.length;
+        if (colNumber >= minStartCol) {
+          const tsIdx = colNumber - minStartCol;
           const ts = sortedTimestamps[tsIdx];
           const gridCell = (strikeData.grid || []).find((c: any) => c.timestamp === ts);
           if (gridCell && typeof gridCell.ltp === "number" && !isNaN(gridCell.ltp) && gridCell.ltp > 0) {
@@ -193,3 +210,4 @@ export const exportModule2ToExcel = async (session: any, sortedTimestamps: strin
   document.body.removeChild(anchor);
   window.URL.revokeObjectURL(url);
 };
+

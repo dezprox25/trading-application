@@ -58,31 +58,59 @@ export const useSocket = () => {
       return;
     }
 
-    console.log("[Socket] Connecting to server (token present)...");
+    // Reuse existing alive socket if token is unchanged
+    if (socketRef.current && socketRef.current.connected) {
+      return;
+    }
+
+    console.log("[Socket] Initializing Module 1 socket (token present)...");
     const socketOpts = {
-      auth: { token: accessToken },
-      reconnectionAttempts: 10,
-      reconnectionDelay: 3000,
+      auth: (cb: (data: object) => void) => {
+        const currentToken = useStore.getState().accessToken || accessToken;
+        cb({ token: currentToken });
+      },
+      transports: ["websocket", "polling"],
+      withCredentials: true,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000,
     };
+
     const socket = SOCKET_URL ? io(SOCKET_URL, socketOpts) : io(socketOpts);
     socketRef.current = socket;
 
     socket.on("connect", () => {
-      console.log("[Socket] Connected — ID:", socket.id);
+      const transportName = (socket.io?.engine?.transport?.name) || "unknown";
+      console.log(`[Socket] Connected — ID: ${socket.id} (Transport: ${transportName})`);
+
       // Update dashboard status to live on successful (re)connect
       const dash = useDashStore.getState();
-      if (dash.feedStatus === "reconnecting" || dash.feedStatus === "no-network") {
-        // Don't override — let broker_status event set the final state
+      if (
+        dash.feedStatus === "reconnecting" ||
+        dash.feedStatus === "no-network" ||
+        dash.feedStatus === "api-error"
+      ) {
+        dash.bumpReloadKey();
       }
 
       // Always subscribe to core instruments for live Spot/Future display.
       // These are permanent — independent of Generate or any config selection.
       socket.emit("join:symbol", "NIFTY-SPOT");
       socket.emit("join:symbol", "NIFTY-FUT");
+      console.log("[Socket] Subscribed to core symbols (NIFTY-SPOT, NIFTY-FUT)");
 
       // Re-subscribe to all active rooms on reconnect
-      socket.emit("join:symbol", selectedSymbol);
-      if (activeSessionId) socket.emit("join:tracker", activeSessionId);
+      const currentSelectedSymbol = useStore.getState().selectedSymbol;
+      if (currentSelectedSymbol) {
+        socket.emit("join:symbol", currentSelectedSymbol);
+      }
+
+      const currentActiveSessionId = useStore.getState().activeSession?.sessionId;
+      if (currentActiveSessionId) {
+        socket.emit("join:tracker", currentActiveSessionId);
+      }
 
       // Re-request on-demand option token subscription too — a reconnect means the
       // backend's broker connection may have restarted, so its runtime CE/PE subscriptions
@@ -91,13 +119,6 @@ export const useSocket = () => {
       if (dashCfg.isGenerated && dashCfg.expiryDate && (dashCfg.callStrike || dashCfg.putStrike)) {
         const exFmt = formatExpiryForBroker(dashCfg.expiryDate);
 
-        // Re-join the CE/PE tick rooms themselves. A reconnect hands the client a brand-new
-        // socket.io connection with none of the previous room memberships — the dedicated
-        // join/leave effect below only re-fires when the selected strikes CHANGE, so on a
-        // bare reconnect (same strikes) it never re-runs. Without this, `subscribe:options`
-        // still makes the backend receive and broadcast CE/PE ticks (server-side room), but
-        // this client is no longer in that room to hear them — Call/Put silently stop
-        // updating while Future/Spot (joined above) keep working, until a full page refresh.
         if (dashCfg.type !== "Put" && dashCfg.callStrike) {
           socket.emit("join:symbol", `${dashCfg.instrument}${exFmt}C${dashCfg.callStrike}`);
         }
@@ -112,10 +133,10 @@ export const useSocket = () => {
           putStrike: dashCfg.type !== "Call" ? dashCfg.putStrike : null,
           type: dashCfg.type,
         });
-        console.log("[Socket] subscribe:options + CE/PE room rejoin re-sent on (re)connect");
+        console.log("[Socket] Module 1 option subscriptions restored on (re)connect");
       }
 
-      const room = module1IndicatorRoom;
+      const room = useStore.getState().module1IndicatorRoom;
       if (room) {
         const parsed = parseIndicatorRoom(room);
         if (parsed) socket.emit("join:indicators", parsed);
@@ -123,13 +144,21 @@ export const useSocket = () => {
     });
 
     socket.on("connect_error", (err) => {
-      console.error("[Socket] Connection error:", err.message);
+      console.warn(`[Socket] Connection error: ${err.message}`);
+    });
+
+    socket.on("reconnect_attempt", (attempt) => {
+      console.log(`[Socket] Reconnecting: attempt #${attempt}...`);
+    });
+
+    socket.on("reconnect", (attempt) => {
+      console.log(`[Socket] Reconnected successfully after ${attempt} attempts.`);
     });
 
     socket.on("disconnect", (reason) => {
-      console.log("[Socket] Disconnected — reason:", reason);
+      console.log(`[Socket] Disconnected — reason: ${reason}`);
       // Only update to no-network for transport-level disconnects
-      if (reason === "transport close" || reason === "transport error") {
+      if (reason === "transport close" || reason === "transport error" || reason === "ping timeout") {
         const dash = useDashStore.getState();
         if (dash.feedStatus === "live") {
           useDashStore.getState().setFeedStatus("no-network");

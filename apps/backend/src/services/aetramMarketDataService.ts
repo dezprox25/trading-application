@@ -60,7 +60,14 @@ const getApiSecret = () => (process.env.MOD2_API_SECRET || "").trim();
 const getBaseUrl = () => (process.env.AETRAM_MARKETDATA_API_BASE_URL || "").trim();
 const getAuthUrl = () => (process.env.AETRAM_MARKETDATA_AUTH_URL || "").trim();
 
-const parseDateToYMD = (val: string | Date | number): string => {
+export const parseDateToYMD = (val: string | Date | number): string => {
+  if (!val) return "";
+  if (typeof val === "string") {
+    const isoMatch = val.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (isoMatch) {
+      return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+    }
+  }
   const d = new Date(val);
   if (isNaN(d.getTime())) return "";
   const y = d.getFullYear();
@@ -130,7 +137,14 @@ export const searchInstruments = async (searchString: string): Promise<AetramIns
   }
 
   const baseUrl = getBaseUrl();
-  if (!baseUrl || !getMarketDataToken()) return [];
+  if (!baseUrl) return [];
+
+  // Ensure authenticated session
+  if (!getMarketDataToken()) {
+    await loginToAetram();
+  }
+
+  if (!getMarketDataToken()) return [];
 
   try {
     const searchUrl = `${baseUrl}/search/instruments?searchString=${encodeURIComponent(searchString)}`;
@@ -511,33 +525,43 @@ const computeUpcomingThursdays = (count: number): string[] => {
 export const getAetramExpiryDates = async (indexSymbol: string, exchangeSegment = 2): Promise<string[]> => {
   const baseUrl = getBaseUrl();
 
-  if (baseUrl && getMarketDataToken()) {
-    try {
-      const name = indexSymbol.replace(/50$/i, "").replace(/FIFTY$/i, "").toUpperCase();
-      // Aetram's Market Data API returns 404 for /instruments/expiry.
-      // Instead, we fetch the instruments for the index and extract the unique expiries.
-      const results = await searchInstruments(name);
+  if (baseUrl) {
+    if (!getMarketDataToken()) {
+      await loginToAetram();
+    }
 
-      const uniqueExpiries = new Set<string>();
-      for (const inst of results) {
-        // Only look at options (OptionType 3 = CE, 4 = PE, or strings like "CE"/"PE")
-        const optType = String(inst.optionType || "");
-        if (!optType || (optType !== "3" && optType !== "4" && !optType.toUpperCase().includes("E"))) {
-          continue;
+    if (getMarketDataToken()) {
+      try {
+        const name = indexSymbol.replace(/50$/i, "").replace(/FIFTY$/i, "").toUpperCase();
+        // Aetram's Market Data API returns 404 for /instruments/expiry.
+        // Instead, we fetch the instruments for the index and extract the unique expiries.
+        const results = await searchInstruments(name);
+
+        const todayYmd = new Date().toISOString().slice(0, 10);
+        const uniqueExpiries = new Set<string>();
+
+        for (const inst of results) {
+          // Only look at options (OptionType 3 = CE, 4 = PE, or strings like "CE"/"PE")
+          const optType = String(inst.optionType || "");
+          if (!optType || (optType !== "3" && optType !== "4" && !optType.toUpperCase().includes("E"))) {
+            continue;
+          }
+
+          const rawExp = inst.expiryDate || "";
+          const ymd = parseDateToYMD(rawExp);
+          if (ymd && ymd >= todayYmd) {
+            uniqueExpiries.add(ymd);
+          }
         }
 
-        const expiry = inst.expiryDate || "";
-        const expiryDateObj = new Date(expiry);
-        if (!isNaN(expiryDateObj.getTime())) {
-          uniqueExpiries.add(expiryDateObj.toISOString().slice(0, 10));
+        if (uniqueExpiries.size > 0) {
+          const sorted = Array.from(uniqueExpiries).sort();
+          console.log(`[AetramMD] Dynamic expiries found for ${indexSymbol}: ${sorted.length} dates [${sorted.slice(0, 5).join(", ")}...]`);
+          return sorted;
         }
+      } catch (e: any) {
+        console.warn(`[AetramMD] Failed to fetch real expiries for ${indexSymbol}: ${e.message}. Falling back.`);
       }
-
-      if (uniqueExpiries.size > 0) {
-        return Array.from(uniqueExpiries).sort();
-      }
-    } catch (e: any) {
-      console.warn(`[AetramMD] Failed to fetch real expiries for ${indexSymbol}: ${e.message}. Falling back.`);
     }
   }
 

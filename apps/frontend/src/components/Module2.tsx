@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useStore } from "../store/useStore";
 import { api } from "../utils/api";
@@ -70,38 +70,6 @@ function TrendBadge({ badge }: { badge: string }) {
   );
 }
 
-function SegmentedControl<K extends string>({
-  options, value, onChange, size = "sm",
-}: {
-  options: { key: K; label: string }[];
-  value: K;
-  onChange: (v: K) => void;
-  size?: "sm" | "xs";
-}) {
-  return (
-    <div style={{ display: "inline-flex", gap: 3, padding: 3, background: "var(--trading-bg)", border: "1.5px solid var(--trading-border)", borderRadius: 8 }}>
-      {options.map((o) => (
-        <button
-          key={o.key}
-          onClick={() => onChange(o.key)}
-          style={{
-            padding: size === "xs" ? "4px 10px" : "6px 14px",
-            borderRadius: 6, border: "none",
-            fontFamily: "'Inter', sans-serif",
-            fontSize: size === "xs" ? 11 : 12, fontWeight: 700,
-            cursor: "pointer", transition: "all 0.15s",
-            background: value === o.key ? GREEN : "transparent",
-            color: value === o.key ? "#fff" : "var(--trading-text-muted)",
-            boxShadow: value === o.key ? "0 1px 6px rgba(4,120,87,0.25)" : "none",
-          }}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 function SelectField({ label, value, onChange, options, disabled = false }: {
   label: string; value: string;
   onChange: (v: string) => void;
@@ -109,7 +77,7 @@ function SelectField({ label, value, onChange, options, disabled = false }: {
   disabled?: boolean;
 }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 170, flex: 1 }}>
       <label style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 600, color: "var(--trading-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
         {label}
       </label>
@@ -119,18 +87,277 @@ function SelectField({ label, value, onChange, options, disabled = false }: {
           disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
           style={{
-            width: "100%", padding: "9px 32px 9px 12px",
-            fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 500,
+            width: "100%", padding: "8px 32px 8px 12px",
+            fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 600,
             color: "var(--trading-text-active)", background: "var(--trading-bg)",
             border: "1.5px solid var(--trading-border)", borderRadius: 8,
             outline: "none", cursor: disabled ? "not-allowed" : "pointer",
             opacity: disabled ? 0.6 : 1, appearance: "none", WebkitAppearance: "none",
+            height: 38,
           }}
         >
           {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
-        <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", color: GREEN, pointerEvents: "none", fontSize: 12 }}>▾</span>
+        <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", color: GREEN, pointerEvents: "none", fontSize: 11 }}>▾</span>
       </div>
+    </div>
+  );
+}
+
+function MultiSelectStrikeDropdown({
+  label,
+  type,
+  options,
+  selectedStrikes,
+  onToggleStrike,
+  onClear,
+  disabled,
+  loading,
+  maxLimit = 10,
+  placeholder = "Select…",
+}: {
+  label: string;
+  type: "CE" | "PE";
+  options: { strikePrice: number; symbol: string }[];
+  selectedStrikes: string[];
+  onToggleStrike: (symbol: string, strikePrice: number) => void;
+  onClear?: () => void;
+  disabled?: boolean;
+  loading?: boolean;
+  maxLimit?: number;
+  placeholder?: string;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    if (isOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [isOpen]);
+
+  const selectedForType = options.filter((o) => selectedStrikes.includes(o.symbol));
+  const selectedCount = selectedForType.length;
+
+  let displaySummary = placeholder;
+  if (loading) {
+    displaySummary = "Loading…";
+  } else if (disabled) {
+    displaySummary = "—";
+  } else if (options.length === 0) {
+    displaySummary = "No strikes";
+  } else if (selectedCount === 1) {
+    displaySummary = `${selectedForType[0].strikePrice}`;
+  } else if (selectedCount === 2) {
+    displaySummary = `${selectedForType[0].strikePrice}, ${selectedForType[1].strikePrice}`;
+  } else if (selectedCount > 2) {
+    displaySummary = `${selectedForType[0].strikePrice}, ${selectedForType[1].strikePrice} (+${selectedCount - 2})`;
+  }
+
+  const filteredOptions = searchTerm
+    ? options.filter((o) => String(o.strikePrice).includes(searchTerm))
+    : options;
+
+  const colorTheme = type === "CE" ? GREEN : RED;
+
+  return (
+    <div ref={containerRef} style={{ display: "flex", flexDirection: "column", gap: 6, position: "relative", minWidth: 170, flex: 1 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <label style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 600, color: "var(--trading-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+          {label}
+        </label>
+        {selectedCount > 0 && (
+          <span style={{ fontSize: 10, fontWeight: 700, color: selectedCount >= maxLimit ? RED : colorTheme }}>
+            {selectedCount}/{maxLimit}
+          </span>
+        )}
+      </div>
+
+      <div
+        onClick={() => {
+          if (!disabled && !loading && options.length > 0) setIsOpen((prev) => !prev);
+        }}
+        style={{
+          width: "100%",
+          padding: "8px 12px",
+          fontFamily: "'Inter', sans-serif",
+          fontSize: 13,
+          fontWeight: selectedCount > 0 ? 700 : 500,
+          color: selectedCount > 0 ? "var(--trading-text-active)" : "var(--trading-text-muted)",
+          background: selectedCount > 0 ? (type === "CE" ? "rgba(4,120,87,0.04)" : "rgba(229,57,53,0.04)") : "var(--trading-bg)",
+          border: `1.5px solid ${isOpen ? colorTheme : "var(--trading-border)"}`,
+          borderRadius: 8,
+          boxShadow: isOpen ? `0 0 0 2px ${colorTheme}20` : "none",
+          cursor: disabled || loading || options.length === 0 ? "not-allowed" : "pointer",
+          opacity: disabled ? 0.6 : 1,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          userSelect: "none",
+          transition: "all 0.15s",
+          boxSizing: "border-box",
+          height: 38,
+        }}
+      >
+        <span
+          style={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            paddingRight: 8,
+          }}
+          title={selectedForType.map((o) => o.strikePrice).join(", ")}
+        >
+          {displaySummary}
+        </span>
+        <span style={{ color: colorTheme, fontSize: 11, transition: "transform 0.2s", transform: isOpen ? "rotate(180deg)" : "rotate(0deg)" }}>
+          ▾
+        </span>
+      </div>
+
+      {isOpen && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(100% + 4px)",
+            left: 0,
+            right: 0,
+            zIndex: 100,
+            background: "var(--trading-surface)",
+            border: "1.5px solid var(--trading-border)",
+            borderRadius: 8,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.15)",
+            padding: "8px",
+            minWidth: 200,
+            maxHeight: 300,
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          {/* Search & Header */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+            <input
+              type="text"
+              placeholder="Search strike…"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                flex: 1,
+                padding: "6px 8px",
+                fontSize: 12,
+                fontFamily: "'Inter', sans-serif",
+                background: "var(--trading-bg)",
+                border: "1px solid var(--trading-border)",
+                borderRadius: 5,
+                outline: "none",
+                color: "var(--trading-text-active)",
+              }}
+            />
+            {selectedCount > 0 && onClear && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClear();
+                }}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "var(--trading-text-muted)",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  padding: "2px 4px",
+                  textDecoration: "underline",
+                }}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+
+          {/* Strikes List */}
+          <div style={{ overflowY: "auto", maxHeight: 220, display: "flex", flexDirection: "column", gap: 2 }}>
+            {filteredOptions.length === 0 ? (
+              <div style={{ padding: "8px", textAlign: "center", fontSize: 12, color: "var(--trading-text-muted)" }}>
+                No matching strikes
+              </div>
+            ) : (
+              filteredOptions.map((opt) => {
+                const isSelected = selectedStrikes.includes(opt.symbol);
+                const isMaxReached = !isSelected && selectedCount >= maxLimit;
+
+                return (
+                  <label
+                    key={opt.symbol}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "6px 8px",
+                      borderRadius: 5,
+                      cursor: isMaxReached ? "not-allowed" : "pointer",
+                      background: isSelected ? (type === "CE" ? "rgba(4,120,87,0.08)" : "rgba(229,57,53,0.08)") : "transparent",
+                      opacity: isMaxReached ? 0.45 : 1,
+                      userSelect: "none",
+                      transition: "background 0.1s",
+                    }}
+                    onMouseOver={(e) => {
+                      if (!isSelected && !isMaxReached) {
+                        e.currentTarget.style.background = "var(--trading-bg)";
+                      }
+                    }}
+                    onMouseOut={(e) => {
+                      if (!isSelected) {
+                        e.currentTarget.style.background = "transparent";
+                      }
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      disabled={isMaxReached}
+                      onChange={() => onToggleStrike(opt.symbol, opt.strikePrice)}
+                      style={{
+                        accentColor: colorTheme,
+                        cursor: isMaxReached ? "not-allowed" : "pointer",
+                        width: 15,
+                        height: 15,
+                      }}
+                    />
+                    <span style={{ fontSize: 13, fontWeight: isSelected ? 700 : 500, color: "var(--trading-text-active)", flex: 1 }}>
+                      {opt.strikePrice}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 700,
+                        padding: "1px 5px",
+                        borderRadius: 3,
+                        background: type === "CE" ? "rgba(4,120,87,0.12)" : "rgba(229,57,53,0.12)",
+                        color: colorTheme,
+                      }}
+                    >
+                      {type}
+                    </span>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -143,23 +370,11 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
 
   const [indexSymbol, setIndexSymbol] = useState("NIFTY50");
   const [expiryDate, setExpiryDate] = useState("");
-  const [sessionType, setSessionType] = useState<"CE" | "PE" | "mixed">("mixed");
   const [selectedStrikes, setSelectedStrikes] = useState<string[]>([]);
   const [strikeWarning, setStrikeWarning] = useState<string | null>(null);
 
-  const handleSessionTypeChange = (newType: "CE" | "PE" | "mixed") => {
-    setSessionType(newType);
-    setStrikeWarning(null);
-    setSelectedStrikes((prev) => {
-      if (newType === "CE") {
-        return prev.filter((s) => s.toUpperCase().endsWith("CE")).slice(0, 10);
-      }
-      if (newType === "PE") {
-        return prev.filter((s) => s.toUpperCase().endsWith("PE")).slice(0, 10);
-      }
-      return prev;
-    });
-  };
+  // OHLC Field Selection state (Default: all 4 fields)
+  const [selectedOHLCFields, setSelectedOHLCFields] = useState<string[]>(["open", "high", "low", "close"]);
 
   // 1. Index Symbol Query (API-driven)
   const { data: indexesData, isLoading: isIndexesLoading, isError: isIndexesError } = useQuery({
@@ -243,7 +458,7 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
   }, [expiryDate]);
 
   // 3. Option Chain / Strikes Query (API-driven)
-  const { data: chainData, isLoading: isStrikesLoading, isError: isStrikesError } = useQuery({
+  const { data: chainData, isLoading: isStrikesLoading } = useQuery({
     queryKey: ["module2-option-chain", indexSymbol, expiryDate],
     queryFn: async () => {
       console.log(`[MODULE2][CONFIG] Loading option contracts for ${indexSymbol} @ ${expiryDate}`);
@@ -265,8 +480,74 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
       return res;
     },
     enabled: !!indexSymbol && !!expiryDate,
+    staleTime: 5 * 60 * 1000,
     retry: 1,
   });
+
+  const availableStrikesList: any[] = chainData?.strikes || [];
+
+  const ceOptions = availableStrikesList
+    .filter((s: any) => !!s.CE)
+    .map((s: any) => ({ strikePrice: s.strikePrice, symbol: s.CE }));
+
+  const peOptions = availableStrikesList
+    .filter((s: any) => !!s.PE)
+    .map((s: any) => ({ strikePrice: s.strikePrice, symbol: s.PE }));
+
+  const ceCount = selectedStrikes.filter((s) => s.toUpperCase().endsWith("CE")).length;
+  const peCount = selectedStrikes.filter((s) => s.toUpperCase().endsWith("PE")).length;
+
+  const handleToggleCE = (symbol: string) => {
+    setStrikeWarning(null);
+    if (selectedStrikes.includes(symbol)) {
+      setSelectedStrikes((prev) => prev.filter((s) => s !== symbol));
+    } else {
+      if (ceCount >= 10) {
+        setStrikeWarning("Cannot select more than 10 Call (CE) strikes.");
+        return;
+      }
+      if (selectedStrikes.length >= 20) {
+        setStrikeWarning("Cannot select more than 20 total option contracts.");
+        return;
+      }
+      setSelectedStrikes((prev) => [...prev, symbol]);
+    }
+  };
+
+  const handleTogglePE = (symbol: string) => {
+    setStrikeWarning(null);
+    if (selectedStrikes.includes(symbol)) {
+      setSelectedStrikes((prev) => prev.filter((s) => s !== symbol));
+    } else {
+      if (peCount >= 10) {
+        setStrikeWarning("Cannot select more than 10 Put (PE) strikes.");
+        return;
+      }
+      if (selectedStrikes.length >= 20) {
+        setStrikeWarning("Cannot select more than 20 total option contracts.");
+        return;
+      }
+      setSelectedStrikes((prev) => [...prev, symbol]);
+    }
+  };
+
+  const toggleOHLCField = (fieldId: string) => {
+    setSelectedOHLCFields((prev) => {
+      if (prev.includes(fieldId)) {
+        if (prev.length === 1) {
+          setStrikeWarning("At least one OHLC field must be selected.");
+          return prev;
+        }
+        setStrikeWarning(null);
+        return prev.filter((f) => f !== fieldId);
+      } else {
+        setStrikeWarning(null);
+        const canonicalOrder = ["open", "high", "low", "close"];
+        const next = [...prev, fieldId];
+        return canonicalOrder.filter((f) => next.includes(f));
+      }
+    });
+  };
 
   // Session Start Mutation with strict contract validation
   const startSessionMutation = useMutation({
@@ -274,46 +555,43 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
       console.log("[MODULE2][TRACKER] Start button clicked");
       console.log("[MODULE2][TRACKER] selected index:", indexSymbol);
       console.log("[MODULE2][TRACKER] expiry:", expiryDate);
-      console.log("[MODULE2][TRACKER] session type:", sessionType);
       console.log("[MODULE2][TRACKER] selected strikes:", selectedStrikes);
+      console.log("[MODULE2][TRACKER] selected OHLC fields:", selectedOHLCFields);
 
-      // Validate contract limits (max 10 CE, max 10 PE, max 20 total)
-      const ceCount = selectedStrikes.filter((st) => st.toUpperCase().endsWith("CE")).length;
-      const peCount = selectedStrikes.filter((st) => st.toUpperCase().endsWith("PE")).length;
+      if (selectedStrikes.length === 0) {
+        const msg = "Validation Error: Please select at least one Call or Put strike.";
+        setStrikeWarning(msg);
+        throw new Error(msg);
+      }
+
+      if (selectedOHLCFields.length === 0) {
+        const msg = "Validation Error: At least one OHLC field must be selected.";
+        setStrikeWarning(msg);
+        throw new Error(msg);
+      }
+
+      const activeCeCount = selectedStrikes.filter((st) => st.toUpperCase().endsWith("CE")).length;
+      const activePeCount = selectedStrikes.filter((st) => st.toUpperCase().endsWith("PE")).length;
 
       if (selectedStrikes.length > 20) {
         const msg = "Validation Error: Cannot select more than 20 total option contracts.";
-        console.error("[MODULE2][CONFIG]", msg);
-        alert(msg);
+        setStrikeWarning(msg);
         throw new Error(msg);
       }
-      if (ceCount > 10) {
+      if (activeCeCount > 10) {
         const msg = "Validation Error: Cannot select more than 10 Call (CE) strikes.";
-        console.error("[MODULE2][CONFIG]", msg);
-        alert(msg);
+        setStrikeWarning(msg);
         throw new Error(msg);
       }
-      if (peCount > 10) {
+      if (activePeCount > 10) {
         const msg = "Validation Error: Cannot select more than 10 Put (PE) strikes.";
-        console.error("[MODULE2][CONFIG]", msg);
-        alert(msg);
+        setStrikeWarning(msg);
         throw new Error(msg);
       }
 
-      // Validate that every selected strike contract actually exists in the API response
-      const validContractSymbols = new Set<string>();
-      (chainData?.strikes || []).forEach((s: any) => {
-        if (s.CE) validContractSymbols.add(s.CE);
-        if (s.PE) validContractSymbols.add(s.PE);
-      });
-
-      const invalidStrikes = selectedStrikes.filter((st) => !validContractSymbols.has(st));
-      if (invalidStrikes.length > 0) {
-        const msg = `Validation Error: Contract(s) ${invalidStrikes.join(", ")} do not exist in the API instrument data.`;
-        console.error("[MODULE2][CONFIG]", msg);
-        alert(msg);
-        throw new Error(msg);
-      }
+      const sessionType: "CE" | "PE" | "mixed" =
+        activeCeCount > 0 && activePeCount === 0 ? "CE" :
+        activePeCount > 0 && activeCeCount === 0 ? "PE" : "mixed";
 
       console.log("[MODULE2][TRACKER] Starting tracker request to /api/module2/session/start");
       const res = await api.post("/api/module2/session/start", { sessionType, indexSymbol, expiryDate, selectedStrikes });
@@ -336,7 +614,6 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
       const currentSessionId = activeSession?.sessionId;
       console.log(`[MODULE2][TRACKER] Stopping session=${currentSessionId || "unknown"}`);
 
-      // Optimistically clear local session state immediately so UI updates instantly
       setActiveSession(null);
       setSelectedStrikes([]);
       setStrikeWarning(null);
@@ -370,31 +647,6 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
 
   const isClosed = marketStatus?.status === "CLOSED";
 
-  const toggleStrikeSelection = (strike: string) => {
-    setStrikeWarning(null);
-    setSelectedStrikes((prev) => {
-      if (prev.includes(strike)) return prev.filter((s) => s !== strike);
-      const isCE = strike.toUpperCase().endsWith("CE");
-      const isPE = strike.toUpperCase().endsWith("PE");
-      const ceCount = prev.filter((s) => s.toUpperCase().endsWith("CE")).length;
-      const peCount = prev.filter((s) => s.toUpperCase().endsWith("PE")).length;
-
-      if (prev.length >= 20) {
-        setStrikeWarning("Maximum limit of 20 total option contracts reached.");
-        return prev;
-      }
-      if (isCE && ceCount >= 10) {
-        setStrikeWarning("Maximum limit of 10 Call (CE) strikes reached.");
-        return prev;
-      }
-      if (isPE && peCount >= 10) {
-        setStrikeWarning("Maximum limit of 10 Put (PE) strikes reached.");
-        return prev;
-      }
-      return [...prev, strike];
-    });
-  };
-
   const currentSession = activeSession ? ensureFullStrikesData(activeSession) : null;
   const sessionDataSource = currentSession?.dataSource || "UNAVAILABLE";
   const isLiveInteractive = sessionDataSource === "LIVE_INTERACTIVE_API";
@@ -414,7 +666,7 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
   const handleExportExcel = async () => {
     if (!currentSession) return;
     try {
-      await exportModule2ToExcel(currentSession, sortedTimestamps);
+      await exportModule2ToExcel(currentSession, sortedTimestamps, selectedOHLCFields);
     } catch (err) {
       console.error("Excel export failed:", err);
     }
@@ -457,28 +709,8 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
           background-image: linear-gradient(rgba(4,120,87,0.03), rgba(4,120,87,0.03)) !important;
         }
 
-        .m2-strike-chip {
-          display: flex; flex-direction: column; align-items: center;
-          padding: 8px 8px; border-radius: 8px; cursor: pointer;
-          transition: all 0.15s; border: 1.5px solid var(--trading-border);
-          background: var(--trading-bg);
-        }
-        .m2-strike-chip:hover { border-color: ${GREEN}; background: rgba(4,120,87,0.04); }
-
-        .m2-ce-btn, .m2-pe-btn {
-          flex: 1; padding: 6px 0; border-radius: 6px;
-          font-family: 'Inter', sans-serif; font-size: 14px; font-weight: 700;
-          cursor: pointer; transition: all 0.15s; border: 1.5px solid transparent;
-        }
-        .m2-ce-btn { color: ${GREEN}; background: rgba(4,120,87,0.08); border-color: rgba(4,120,87,0.2); }
-        .m2-ce-btn:hover { background: rgba(4,120,87,0.14); }
-        .m2-ce-btn.active { background: ${GREEN}; color: #fff; border-color: ${GREEN}; }
-        .m2-pe-btn { color: ${RED}; background: rgba(229,57,53,0.08); border-color: rgba(229,57,53,0.2); }
-        .m2-pe-btn:hover { background: rgba(229,57,53,0.14); }
-        .m2-pe-btn.active { background: ${RED}; color: #fff; border-color: ${RED}; }
-
         .m2-cta {
-          width: 100%; padding: 13px; border-radius: 8px;
+          width: 100%; padding: 12px; border-radius: 8px;
           font-family: 'Inter', sans-serif; font-size: 14px; font-weight: 700;
           cursor: pointer; border: none; background: ${GREEN}; color: #fff;
           transition: all 0.2s; box-shadow: 0 4px 14px rgba(4,120,87,0.3);
@@ -601,19 +833,19 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
             </div>
           )}
 
-          {/* Configuration */}
+          {/* Configuration Section (Module 1 Style 4-Dropdown Row) */}
           {isConfigExpanded ? (
             <div
               className="m2-section"
               style={{
                 background: "var(--trading-surface)", border: "1.5px solid var(--trading-border)",
-                borderRadius: 14, padding: "20px 24px",
+                borderRadius: 14, padding: "18px 22px",
                 boxShadow: "0 1px 8px rgba(0,0,0,0.05)", animationDelay: "0.04s",
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
                 <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 700, color: "var(--trading-text-muted)", textTransform: "uppercase", letterSpacing: "0.15em" }}>
-                  Session Configuration
+                  Configuration & Strikes
                 </span>
                 {isSplit && (
                   <button
@@ -628,131 +860,146 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
                 )}
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16, marginBottom: 20 }}>
+              {/* 1. Main 4-Column Layout (SYMBOL, EXPIRY DATE, CALL STRIKE, PUT STRIKE) */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16, marginBottom: 16 }}>
                 <SelectField
-                  label="Index Symbol"
+                  label="Symbol"
                   value={indexSymbol}
                   onChange={setIndexSymbol}
                   options={indexOptions}
                   disabled={isIndexesLoading || !!activeSession}
                 />
                 <SelectField
-                  label="Options Expiry"
+                  label="Expiry Date"
                   value={expiryDate}
                   onChange={setExpiryDate}
                   options={expiryOptions}
                   disabled={isExpiriesLoading || !indexSymbol || (expiriesData?.expiries || []).length === 0 || !!activeSession}
                 />
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  <label style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 600, color: "var(--trading-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                    Session Type
-                  </label>
-                  <SegmentedControl
-                    options={[{ key: "CE" as const, label: "CE" }, { key: "PE" as const, label: "PE" }, { key: "mixed" as const, label: "Mixed" }]}
-                    value={sessionType} onChange={handleSessionTypeChange}
-                  />
-                </div>
+                <MultiSelectStrikeDropdown
+                  label="Call Strike"
+                  type="CE"
+                  options={ceOptions}
+                  selectedStrikes={selectedStrikes}
+                  onToggleStrike={handleToggleCE}
+                  onClear={() => setSelectedStrikes((prev) => prev.filter((s) => !s.toUpperCase().endsWith("CE")))}
+                  disabled={!expiryDate || isStrikesLoading || !!activeSession}
+                  loading={isStrikesLoading}
+                  maxLimit={10}
+                  placeholder="Select Call Strikes…"
+                />
+                <MultiSelectStrikeDropdown
+                  label="Put Strike"
+                  type="PE"
+                  options={peOptions}
+                  selectedStrikes={selectedStrikes}
+                  onToggleStrike={handleTogglePE}
+                  onClear={() => setSelectedStrikes((prev) => prev.filter((s) => !s.toUpperCase().endsWith("PE")))}
+                  disabled={!expiryDate || isStrikesLoading || !!activeSession}
+                  loading={isStrikesLoading}
+                  maxLimit={10}
+                  placeholder="Select Put Strikes…"
+                />
               </div>
 
-              {/* Dynamic Strike Selection */}
-              <div style={{ marginBottom: 20 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                  <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 14, fontWeight: 700, color: "var(--trading-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                    Select Strikes
-                  </span>
-                  <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 600, color: "var(--trading-text-muted)" }}>
-                    {sessionType === "mixed"
-                      ? `CE: ${selectedStrikes.filter((s) => s.toUpperCase().endsWith("CE")).length}/10 · PE: ${selectedStrikes.filter((s) => s.toUpperCase().endsWith("PE")).length}/10 (Total: ${selectedStrikes.length}/20)`
-                      : sessionType === "CE"
-                      ? `CE: ${selectedStrikes.filter((s) => s.toUpperCase().endsWith("CE")).length}/10 selected`
-                      : `PE: ${selectedStrikes.filter((s) => s.toUpperCase().endsWith("PE")).length}/10 selected`}
-                  </span>
-                </div>
-
-                {strikeWarning && (
-                  <div
+              {/* Warning Banner if any */}
+              {strikeWarning && (
+                <div
+                  style={{
+                    marginBottom: 16,
+                    padding: "8px 12px",
+                    borderRadius: 6,
+                    background: "rgba(229, 57, 53, 0.1)",
+                    border: "1px solid rgba(229, 57, 53, 0.3)",
+                    color: "#e53935",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                  }}
+                >
+                  <span>⚠️ {strikeWarning}</span>
+                  <button
+                    onClick={() => setStrikeWarning(null)}
                     style={{
-                      marginBottom: 10,
-                      padding: "8px 12px",
-                      borderRadius: 6,
-                      background: "rgba(229, 57, 53, 0.1)",
-                      border: "1px solid rgba(229, 57, 53, 0.3)",
+                      background: "none",
+                      border: "none",
                       color: "#e53935",
-                      fontSize: 13,
-                      fontWeight: 600,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
+                      cursor: "pointer",
+                      fontSize: 16,
+                      lineHeight: 1,
+                      padding: "0 4px",
                     }}
+                    title="Dismiss"
                   >
-                    <span>⚠️ {strikeWarning}</span>
-                    <button
-                      onClick={() => setStrikeWarning(null)}
-                      style={{
-                        background: "none",
-                        border: "none",
-                        color: "#e53935",
-                        cursor: "pointer",
-                        fontSize: 16,
-                        lineHeight: 1,
-                        padding: "0 4px",
-                      }}
-                      title="Dismiss"
-                    >
-                      ×
-                    </button>
-                  </div>
-                )}
+                    ×
+                  </button>
+                </div>
+              )}
 
-                {!expiryDate ? (
-                  <div style={{ padding: "16px", textAlign: "center", fontFamily: "'Inter', sans-serif", fontSize: 14, color: "var(--trading-text-muted)", background: "var(--trading-bg)", border: "1.5px dashed var(--trading-border)", borderRadius: 8 }}>
-                    Please select an available expiry date to load option contracts.
-                  </div>
-                ) : isStrikesLoading ? (
-                  <div style={{ padding: "16px", textAlign: "center", fontFamily: "'Inter', sans-serif", fontSize: 14, color: "var(--trading-text-muted)", background: "var(--trading-bg)", border: "1.5px dashed var(--trading-border)", borderRadius: 8 }}>
-                    Loading option contracts from API…
-                  </div>
-                ) : isStrikesError ? (
-                  <div style={{ padding: "16px", textAlign: "center", fontFamily: "'Inter', sans-serif", fontSize: 14, color: "#dc2626", background: "rgba(229,57,53,0.06)", border: "1.5px solid rgba(229,57,53,0.2)", borderRadius: 8, fontWeight: 600 }}>
-                    Unable to load market data. Please try again.
-                  </div>
-                ) : (chainData?.strikes || []).length === 0 ? (
-                  <div style={{ padding: "16px", textAlign: "center", fontFamily: "'Inter', sans-serif", fontSize: 14, color: "var(--trading-text-muted)", background: "var(--trading-bg)", border: "1.5px dashed var(--trading-border)", borderRadius: 8 }}>
-                    No option contracts available for this expiry.
-                  </div>
-                ) : (
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 8, maxHeight: 200, overflowY: "auto", paddingRight: 4 }}>
-                    {(chainData?.strikes || []).map((s: any) => {
-                      const ceSymbol = s.CE;
-                      const peSymbol = s.PE;
-                      const ceSelected = ceSymbol && selectedStrikes.includes(ceSymbol);
-                      const peSelected = peSymbol && selectedStrikes.includes(peSymbol);
-
+              {/* 2. OHLC Display Fields + Live Counter Row */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 14, marginBottom: 18, padding: "10px 14px", background: "var(--trading-bg)", borderRadius: 8, border: "1px solid var(--trading-border)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 700, color: "var(--trading-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                    OHLC
+                  </span>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    {[
+                      { id: "open", label: "Open" },
+                      { id: "high", label: "High" },
+                      { id: "low", label: "Low" },
+                      { id: "close", label: "Close" },
+                    ].map((field) => {
+                      const isSelected = selectedOHLCFields.includes(field.id);
                       return (
-                        <div key={s.strikePrice} className="m2-strike-chip">
-                          <span style={{ fontFamily: "'Inter', sans-serif", fontSize: "24px", fontWeight: 800, color: "var(--trading-text-active)", marginBottom: 6 }}>{s.strikePrice}</span>
-                          <div style={{ display: "flex", gap: 4, width: "100%" }}>
-                            {sessionType !== "PE" && ceSymbol && (
-                              <button onClick={() => toggleStrikeSelection(ceSymbol)} className={`m2-ce-btn${ceSelected ? " active" : ""}`}>CE</button>
-                            )}
-                            {sessionType !== "CE" && peSymbol && (
-                              <button onClick={() => toggleStrikeSelection(peSymbol)} className={`m2-pe-btn${peSelected ? " active" : ""}`}>PE</button>
-                            )}
-                          </div>
-                        </div>
+                        <label
+                          key={field.id}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 5,
+                            padding: "4px 10px",
+                            borderRadius: 6,
+                            border: isSelected ? `1.5px solid ${GREEN}` : "1.5px solid var(--trading-border)",
+                            background: isSelected ? "rgba(4,120,87,0.08)" : "var(--trading-surface)",
+                            color: isSelected ? GREEN : "var(--trading-text-muted)",
+                            cursor: "pointer",
+                            fontFamily: "'Inter', sans-serif",
+                            fontSize: 12,
+                            fontWeight: 700,
+                            userSelect: "none",
+                            transition: "all 0.15s",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleOHLCField(field.id)}
+                            style={{ accentColor: GREEN, width: 14, height: 14, cursor: "pointer" }}
+                          />
+                          {field.label}
+                        </label>
                       );
                     })}
                   </div>
-                )}
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, fontWeight: 700, color: "var(--trading-text-active)" }}>
+                    Selected: <span style={{ color: GREEN }}>CE {ceCount}/10</span> · <span style={{ color: RED }}>PE {peCount}/10</span> · Total {selectedStrikes.length}/20
+                  </span>
+                </div>
               </div>
 
+              {/* 3. Session Start / Stop Action Button */}
               {activeSession ? (
                 <button
                   className="m2-stop-cta"
                   onClick={() => stopSessionMutation.mutate()}
                   disabled={stopSessionMutation.isPending}
                   style={{
-                    width: "100%", padding: 13, borderRadius: 8,
+                    width: "100%", padding: 12, borderRadius: 8,
                     fontFamily: "'Inter', sans-serif", fontSize: 14, fontWeight: 700,
                     cursor: stopSessionMutation.isPending ? "not-allowed" : "pointer",
                     border: "none", background: RED, color: "#fff",
@@ -766,7 +1013,7 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
                 <button
                   className="m2-cta"
                   onClick={() => startSessionMutation.mutate()}
-                  disabled={selectedStrikes.length === 0 || !expiryDate || startSessionMutation.isPending}
+                  disabled={selectedStrikes.length === 0 || !expiryDate || selectedOHLCFields.length === 0 || startSessionMutation.isPending}
                 >
                   {startSessionMutation.isPending ? "Initialising Session…" : "Start Active Session Tracker"}
                 </button>
@@ -802,7 +1049,14 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
                 CE Strikes
               </span>
             </div>
-            <StrikeTrackerTable strikesList={ceStrikesList} session={currentSession} sortedTimestamps={sortedTimestamps} isSplit={isSplit} isClosed={isClosed} />
+            <StrikeTrackerTable
+              strikesList={ceStrikesList}
+              session={currentSession}
+              sortedTimestamps={sortedTimestamps}
+              selectedOHLCFields={selectedOHLCFields}
+              isSplit={isSplit}
+              isClosed={isClosed}
+            />
           </div>
 
           {/* PE Table */}
@@ -813,7 +1067,14 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
                 PE Strikes
               </span>
             </div>
-            <StrikeTrackerTable strikesList={peStrikesList} session={currentSession} sortedTimestamps={sortedTimestamps} isSplit={isSplit} isClosed={isClosed} />
+            <StrikeTrackerTable
+              strikesList={peStrikesList}
+              session={currentSession}
+              sortedTimestamps={sortedTimestamps}
+              selectedOHLCFields={selectedOHLCFields}
+              isSplit={isSplit}
+              isClosed={isClosed}
+            />
           </div>
 
         </div>
@@ -823,9 +1084,62 @@ export const Module2 = ({ isSplit = false }: { isSplit?: boolean }) => {
 };
 
 // ── StrikeTrackerTable ────────────────────────────────────────────────────────
-function StrikeTrackerTable({ strikesList, session, sortedTimestamps, isSplit = false, isClosed = false }: {
-  strikesList: string[]; session: any; sortedTimestamps: string[];
-  isSplit?: boolean; isClosed?: boolean;
+interface OHLCColDef {
+  id: string;
+  label: string;
+  getValue: (s: any) => number;
+  formatValue: (val: number) => string | number;
+  textColor: string;
+}
+
+const ALL_OHLC_COLS: OHLCColDef[] = [
+  {
+    id: "open",
+    label: "Open",
+    getValue: (s) => (typeof s?.dayOpen === "number" && !isNaN(s.dayOpen) && s.dayOpen > 0 ? s.dayOpen : 0),
+    formatValue: (val) => (val > 0 ? Math.round(val) : "—"),
+    textColor: "#047857",
+  },
+  {
+    id: "high",
+    label: "High",
+    getValue: (s) => (typeof s?.dayHigh === "number" && !isNaN(s.dayHigh) && s.dayHigh > 0 ? s.dayHigh : 0),
+    formatValue: (val) => (val > 0 ? Math.round(val) : "—"),
+    textColor: "#2563EB",
+  },
+  {
+    id: "low",
+    label: "Low",
+    getValue: (s) => (typeof s?.dayLow === "number" && !isNaN(s.dayLow) && s.dayLow > 0 ? s.dayLow : 0),
+    formatValue: (val) => (val > 0 ? Math.round(val) : "—"),
+    textColor: "#111827",
+  },
+  {
+    id: "close",
+    label: "Close",
+    getValue: (s) => {
+      const lastLtp = (s?.grid && s.grid.length > 0) ? s.grid[s.grid.length - 1]?.ltp : s?.dayOpen;
+      return typeof lastLtp === "number" && !isNaN(lastLtp) && lastLtp > 0 ? lastLtp : 0;
+    },
+    formatValue: (val) => (val > 0 ? Math.round(val) : "—"),
+    textColor: "#4B5563",
+  },
+];
+
+function StrikeTrackerTable({
+  strikesList,
+  session,
+  sortedTimestamps,
+  selectedOHLCFields = ["open", "high", "low", "close"],
+  isSplit = false,
+  isClosed = false,
+}: {
+  strikesList: string[];
+  session: any;
+  sortedTimestamps: string[];
+  selectedOHLCFields?: string[];
+  isSplit?: boolean;
+  isClosed?: boolean;
 }) {
   const [showFullColumns, setShowFullColumns] = useState(false);
   const cellPadding = isSplit ? "10px 12px" : "12px 16px";
@@ -839,27 +1153,24 @@ function StrikeTrackerTable({ strikesList, session, sortedTimestamps, isSplit = 
     ? strikesList
     : strikesList.slice(0, 5);
 
-  // High column Min & Max across displayed strikes
-  const highValues: number[] = [];
-  displayedStrikes.forEach((strike) => {
-    const s = session?.strikes?.[strike];
-    if (s && typeof s.dayHigh === "number" && !isNaN(s.dayHigh) && s.dayHigh > 0) {
-      highValues.push(s.dayHigh);
-    }
-  });
-  const highMax = highValues.length > 0 ? Math.max(...highValues) : null;
-  const highMin = highValues.length > 0 ? Math.min(...highValues) : null;
+  const activeOHLCCols = ALL_OHLC_COLS.filter((c) => selectedOHLCFields.includes(c.id));
 
-  // Low column Min & Max across displayed strikes
-  const lowValues: number[] = [];
-  displayedStrikes.forEach((strike) => {
-    const s = session?.strikes?.[strike];
-    if (s && typeof s.dayLow === "number" && !isNaN(s.dayLow) && s.dayLow > 0) {
-      lowValues.push(s.dayLow);
-    }
+  // Compute Min & Max per active OHLC column across displayed strikes
+  const colMinMax: Record<string, { max: number | null; min: number | null }> = {};
+  activeOHLCCols.forEach((col) => {
+    const values: number[] = [];
+    displayedStrikes.forEach((strike) => {
+      const s = session?.strikes?.[strike];
+      const val = col.getValue(s);
+      if (val > 0) values.push(val);
+    });
+    colMinMax[col.id] = {
+      max: values.length > 0 ? Math.max(...values) : null,
+      min: values.length > 0 ? Math.min(...values) : null,
+    };
   });
-  const lowMax = lowValues.length > 0 ? Math.max(...lowValues) : null;
-  const lowMin = lowValues.length > 0 ? Math.min(...lowValues) : null;
+
+  const totalColsCount = displayedTimestamps.length + 2 + ((!isSplit || showFullColumns) ? activeOHLCCols.length : 0);
 
   return (
     <div
@@ -883,24 +1194,43 @@ function StrikeTrackerTable({ strikesList, session, sortedTimestamps, isSplit = 
               {displayedTimestamps.map((ts) => (
                 <th key={ts} className="m2-th" style={{ padding: cellPadding, fontSize: "18px", textAlign: "center", minWidth: isSplit ? 90 : 110 }}>{ts}</th>
               ))}
-              {(!isSplit || showFullColumns) && (
-                <th className="m2-th" style={{ padding: cellPadding, fontSize: "18px", textAlign: "center", minWidth: 110, width: 110, borderLeft: "3px solid var(--trading-border)", position: "sticky", right: 110, top: 0, zIndex: 40, background: "var(--trading-bg)" }}>High</th>
-              )}
-              {(!isSplit || showFullColumns) && (
-                <th className="m2-th" style={{ padding: cellPadding, fontSize: "18px", textAlign: "center", minWidth: 110, width: 110, position: "sticky", right: 0, top: 0, zIndex: 40, background: "var(--trading-bg)" }}>Low</th>
-              )}
+              {(!isSplit || showFullColumns) && activeOHLCCols.map((col, idx) => {
+                const rightOffset = (activeOHLCCols.length - 1 - idx) * 110;
+                const isFirst = idx === 0;
+                return (
+                  <th
+                    key={col.id}
+                    className="m2-th"
+                    style={{
+                      padding: cellPadding,
+                      fontSize: "18px",
+                      textAlign: "center",
+                      minWidth: 110,
+                      width: 110,
+                      borderLeft: isFirst ? "3px solid var(--trading-border)" : undefined,
+                      position: "sticky",
+                      right: rightOffset,
+                      top: 0,
+                      zIndex: 40,
+                      background: "var(--trading-bg)",
+                    }}
+                  >
+                    {col.label}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
             {isClosed ? (
               <tr>
-                <td colSpan={displayedTimestamps.length + (isSplit && !showFullColumns ? 2 : 4)} style={{ padding: "48px 16px", textAlign: "center", fontFamily: "'Inter', sans-serif", fontSize: 24, color: "#E53935", fontWeight: 700 }}>
+                <td colSpan={totalColsCount} style={{ padding: "48px 16px", textAlign: "center", fontFamily: "'Inter', sans-serif", fontSize: 24, color: "#E53935", fontWeight: 700 }}>
                   Market Closed
                 </td>
               </tr>
             ) : displayedStrikes.length === 0 ? (
               <tr>
-                <td colSpan={displayedTimestamps.length + (isSplit && !showFullColumns ? 2 : 4)} style={{ padding: "32px 16px", textAlign: "center", fontFamily: "'Inter', sans-serif", fontSize: 24, color: "var(--trading-text-muted)" }}>
+                <td colSpan={totalColsCount} style={{ padding: "32px 16px", textAlign: "center", fontFamily: "'Inter', sans-serif", fontSize: 24, color: "var(--trading-text-muted)" }}>
                   No strikes to display in this category.
                 </td>
               </tr>
@@ -936,18 +1266,6 @@ function StrikeTrackerTable({ strikesList, session, sortedTimestamps, isSplit = 
                 const rowMax = rowLtps.length > 0 ? Math.max(...rowLtps) : null;
                 const rowMin = rowLtps.length > 0 ? Math.min(...rowLtps) : null;
                 const hasDistinctRowMinMax = rowMax !== null && rowMin !== null && rowMax !== rowMin;
-
-                // High Column cell style using Module 1 color logic
-                const isHighHighest = highMax !== null && highMin !== null && highMax !== highMin && s.dayHigh === highMax;
-                const isHighLowest  = highMax !== null && highMin !== null && highMax !== highMin && s.dayHigh === highMin;
-                const highColorClass = isHighHighest ? "blue" : isHighLowest ? "black" : null;
-                const highStyle = highColorClass ? colorClassStyle(highColorClass, "hlc") : null;
-
-                // Low Column cell style using Module 1 color logic
-                const isLowHighest = lowMax !== null && lowMin !== null && lowMax !== lowMin && s.dayLow === lowMax;
-                const isLowLowest  = lowMax !== null && lowMin !== null && lowMax !== lowMin && s.dayLow === lowMin;
-                const lowColorClass = isLowHighest ? "blue" : isLowLowest ? "black" : null;
-                const lowStyle = lowColorClass ? colorClassStyle(lowColorClass, "hlc") : null;
 
                 return (
                   <tr
@@ -1055,44 +1373,40 @@ function StrikeTrackerTable({ strikesList, session, sortedTimestamps, isSplit = 
                       );
                     })}
 
-                    {/* High Column */}
-                    {(!isSplit || showFullColumns) && (
-                      <td className="m2-td m2-sticky-cell" style={{ 
-                        padding: cellPadding, 
-                        fontSize: cellFontSize, 
-                        textAlign: "center", 
-                        position: "sticky", 
-                        right: 110, 
-                        zIndex: 20, 
-                        background: highStyle ? highStyle.bg : summaryBg, 
-                        borderLeft: "3px solid var(--trading-border)", 
-                        color: highStyle ? highStyle.textColor : "#2563EB", 
-                        fontWeight: 700, 
-                        minWidth: 110, 
-                        width: 110 
-                      }}>
-                        {Math.round(s.dayHigh)}
-                      </td>
-                    )}
+                    {/* Selected OHLC Columns with column-wise color logic */}
+                    {(!isSplit || showFullColumns) && activeOHLCCols.map((col, idx) => {
+                      const rightOffset = (activeOHLCCols.length - 1 - idx) * 110;
+                      const isFirst = idx === 0;
+                      const val = col.getValue(s);
+                      const { max, min } = colMinMax[col.id] || { max: null, min: null };
+                      const isHighest = max !== null && min !== null && max !== min && val === max && val > 0;
+                      const isLowest  = max !== null && min !== null && max !== min && val === min && val > 0;
+                      const colorClass = isHighest ? "blue" : isLowest ? "black" : null;
+                      const cellStyle = colorClass ? colorClassStyle(colorClass, "hlc") : null;
 
-                    {/* Low Column */}
-                    {(!isSplit || showFullColumns) && (
-                      <td className="m2-td m2-sticky-cell" style={{ 
-                        padding: cellPadding, 
-                        fontSize: cellFontSize, 
-                        textAlign: "center", 
-                        position: "sticky", 
-                        right: 0, 
-                        zIndex: 20, 
-                        background: lowStyle ? lowStyle.bg : summaryBg, 
-                        color: lowStyle ? lowStyle.textColor : "#111827", 
-                        fontWeight: 700, 
-                        minWidth: 110, 
-                        width: 110 
-                      }}>
-                        {Math.round(s.dayLow)}
-                      </td>
-                    )}
+                      return (
+                        <td
+                          key={col.id}
+                          className="m2-td m2-sticky-cell"
+                          style={{
+                            padding: cellPadding,
+                            fontSize: cellFontSize,
+                            textAlign: "center",
+                            position: "sticky",
+                            right: rightOffset,
+                            zIndex: 20,
+                            background: cellStyle ? cellStyle.bg : summaryBg,
+                            borderLeft: isFirst ? "3px solid var(--trading-border)" : undefined,
+                            color: cellStyle ? cellStyle.textColor : col.textColor,
+                            fontWeight: 700,
+                            minWidth: 110,
+                            width: 110,
+                          }}
+                        >
+                          {col.formatValue(val)}
+                        </td>
+                      );
+                    })}
                   </tr>
                 );
               })

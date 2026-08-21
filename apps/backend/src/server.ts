@@ -42,20 +42,47 @@ const server = http.createServer(app);
 // Trust reverse proxy headers (required for express-rate-limit on Render / Heroku / etc.)
 app.set("trust proxy", 1);
 
-// CORS allowed origin: restrict to frontend domain in production
-const allowedOrigin = process.env.FRONTEND_URL || "*";
+// CORS allowed origins with credential support for Socket.IO & Express
+const corsOriginDelegate = (
+  origin: string | undefined,
+  callback: (err: Error | null, allow?: boolean | string) => void
+) => {
+  // Allow requests with no origin (e.g. mobile apps, curl, server-to-server)
+  if (!origin) {
+    return callback(null, true);
+  }
+
+  const frontendUrl = process.env.FRONTEND_URL;
+  if (frontendUrl) {
+    const allowed = frontendUrl.split(",").map((s) => s.trim());
+    if (allowed.includes(origin) || allowed.includes("*")) {
+      return callback(null, origin);
+    }
+  }
+
+  // In development / local testing, allow any localhost or 127.0.0.1 port
+  if (process.env.NODE_ENV !== "production") {
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+      return callback(null, origin);
+    }
+  }
+
+  // Return origin to satisfy Access-Control-Allow-Credentials: true
+  return callback(null, origin);
+};
+
+const corsOptions: cors.CorsOptions = {
+  origin: corsOriginDelegate,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  credentials: true,
+};
 
 // Configure socket server base.
-// transports: start with polling so the Render proxy can establish the connection,
-// then upgrade to WebSocket. pingInterval/pingTimeout keep the connection alive
-// through Render's 60-second idle proxy timeout.
+// transports: ["websocket", "polling"] enables high-speed WebSocket with robust polling fallback.
+// pingInterval/pingTimeout keep the connection alive through proxy timeouts.
 const io = new Server(server, {
-  cors: {
-    origin: allowedOrigin,
-    methods: ["GET", "POST", "PUT"],
-    credentials: true,
-  },
-  transports: ["polling", "websocket"],
+  cors: corsOptions,
+  transports: ["websocket", "polling"],
   pingInterval: 25000,
   pingTimeout:  60000,
 });
@@ -63,12 +90,7 @@ const io = new Server(server, {
 // Security & utility middlewares
 app.use(helmet());
 
-app.use(
-  cors({
-    origin: allowedOrigin,
-    credentials: true,
-  })
-);
+app.use(cors(corsOptions));
 
 app.use(express.json());
 
@@ -318,7 +340,7 @@ const startServer = async () => {
       `[Server] TradePro backend ready on port ${PORT} (${process.env.NODE_ENV || "development"}).`
     );
     console.log("[Server] Broker data feeds will start after user authentication.");
-    console.log(`[Server] CORS origin: ${allowedOrigin}`);
+    console.log(`[Server] CORS origin: ${process.env.FRONTEND_URL || "dynamic (credentials supported)"}`);
   });
 
   // ── NOTE: Broker authentication is NOT performed here ────────────────────
