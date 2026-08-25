@@ -8,17 +8,6 @@ const module1OiService_1 = require("./module1OiService");
 const zebuMarketDataClient_1 = require("./zebuMarketDataClient");
 const instrumentTokenService_1 = require("./instrumentTokenService");
 let ioServer = null;
-// ── Selected option strikes tracking across active client sockets ─────────────
-const socketOptionSelections = new Map();
-const syncSelectedOptionSymbols = () => {
-    const allSelected = new Set();
-    for (const syms of socketOptionSelections.values()) {
-        for (const sym of syms) {
-            allSelected.add(sym);
-        }
-    }
-    (0, dataFeed_1.setSelectedOptionSymbols)(Array.from(allSelected));
-};
 // ── Market readiness tracking ─────────────────────────────────────────────────
 // Tracks whether the first valid NIFTY-FUT tick has been received this session.
 // Used to emit `market_ready` to clients so they can auto-generate without polling.
@@ -81,8 +70,7 @@ const initSocketServer = (io) => {
             console.log(`[Socket] Client ${socket.id} unsubscribed from market ticks: ${symbol}`);
         });
         // 1b. On-demand option subscribe: resolves the user's exact selected strikes to NFO
-        // tokens, subscribes them on the live Zebu connection, and registers them in dataFeed's
-        // activeSelectedOptionSymbols set so ONLY user-selected strikes are buffered/aggregated/persisted.
+        // tokens and subscribes them on the live Zebu connection.
         socket.on("subscribe:options", async (data) => {
             const { instrument, expiry, callStrike, putStrike, type } = data || {};
             if (!instrument || !expiry) {
@@ -95,7 +83,6 @@ const initSocketServer = (io) => {
             if (type !== "Call" && putStrike)
                 wants.push({ strike: putStrike, optionType: "PE" });
             const resolvedTokens = [];
-            const selectedSymbolsForSocket = new Set();
             for (const w of wants) {
                 const letter = w.optionType === "CE" ? "C" : "P";
                 const wantedSymbol = `${instrument.toUpperCase()}${expiry}${letter}${w.strike}`;
@@ -103,14 +90,11 @@ const initSocketServer = (io) => {
                 if (resolved) {
                     console.log(`[Feed:SUB] On-demand resolve OK — ${resolved.symbol} → ${resolved.exchange}|${resolved.token} (requested by ${socket.id})`);
                     resolvedTokens.push(resolved);
-                    selectedSymbolsForSocket.add(resolved.symbol);
                 }
                 else {
                     console.warn(`[Feed:SUB] On-demand resolve FAILED — ${wantedSymbol} not found in NFO master.`);
                 }
             }
-            socketOptionSelections.set(socket.id, selectedSymbolsForSocket);
-            syncSelectedOptionSymbols();
             if (resolvedTokens.length > 0) {
                 (0, dataFeed_1.subscribeOptionTokens)(resolvedTokens);
             }
@@ -144,8 +128,6 @@ const initSocketServer = (io) => {
         });
         socket.on("disconnect", () => {
             console.log(`[Socket] Client disconnected: ${socket.id}`);
-            socketOptionSelections.delete(socket.id);
-            syncSelectedOptionSymbols();
         });
     });
     let _socketEmitCount = 0;

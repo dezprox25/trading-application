@@ -44,29 +44,46 @@ const server = http_1.default.createServer(app);
 exports.server = server;
 // Trust reverse proxy headers (required for express-rate-limit on Render / Heroku / etc.)
 app.set("trust proxy", 1);
-// CORS allowed origin: restrict to frontend domain in production
-const allowedOrigin = process.env.FRONTEND_URL || "*";
+// CORS allowed origins with credential support for Socket.IO & Express
+const corsOriginDelegate = (origin, callback) => {
+    // Allow requests with no origin (e.g. mobile apps, curl, server-to-server)
+    if (!origin) {
+        return callback(null, true);
+    }
+    const frontendUrl = process.env.FRONTEND_URL;
+    if (frontendUrl) {
+        const allowed = frontendUrl.split(",").map((s) => s.trim());
+        if (allowed.includes(origin) || allowed.includes("*")) {
+            return callback(null, origin);
+        }
+    }
+    // In development / local testing, allow any localhost or 127.0.0.1 port
+    if (process.env.NODE_ENV !== "production") {
+        if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+            return callback(null, origin);
+        }
+    }
+    // Return origin to satisfy Access-Control-Allow-Credentials: true
+    return callback(null, origin);
+};
+const corsOptions = {
+    origin: corsOriginDelegate,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    credentials: true,
+};
 // Configure socket server base.
-// transports: start with polling so the Render proxy can establish the connection,
-// then upgrade to WebSocket. pingInterval/pingTimeout keep the connection alive
-// through Render's 60-second idle proxy timeout.
+// transports: ["websocket", "polling"] enables high-speed WebSocket with robust polling fallback.
+// pingInterval/pingTimeout keep the connection alive through proxy timeouts.
 const io = new socket_io_1.Server(server, {
-    cors: {
-        origin: allowedOrigin,
-        methods: ["GET", "POST", "PUT"],
-        credentials: true,
-    },
-    transports: ["polling", "websocket"],
+    cors: corsOptions,
+    transports: ["websocket", "polling"],
     pingInterval: 25000,
     pingTimeout: 60000,
 });
 exports.io = io;
 // Security & utility middlewares
 app.use((0, helmet_1.default)());
-app.use((0, cors_1.default)({
-    origin: allowedOrigin,
-    credentials: true,
-}));
+app.use((0, cors_1.default)(corsOptions));
 app.use(express_1.default.json());
 // Global Rate Limiter
 const globalLimiter = (0, express_rate_limit_1.default)({
@@ -256,15 +273,15 @@ const startServer = async () => {
         console.warn("[Server] Module 2 Redis connection warning:", err);
     }
     (0, candleHistoryService_1.initCandleHistory)();
-    // ── Step 3: Initialize services that depend on DB being ready ────────────
-    // Only start these after the DB connection is confirmed.
+    // ── Step 3: Initialize services ──────────────────────────────────────────
+    try {
+        (0, trackerService_1.initTrackerEngine)();
+    }
+    catch (err) {
+        console.warn("[Server] TrackerEngine init warning:", err);
+    }
+    // Services strictly requiring database connection
     if (dbReady) {
-        try {
-            (0, trackerService_1.initTrackerEngine)();
-        }
-        catch (err) {
-            console.warn("[Server] TrackerEngine init warning:", err);
-        }
         try {
             (0, candleArchiveService_1.initCandleArchive)();
         }
@@ -273,7 +290,7 @@ const startServer = async () => {
         }
     }
     else {
-        console.warn("[Server] Skipping TrackerEngine/CandleArchive init — DB not ready.");
+        console.warn("[Server] Skipping CandleArchive init — DB not ready.");
     }
     // Warm up in-memory OI state from Redis (safe to run even if Redis is offline)
     try {
@@ -288,7 +305,7 @@ const startServer = async () => {
     server.listen(PORT, () => {
         console.log(`[Server] TradePro backend ready on port ${PORT} (${process.env.NODE_ENV || "development"}).`);
         console.log("[Server] Broker data feeds will start after user authentication.");
-        console.log(`[Server] CORS origin: ${allowedOrigin}`);
+        console.log(`[Server] CORS origin: ${process.env.FRONTEND_URL || "dynamic (credentials supported)"}`);
     });
     // ── NOTE: Broker authentication is NOT performed here ────────────────────
     // initDataFeed()              ← REMOVED: starts after Module 1 user login

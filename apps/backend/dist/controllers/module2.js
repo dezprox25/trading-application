@@ -52,15 +52,6 @@ const getModule2Expiries = async (req, res) => {
     }
 };
 exports.getModule2Expiries = getModule2Expiries;
-const parseDateToYMD = (val) => {
-    const d = new Date(val);
-    if (isNaN(d.getTime()))
-        return "";
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-};
 /**
  * GET /api/module2/option-chain?symbol=NIFTY50&expiry=2026-08-18
  * Returns available strikes and CE/PE contract availability directly from Aetram API
@@ -73,15 +64,18 @@ const getModule2OptionChain = async (req, res) => {
     }
     try {
         const searchName = symbol.replace(/50$/i, "").replace(/FIFTY$/i, "").toUpperCase();
-        console.log(`[MODULE2][CONFIG] Option chain request: symbol=${symbol} searchName=${searchName} expiry=${expiry}`);
         const results = await (0, aetramMarketDataService_1.searchInstruments)(searchName);
-        const targetYmd = parseDateToYMD(expiry);
+        const targetYmd = (0, aetramMarketDataService_1.parseDateToYMD)(expiry);
         const strikeMap = new Map();
+        let matchingExpiryCount = 0;
+        let ceCount = 0;
+        let peCount = 0;
         for (const inst of results) {
             const rawExpiry = inst.expiryDate || "";
-            const instYmd = parseDateToYMD(rawExpiry);
+            const instYmd = (0, aetramMarketDataService_1.parseDateToYMD)(rawExpiry);
             if (targetYmd && instYmd !== targetYmd)
                 continue;
+            matchingExpiryCount++;
             const strike = inst.strikePrice !== undefined ? Math.round(Number(inst.strikePrice)) : 0;
             if (!strike)
                 continue;
@@ -95,21 +89,15 @@ const getModule2OptionChain = async (req, res) => {
             const indexPrefix = symbol.replace(/50$/i, "").toUpperCase();
             if (isCE) {
                 entry.CE = `${indexPrefix}${strike}CE`;
+                ceCount++;
             }
             else if (isPE) {
                 entry.PE = `${indexPrefix}${strike}PE`;
+                peCount++;
             }
         }
         const strikes = Array.from(strikeMap.values()).sort((a, b) => a.strikePrice - b.strikePrice);
-        let ceCount = 0;
-        let peCount = 0;
-        strikes.forEach((s) => {
-            if (s.CE)
-                ceCount++;
-            if (s.PE)
-                peCount++;
-        });
-        console.log(`[MODULE2][CONFIG] Contracts received: ${results.length} | Available strikes: ${strikes.length} | CE: ${ceCount} | PE: ${peCount}`);
+        console.log(`[Module2][OptionDiscovery] symbol=${symbol} requestedExpiry=${targetYmd} AetramRows=${results.length} ExpiryMatches=${matchingExpiryCount} CE=${ceCount} PE=${peCount} UniqueStrikes=${strikes.length}`);
         res.json({ symbol, expiry: targetYmd, strikes });
     }
     catch (err) {

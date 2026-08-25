@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.processIncomingTick = exports.resumeDataFeedFromPersistedSession = exports.stopDataFeed = exports.startDataFeedWithCredentials = exports.isOptionSymbolSelected = exports.setSelectedOptionSymbols = exports.setOnTickReceived = exports.subscribeOptionTokens = void 0;
+exports.processIncomingTick = exports.resumeDataFeedFromPersistedSession = exports.stopDataFeed = exports.startDataFeedWithCredentials = exports.setOnTickReceived = exports.subscribeOptionTokens = void 0;
 const redisWriteBuffer_1 = require("./redisWriteBuffer");
 const ohlcAggregator_1 = require("./ohlcAggregator");
 const module1OiService_1 = require("./module1OiService");
@@ -68,22 +68,6 @@ const setOnTickReceived = (callback) => {
     onTickReceived = callback;
 };
 exports.setOnTickReceived = setOnTickReceived;
-// ── Active Selected Option Symbols Registry ─────────────────────────────────
-// Ensures Module 1 ONLY buffers, ingests, aggregates, and persists option ticks
-// for strikes explicitly selected by active user sessions.
-const activeSelectedOptionSymbols = new Set();
-const setSelectedOptionSymbols = (symbols) => {
-    activeSelectedOptionSymbols.clear();
-    for (const sym of symbols) {
-        activeSelectedOptionSymbols.add(sym);
-    }
-    console.log(`[DataFeed] Active selected option symbols updated (${activeSelectedOptionSymbols.size}): ${Array.from(activeSelectedOptionSymbols).join(", ")}`);
-};
-exports.setSelectedOptionSymbols = setSelectedOptionSymbols;
-const isOptionSymbolSelected = (symbol) => {
-    return activeSelectedOptionSymbols.has(symbol);
-};
-exports.isOptionSymbolSelected = isOptionSymbolSelected;
 // ── Reconnection state ────────────────────────────────────────────────────────
 let storedUserId = null;
 let storedSessionToken = null;
@@ -294,10 +278,6 @@ const processIncomingTick = async (tick) => {
     const isFut = symbol.endsWith("-FUT") || symbol.includes("FUT");
     const isSpot = symbol === "NIFTY-SPOT";
     const isOpt = symbol.startsWith("NIFTY") && /[CP]\d+$/.test(symbol);
-    // Only process, buffer, aggregate, and persist option ticks that match user-selected strikes
-    if (isOpt && !(0, exports.isOptionSymbolSelected)(symbol)) {
-        return;
-    }
     if (isFut || isSpot || isOpt) {
         await (0, ohlcAggregator_1.aggregateOHLC)(tick, 1, "1m");
         await (0, ohlcAggregator_1.aggregateOHLC)(tick, 2, "2m");

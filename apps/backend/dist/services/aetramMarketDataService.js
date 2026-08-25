@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.initAetramMarketDataService = exports.loginToAetramWithCredentials = exports.getAetramExpiryDates = exports.unsubscribeFromInstruments = exports.subscribeToInstruments = exports.getActiveSubscribedInstruments = exports.resolveOptionStrikeToken = exports.searchInstruments = exports.loginToAetram = exports.isAetramConnected = exports.clearAetramSession = exports.setOnAetramReconnect = void 0;
+exports.initAetramMarketDataService = exports.loginToAetramWithCredentials = exports.getAetramExpiryDates = exports.unsubscribeFromInstruments = exports.subscribeToInstruments = exports.getActiveSubscribedInstruments = exports.resolveOptionStrikeToken = exports.searchInstruments = exports.loginToAetram = exports.parseDateToYMD = exports.isAetramConnected = exports.clearAetramSession = exports.setOnAetramReconnect = void 0;
 const axios_1 = __importDefault(require("axios"));
 const redisWriteBuffer_1 = require("./redisWriteBuffer");
 const socketService_1 = require("./socketService");
@@ -53,6 +53,14 @@ const getApiSecret = () => (process.env.MOD2_API_SECRET || "").trim();
 const getBaseUrl = () => (process.env.AETRAM_MARKETDATA_API_BASE_URL || "").trim();
 const getAuthUrl = () => (process.env.AETRAM_MARKETDATA_AUTH_URL || "").trim();
 const parseDateToYMD = (val) => {
+    if (!val)
+        return "";
+    if (typeof val === "string") {
+        const isoMatch = val.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (isoMatch) {
+            return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+        }
+    }
     const d = new Date(val);
     if (isNaN(d.getTime()))
         return "";
@@ -61,6 +69,7 @@ const parseDateToYMD = (val) => {
     const day = String(d.getDate()).padStart(2, "0");
     return `${y}-${m}-${day}`;
 };
+exports.parseDateToYMD = parseDateToYMD;
 /**
  * Standard HTTP headers for Aetram requests
  */
@@ -101,7 +110,13 @@ const searchInstruments = async (searchString) => {
         return cached.data;
     }
     const baseUrl = getBaseUrl();
-    if (!baseUrl || !(0, marketDataSessionService_1.getMarketDataToken)())
+    if (!baseUrl)
+        return [];
+    // Ensure authenticated session
+    if (!(0, marketDataSessionService_1.getMarketDataToken)()) {
+        await (0, exports.loginToAetram)();
+    }
+    if (!(0, marketDataSessionService_1.getMarketDataToken)())
         return [];
     try {
         const searchUrl = `${baseUrl}/search/instruments?searchString=${encodeURIComponent(searchString)}`;
@@ -181,11 +196,11 @@ const resolveOptionStrikeToken = async (index, expiryDate, strikeSymbol) => {
         console.warn(`[INSTRUMENT][FAILED] symbol=${strikeSymbol} reason=No instruments returned from Aetram search query`);
         return null;
     }
-    const targetYmd = parseDateToYMD(expiryDate);
+    const targetYmd = (0, exports.parseDateToYMD)(expiryDate);
     const candidateMatches = [];
     for (const inst of results) {
         const rawExpiry = inst.expiryDate || "";
-        const instExpiryYmd = parseDateToYMD(rawExpiry);
+        const instExpiryYmd = (0, exports.parseDateToYMD)(rawExpiry);
         const instStrike = Math.round(Number(inst.strikePrice ?? 0));
         const instOptType = String(inst.optionType || "").toUpperCase();
         // In XTS, OptionType 3 = CE, 4 = PE (or string "CE"/"PE")
@@ -422,7 +437,7 @@ const computeUpcomingThursdays = (count) => {
     const daysToThursday = (4 - dayOfWeek + 7) % 7;
     d.setDate(d.getDate() + daysToThursday);
     for (let i = 0; i < count; i++) {
-        result.push(parseDateToYMD(new Date(d)));
+        result.push((0, exports.parseDateToYMD)(new Date(d)));
         d.setDate(d.getDate() + 7);
     }
     return result;
@@ -436,31 +451,39 @@ const computeUpcomingThursdays = (count) => {
  */
 const getAetramExpiryDates = async (indexSymbol, exchangeSegment = 2) => {
     const baseUrl = getBaseUrl();
-    if (baseUrl && (0, marketDataSessionService_1.getMarketDataToken)()) {
-        try {
-            const name = indexSymbol.replace(/50$/i, "").replace(/FIFTY$/i, "").toUpperCase();
-            // Aetram's Market Data API returns 404 for /instruments/expiry.
-            // Instead, we fetch the instruments for the index and extract the unique expiries.
-            const results = await (0, exports.searchInstruments)(name);
-            const uniqueExpiries = new Set();
-            for (const inst of results) {
-                // Only look at options (OptionType 3 = CE, 4 = PE, or strings like "CE"/"PE")
-                const optType = String(inst.optionType || "");
-                if (!optType || (optType !== "3" && optType !== "4" && !optType.toUpperCase().includes("E"))) {
-                    continue;
-                }
-                const expiry = inst.expiryDate || "";
-                const expiryDateObj = new Date(expiry);
-                if (!isNaN(expiryDateObj.getTime())) {
-                    uniqueExpiries.add(expiryDateObj.toISOString().slice(0, 10));
-                }
-            }
-            if (uniqueExpiries.size > 0) {
-                return Array.from(uniqueExpiries).sort();
-            }
+    if (baseUrl) {
+        if (!(0, marketDataSessionService_1.getMarketDataToken)()) {
+            await (0, exports.loginToAetram)();
         }
-        catch (e) {
-            console.warn(`[AetramMD] Failed to fetch real expiries for ${indexSymbol}: ${e.message}. Falling back.`);
+        if ((0, marketDataSessionService_1.getMarketDataToken)()) {
+            try {
+                const name = indexSymbol.replace(/50$/i, "").replace(/FIFTY$/i, "").toUpperCase();
+                // Aetram's Market Data API returns 404 for /instruments/expiry.
+                // Instead, we fetch the instruments for the index and extract the unique expiries.
+                const results = await (0, exports.searchInstruments)(name);
+                const todayYmd = new Date().toISOString().slice(0, 10);
+                const uniqueExpiries = new Set();
+                for (const inst of results) {
+                    // Only look at options (OptionType 3 = CE, 4 = PE, or strings like "CE"/"PE")
+                    const optType = String(inst.optionType || "");
+                    if (!optType || (optType !== "3" && optType !== "4" && !optType.toUpperCase().includes("E"))) {
+                        continue;
+                    }
+                    const rawExp = inst.expiryDate || "";
+                    const ymd = (0, exports.parseDateToYMD)(rawExp);
+                    if (ymd && ymd >= todayYmd) {
+                        uniqueExpiries.add(ymd);
+                    }
+                }
+                if (uniqueExpiries.size > 0) {
+                    const sorted = Array.from(uniqueExpiries).sort();
+                    console.log(`[AetramMD] Dynamic expiries found for ${indexSymbol}: ${sorted.length} dates [${sorted.slice(0, 5).join(", ")}...]`);
+                    return sorted;
+                }
+            }
+            catch (e) {
+                console.warn(`[AetramMD] Failed to fetch real expiries for ${indexSymbol}: ${e.message}. Falling back.`);
+            }
         }
     }
     const configDates = (process.env.MOD2_EXPIRY_DATES || "").trim();
